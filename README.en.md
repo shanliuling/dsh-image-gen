@@ -127,6 +127,7 @@ Click the **`[Gallery]`** Tab in the top navigation bar to browse and search all
 - 🎨 **Multi-Provider Support**: Supports Google Gemini, OpenAI Images, OpenAI Compatible API, and ByteDance Seedream / Volcengine Ark.
 - 🔑 **BYOK (Bring Your Own Key)**: Uses your own API keys managed securely by DSH credentials service with write-only protection.
 - 🖼️ **Durable Session Persistence**: Images integrate with DSH Attachment and conversation lifecycle, preserved across reloads.
+- 💾 **Workspace File Output**: By default each generated image is also written as a file into the current session workspace (`dsh-image-gen/` subfolder); the tool result carries the absolute file path. Can be disabled or re-pointed in settings.
 - ⚙️ **Native Web Settings**: Configure providers, keys, models, and endpoints directly in DSH settings.
 
 ---

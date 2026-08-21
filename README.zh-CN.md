@@ -127,6 +127,7 @@ pnpm dsh plugin --profile web add ./dsh-image-gen
 - 🎨 **多 Provider 支持**：目前支持 Google Gemini、OpenAI Images、OpenAI Compatible API 以及 ByteDance Seedream / Volcengine Ark。Provider、模型和 Endpoint 都可以在设置界面中自由修改。
 - 🔑 **BYOK (自带 Key)**：插件使用你自己的 API Key。API Key 通过 DeepSeek Harness 的 `credentials` 服务管理，采用写保护隔离，不需要写进项目源码或配置文件，前端不存明文。
 - 🖼️ **图片跟随会话保存**：生成结果会接入 DeepSeek Harness 的 Attachment / Conversation 体系，重新打开历史会话后，仍然可以看到之前生成的图片。
+- 💾 **生成图片自动落盘到工作区**：默认在每次生成后把图片文件保存到当前会话工作区（`dsh-image-gen/` 子目录），工具结果会返回文件的绝对路径；可在设置中关闭或修改保存目录。
 - ⚙️ **原生设置界面**：Provider、API Key、模型和 Endpoint 都可以直接在 DSH Web 设置中修改，不需要手动编辑配置文件。
 
 ---
