@@ -12,7 +12,7 @@ export interface DashScopeImageOptions {
 }
 
 export interface DashScopeEditOptions extends DashScopeImageOptions {
-  sourceImage: { data: Uint8Array; mediaType: ImageMediaType }
+  sourceImages: Array<{ data: Uint8Array; mediaType: ImageMediaType }>
 }
 
 interface DashScopeChoiceMessageContent {
@@ -65,7 +65,7 @@ export async function editDashScopeImage(options: DashScopeEditOptions): Promise
         messages: [{
           role: 'user',
           content: [
-            { image: toDataUrl(options.sourceImage) },
+            ...options.sourceImages.map(sourceImage => ({ image: toDataUrl(sourceImage) })),
             { text: options.prompt },
           ],
         }],

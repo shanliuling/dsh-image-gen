@@ -20,7 +20,10 @@ describe('OpenAI-compatible images', () => {
 
     await expect(editOpenAICompatibleImage({
       apiKey: 'key', baseURL: 'https://api.openai.com/v1', model: 'gpt-image-2', prompt: 'add sunglasses',
-      sourceImage: { data: new Uint8Array(Buffer.from('source')), mediaType: 'image/png' },
+      sourceImages: [
+        { data: new Uint8Array(Buffer.from('source 1')), mediaType: 'image/png' },
+        { data: new Uint8Array(Buffer.from('source 2')), mediaType: 'image/jpeg' },
+      ],
       size: '1024x1024', maxBytes: 1024, signal,
     })).resolves.toEqual({ data: new Uint8Array(Buffer.from('edited image')), mediaType: 'image/png' })
 
@@ -32,7 +35,25 @@ describe('OpenAI-compatible images', () => {
     expect(form.get('model')).toBe('gpt-image-2')
     expect(form.get('prompt')).toBe('add sunglasses')
     expect(form.get('size')).toBe('1024x1024')
+    expect(form.getAll('image[]')).toHaveLength(2)
+    expect(form.getAll('image[]')[0]).toBeInstanceOf(Blob)
+  })
+
+  it('keeps the singular multipart image field for one reference', async () => {
+    const image = Buffer.from('edited image').toString('base64')
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: [{ b64_json: image }] }), { headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await editOpenAICompatibleImage({
+      apiKey: 'key', baseURL: 'https://relay.example/v1', model: 'image-model', prompt: 'edit',
+      sourceImages: [{ data: new Uint8Array([1]), mediaType: 'image/png' }],
+      maxBytes: 1024, signal,
+    })
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    const form = init.body as FormData
     expect(form.get('image')).toBeInstanceOf(Blob)
+    expect(form.getAll('image[]')).toHaveLength(0)
   })
 
   it('downloads Ark URL output with its declared media type', async () => {

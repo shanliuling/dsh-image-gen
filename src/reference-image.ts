@@ -41,33 +41,102 @@ export async function resolveReferenceImage(input: {
   maxBytes?: number
   signal: AbortSignal
 }): Promise<ResolvedReferenceImage> {
-  if (input.sourceAttachmentId !== undefined && input.sourcePath !== undefined) {
-    throw new Error('edit_image accepts either source_attachment_id or source_path, not both')
+  const images = await resolveReferenceImages(input)
+  const image = images[images.length - 1]
+  if (image === undefined) throw new Error('edit_image requires a reference image')
+  return image
+}
+
+/**
+ * Resolve one or more edit references while keeping every DSH-specific detail
+ * behind this compatibility boundary. Explicit selectors preserve caller order;
+ * without selectors, all images in the newest image-bearing message are used.
+ */
+export async function resolveReferenceImages(input: {
+  agent?: ReferenceImageAgent
+  attachments: ReferenceImageStore
+  sourceAttachmentId?: string
+  sourceAttachmentIds?: readonly string[]
+  sourcePath?: string
+  sourcePaths?: readonly string[]
+  maxBytes?: number
+  signal: AbortSignal
+}): Promise<ResolvedReferenceImage[]> {
+  const sourceAttachmentIds = mergeSelectors({
+    single: input.sourceAttachmentId,
+    multiple: input.sourceAttachmentIds,
+    singleName: 'source_attachment_id',
+    multipleName: 'source_attachment_ids',
+    equal: attachmentIdsEqual,
+  })
+  const sourcePaths = mergeSelectors({
+    single: input.sourcePath,
+    multiple: input.sourcePaths,
+    singleName: 'source_path',
+    multipleName: 'source_paths',
+    equal: (left, right) => left.trim() === right.trim(),
+  })
+  if (sourceAttachmentIds !== undefined && sourcePaths !== undefined) {
+    throw new Error('edit_image accepts only one of source_attachment_id, source_attachment_ids, source_path, or source_paths')
   }
 
-  if (input.sourcePath !== undefined) {
-    return readWorkspaceReferenceImage({
-      sourcePath: input.sourcePath,
+  if (sourcePaths !== undefined) {
+    return Promise.all(sourcePaths.map(sourcePath => readWorkspaceReferenceImage({
+      sourcePath,
       ...(input.agent?.session.header?.cwd === undefined ? {} : { workspaceRoot: input.agent.session.header.cwd }),
       ...(input.maxBytes === undefined ? {} : { maxBytes: input.maxBytes }),
       signal: input.signal,
-    })
+    })))
   }
 
   if (input.agent === undefined) {
     throw new Error('edit_image requires an active DSH agent session to resolve a reference image')
   }
 
-  const ref = findReferenceImage(input.agent.session.deriveMessages(), input.sourceAttachmentId)
-  if (ref === undefined) {
-    if (input.sourceAttachmentId !== undefined) {
-      throw new Error(`edit_image could not find image attachment ${input.sourceAttachmentId} in the current conversation`)
+  const refs = findReferenceImages(input.agent.session.deriveMessages(), sourceAttachmentIds)
+  if (refs.length === 0) {
+    if (sourceAttachmentIds !== undefined) {
+      throw new Error(`edit_image could not find image attachment ${sourceAttachmentIds[0]} in the current conversation`)
     }
     throw new Error('edit_image requires an image in the current conversation; upload or generate an image first')
   }
+  if (sourceAttachmentIds !== undefined && refs.length !== sourceAttachmentIds.length) {
+    const missing = sourceAttachmentIds.find(id => !refs.some(ref => attachmentIdsEqual(String(ref.attachmentId), id)))
+    throw new Error(`edit_image could not find image attachment ${missing ?? 'unknown'} in the current conversation`)
+  }
 
-  const stored = await input.attachments.readImage(ref, input.signal)
-  return { data: stored.data, mediaType: stored.ref.mediaType }
+  return Promise.all(refs.map(async ref => {
+    const stored = await input.attachments.readImage(ref, input.signal)
+    if (input.maxBytes !== undefined && stored.data.byteLength > input.maxBytes) {
+      throw new Error(`edit_image source image is too large (${stored.data.byteLength} bytes; maximum ${input.maxBytes})`)
+    }
+    return { data: stored.data, mediaType: stored.ref.mediaType }
+  }))
+}
+
+/** Find images in caller order, or every image in the newest image-bearing message. */
+export function findReferenceImages(
+  messages: readonly Message[],
+  sourceAttachmentIds?: readonly string[],
+): ImageAttachmentRef[] {
+  if (sourceAttachmentIds !== undefined) {
+    return sourceAttachmentIds.flatMap(id => {
+      const ref = findReferenceImage(messages, id)
+      return ref === undefined ? [] : [ref]
+    })
+  }
+
+  const latestHumanMessage = [...messages].reverse().find(message => message.source?.kind === 'user')
+  if (latestHumanMessage !== undefined) {
+    const refs = collectInBlocks(latestHumanMessage.content)
+    if (refs.length > 0) return refs
+  }
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const refs = collectInBlocks(messages[index]?.content ?? [])
+    if (refs.length > 0) return refs
+  }
+  return []
 }
 
 /**
@@ -165,7 +234,7 @@ function findInBlocks(
     const block = blocks[index]
     if (block === undefined) continue
     if (block.type === 'image') {
-      if (sourceAttachmentId === undefined || String(block.attachment.attachmentId) === sourceAttachmentId) {
+      if (sourceAttachmentId === undefined || attachmentIdsEqual(String(block.attachment.attachmentId), sourceAttachmentId)) {
         return block.attachment
       }
       continue
@@ -186,6 +255,48 @@ function parseDimensions(value: unknown): { width: number; height: number } | un
 
 function imageMediaType(value: unknown): value is ImageMediaType {
   return value === 'image/png' || value === 'image/jpeg' || value === 'image/webp' || value === 'image/gif'
+}
+
+function collectInBlocks(blocks: readonly ContentBlock[]): ImageAttachmentRef[] {
+  const refs: ImageAttachmentRef[] = []
+  for (const block of blocks) {
+    if (block.type === 'image') refs.push(block.attachment)
+    if (block.type === 'tool-result') refs.push(...collectInBlocks(block.content))
+  }
+  return refs
+}
+
+function attachmentIdsEqual(actual: string, requested: string): boolean {
+  if (actual === requested) return true
+  const actualDigest = sha256Digest(actual)
+  const requestedDigest = sha256Digest(requested)
+  return actualDigest !== undefined && actualDigest === requestedDigest
+}
+
+function sha256Digest(value: string): string | undefined {
+  const match = /^(?:sha256:)?([0-9a-f]{64})$/i.exec(value.trim())
+  return match?.[1]?.toLowerCase()
+}
+
+function mergeSelectors(input: {
+  single: string | undefined
+  multiple: readonly string[] | undefined
+  singleName: string
+  multipleName: string
+  equal: (left: string, right: string) => boolean
+}): readonly string[] | undefined {
+  if (input.multiple === undefined) {
+    return input.single === undefined ? undefined : [input.single]
+  }
+  if (input.multiple.length === 0) {
+    if (input.single !== undefined) return [input.single]
+    throw new Error(`edit_image ${input.multipleName} must not be empty`)
+  }
+  const single = input.single
+  if (single !== undefined && !input.multiple.some(value => input.equal(single, value))) {
+    throw new Error(`edit_image ${input.singleName} must also appear in ${input.multipleName} when both are provided`)
+  }
+  return input.multiple
 }
 
 function detectImageMediaType(data: Uint8Array): ImageMediaType | undefined {

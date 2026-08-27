@@ -36,14 +36,17 @@ export async function editOpenAICompatibleImage(input: {
   baseURL: string
   model: string
   prompt: string
-  sourceImage: CompatibleReferenceImage
+  sourceImages: CompatibleReferenceImage[]
   size?: string
   maxBytes: number
   signal: AbortSignal
 }): Promise<GeneratedCompatibleImage> {
   const form = new FormData()
-  const uploadBytes = new Uint8Array(input.sourceImage.data)
-  form.append('image', new Blob([uploadBytes], { type: input.sourceImage.mediaType }), `reference.${extensionOf(input.sourceImage.mediaType)}`)
+  const imageField = input.sourceImages.length === 1 ? 'image' : 'image[]'
+  input.sourceImages.forEach((sourceImage, index) => {
+    const uploadBytes = new Uint8Array(sourceImage.data)
+    form.append(imageField, new Blob([uploadBytes], { type: sourceImage.mediaType }), `reference-${index + 1}.${extensionOf(sourceImage.mediaType)}`)
+  })
   form.append('prompt', input.prompt)
   form.append('model', input.model)
   if (input.size !== undefined && input.size.length > 0) form.append('size', input.size)

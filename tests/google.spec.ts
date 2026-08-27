@@ -36,7 +36,10 @@ describe('generateGoogleImage', () => {
       endpoint,
       model: 'gemini-3.1-flash-image',
       prompt: 'add black sunglasses',
-      sourceImage: { data: new Uint8Array(Buffer.from('source image')), mediaType: 'image/png' },
+      sourceImages: [
+        { data: new Uint8Array(Buffer.from('source image 1')), mediaType: 'image/png' },
+        { data: new Uint8Array(Buffer.from('source image 2')), mediaType: 'image/jpeg' },
+      ],
       aspectRatio: '1:1',
       imageSize: '1K',
       maxBytes: 1024,
@@ -48,7 +51,8 @@ describe('generateGoogleImage', () => {
       model: 'gemini-3.1-flash-image',
       input: [
         { type: 'text', text: 'add black sunglasses' },
-        { type: 'image', mime_type: 'image/png', data: Buffer.from('source image').toString('base64') },
+        { type: 'image', mime_type: 'image/png', data: Buffer.from('source image 1').toString('base64') },
+        { type: 'image', mime_type: 'image/jpeg', data: Buffer.from('source image 2').toString('base64') },
       ],
       response_format: { type: 'image', mime_type: 'image/jpeg', aspect_ratio: '1:1', image_size: '1K' },
     })

@@ -80,5 +80,16 @@ describe('image tool registration', () => {
     expect(parameters.properties).toHaveProperty('size')
     expect(parameters.properties).toHaveProperty('aspect_ratio')
     expect(parameters.properties).toHaveProperty('image_size')
+    expect(parameters.properties).toHaveProperty('source_attachment_ids')
+    expect(parameters.properties).toHaveProperty('source_paths')
+  })
+
+  it('tells the agent to use current inline attachments without workspace discovery', () => {
+    const { ctx, tools } = harnessContext()
+    apply(ctx, { provider: 'google', saveToWorkspace: false })
+    const edit = toolByName(tools, 'edit_image')
+
+    expect(edit.description).toContain('NEVER call read_image, glob, or shell')
+    expect(edit.description).toContain('call edit_image immediately with prompt only')
   })
 })

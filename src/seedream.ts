@@ -10,7 +10,7 @@ export async function editSeedreamImage(input: {
   baseURL: string
   model: string
   prompt: string
-  sourceImage: { data: Uint8Array; mediaType: ImageMediaType }
+  sourceImages: Array<{ data: Uint8Array; mediaType: ImageMediaType }>
   size?: string
   maxBytes: number
   signal: AbortSignal
@@ -21,7 +21,7 @@ export async function editSeedreamImage(input: {
     body: JSON.stringify({
       model: input.model,
       prompt: input.prompt,
-      image: [toDataUrl(input.sourceImage)],
+      image: input.sourceImages.map(toDataUrl),
       ...(input.size === undefined || input.size.length === 0 ? {} : { size: input.size }),
       response_format: 'b64_json',
     }),

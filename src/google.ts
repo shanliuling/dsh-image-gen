@@ -33,18 +33,18 @@ export function generateGoogleImage(input: GoogleRequestBase & { prompt: string 
 /** Send one native Google image-editing request using already-resolved bytes. */
 export function editGoogleImage(input: GoogleRequestBase & {
   prompt: string
-  sourceImage: { data: Uint8Array; mediaType: ImageMediaType }
+  sourceImages: Array<{ data: Uint8Array; mediaType: ImageMediaType }>
 }): Promise<GeneratedImage> {
   return requestGoogleImage({
     ...input,
     operation: 'editing',
     interactionInput: [
       { type: 'text', text: input.prompt },
-      {
+      ...input.sourceImages.map(sourceImage => ({
         type: 'image',
-        mime_type: input.sourceImage.mediaType,
-        data: Buffer.from(input.sourceImage.data).toString('base64'),
-      },
+        mime_type: sourceImage.mediaType,
+        data: Buffer.from(sourceImage.data).toString('base64'),
+      })),
     ],
   })
 }

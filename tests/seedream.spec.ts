@@ -13,7 +13,10 @@ describe('editSeedreamImage', () => {
 
     await expect(editSeedreamImage({
       apiKey: 'ark-key', baseURL: 'https://ark.cn-beijing.volces.com/api/v3', model: 'doubao-seedream-5-0-260128',
-      prompt: 'change the background', sourceImage: { data: new Uint8Array(Buffer.from('source')), mediaType: 'image/jpeg' },
+      prompt: 'change the background', sourceImages: [
+        { data: new Uint8Array(Buffer.from('source 1')), mediaType: 'image/jpeg' },
+        { data: new Uint8Array(Buffer.from('source 2')), mediaType: 'image/png' },
+      ],
       size: '2K', maxBytes: 1024, signal,
     })).resolves.toEqual({ data: new Uint8Array(Buffer.from('edited')), mediaType: 'image/png' })
 
@@ -24,8 +27,9 @@ describe('editSeedreamImage', () => {
     expect(body).toMatchObject({
       model: 'doubao-seedream-5-0-260128', prompt: 'change the background', size: '2K', response_format: 'b64_json',
     })
-    expect(body.image).toHaveLength(1)
+    expect(body.image).toHaveLength(2)
     expect(body.image[0]).toMatch(/^data:image\/jpeg;base64,/)
+    expect(body.image[1]).toMatch(/^data:image\/png;base64,/)
     expect(body.resolution).toBeUndefined()
   })
 })

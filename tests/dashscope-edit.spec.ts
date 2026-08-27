@@ -15,7 +15,10 @@ describe('editDashScopeImage', () => {
 
     await expect(editDashScopeImage({
       apiKey: 'dash-key', endpoint, model: 'qwen-image-3.0', prompt: 'add sunglasses',
-      sourceImage: { data: new Uint8Array(Buffer.from('source')), mediaType: 'image/png' },
+      sourceImages: [
+        { data: new Uint8Array(Buffer.from('source 1')), mediaType: 'image/png' },
+        { data: new Uint8Array(Buffer.from('source 2')), mediaType: 'image/jpeg' },
+      ],
       size: '1024*1024', maxBytes: 1024, signal,
     })).resolves.toEqual({ data: new Uint8Array([1, 2, 3]), mediaType: 'image/png' })
 
@@ -24,14 +27,15 @@ describe('editDashScopeImage', () => {
     const body = JSON.parse(init.body as string)
     expect(body.model).toBe('qwen-image-3.0')
     expect(body.input.messages[0].content[0].image).toMatch(/^data:image\/png;base64,/)
-    expect(body.input.messages[0].content[1]).toEqual({ text: 'add sunglasses' })
+    expect(body.input.messages[0].content[1].image).toMatch(/^data:image\/jpeg;base64,/)
+    expect(body.input.messages[0].content[2]).toEqual({ text: 'add sunglasses' })
     expect(body.parameters).toMatchObject({ prompt_extend: true, size: '1024*1024' })
   })
 
   it('rejects non-Qwen DashScope models instead of pretending they support editing', async () => {
     await expect(editDashScopeImage({
       apiKey: 'dash-key', endpoint, model: 'wanx2.1-t2i-turbo', prompt: 'edit',
-      sourceImage: { data: new Uint8Array([1]), mediaType: 'image/png' }, maxBytes: 1024, signal,
+      sourceImages: [{ data: new Uint8Array([1]), mediaType: 'image/png' }], maxBytes: 1024, signal,
     })).rejects.toThrow('Configure a qwen-image model.')
   })
 })
