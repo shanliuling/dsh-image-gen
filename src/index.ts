@@ -6,6 +6,7 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { defineTool, type ToolResult } from '@deepseek-ai/dsh-tools'
 import { Config, resolveProvider, type AspectRatio, type ImageProvider, type ImageSize } from './config.js'
+import { generateComfyUIImage } from './comfyui.js'
 import { editDashScopeImage, generateDashScopeImage } from './dashscope.js'
 import { editGoogleImage, generateGoogleImage } from './google.js'
 import { IMAGE_ROUTE, imageAttachmentFromMeta, serveImage } from './image-route.js'
@@ -52,6 +53,17 @@ export function apply(ctx: Context, config: Config = {}): void {
     output: imageOutput('Generated'),
     async execute(args, exec): Promise<GeneratedValue> {
       const active = resolveProvider(current())
+      if (active.provider === 'comfyui') {
+        const generated = await generateComfyUIImage({
+          baseURL: active.baseURL,
+          workflowJson: active.workflowJson,
+          prompt: args.prompt,
+          timeoutMs: active.timeoutMs,
+          maxBytes: ctx.attachments.imageLimits.maxImageBytes,
+          signal: exec.signal,
+        })
+        return saveGenerated(ctx, generated, active.provider, active.workflowName, 'API workflow', current(), exec)
+      }
       const credential = await ctx.credentials.resolve(credentialRef(active.apiKeyEnv))
       if (credential === undefined || credential.value.length === 0) throw new Error(`generate_image requires the ${active.apiKeyEnv} credential; configure it in Settings > Plugins > Image generation.`)
       if (active.provider === 'google') {
@@ -88,6 +100,9 @@ export function apply(ctx: Context, config: Config = {}): void {
     output: imageOutput('Edited'),
     async execute(args, exec): Promise<GeneratedValue> {
       const active = resolveProvider(current())
+      if (active.provider === 'comfyui') {
+        throw new Error('edit_image is not yet supported by the ComfyUI provider; switch providers or use generate_image')
+      }
       const credential = await ctx.credentials.resolve(credentialRef(active.apiKeyEnv))
       if (credential === undefined || credential.value.length === 0) throw new Error(`edit_image requires the ${active.apiKeyEnv} credential; configure it in Settings > Plugins > Image generation.`)
       const sourceImages = await resolveReferenceImages({

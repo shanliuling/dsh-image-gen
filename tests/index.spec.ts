@@ -1,7 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@deepseek-ai/dsh-settings', () => ({
   settingsNamespace: (value: string) => value,
@@ -34,7 +34,7 @@ function harnessContext(): { ctx: Context; tools: ToolDefinition[] } {
         mediaTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
       },
       readImage: vi.fn(),
-      saveImage: vi.fn(),
+      saveImage: vi.fn(async () => attachment('sha256:saved-image')),
     },
     logger: { warn: vi.fn() },
   } as unknown as Context
@@ -49,6 +49,7 @@ function toolByName(tools: ToolDefinition[], name: string): ToolDefinition {
 
 describe('image tool registration', () => {
   beforeEach(() => { vi.clearAllMocks() })
+  afterEach(() => { vi.unstubAllGlobals() })
 
   it('registers generate_image and edit_image', () => {
     const { ctx, tools } = harnessContext()
@@ -91,5 +92,43 @@ describe('image tool registration', () => {
 
     expect(edit.description).toContain('NEVER call read_image, glob, or shell')
     expect(edit.description).toContain('call edit_image immediately with prompt only')
+  })
+
+  it('routes ComfyUI generation without resolving an API credential', async () => {
+    const { ctx, tools } = harnessContext()
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ prompt_id: 'job-1' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        'job-1': {
+          status: { status_str: 'success', completed: true },
+          outputs: { save: { images: [{ filename: 'final.png', subfolder: '', type: 'output' }] } },
+        },
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: { 'content-type': 'image/png' } })))
+    apply(ctx, {
+      provider: 'comfyui',
+      comfyuiWorkflowJson: JSON.stringify({ 6: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}}' } } }),
+      comfyuiWorkflowName: 'portrait.json',
+      saveToWorkspace: false,
+    })
+
+    const value = await toolByName(tools, 'generate_image').execute(
+      { prompt: 'a portrait' },
+      { signal: new AbortController().signal } as never,
+    ) as { provider: string; model: string; attachment: ImageAttachmentRef }
+
+    expect(value).toMatchObject({ provider: 'comfyui', model: 'portrait.json', attachment: attachment('sha256:saved-image') })
+    expect(ctx.credentials.resolve).not.toHaveBeenCalled()
+  })
+
+  it('fails clearly before image lookup when ComfyUI editing is requested', async () => {
+    const { ctx, tools } = harnessContext()
+    apply(ctx, { provider: 'comfyui', saveToWorkspace: false })
+
+    await expect(toolByName(tools, 'edit_image').execute(
+      { prompt: 'restyle it' },
+      { signal: new AbortController().signal } as never,
+    )).rejects.toThrow('edit_image is not yet supported by the ComfyUI provider')
+    expect(ctx.credentials.resolve).not.toHaveBeenCalled()
   })
 })

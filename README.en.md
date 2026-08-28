@@ -6,7 +6,7 @@
 
 # 🎨 dsh-image-gen
 
-**Bring ChatGPT-like conversational image generation and image editing to DeepSeek Harness, with support for text-to-image, image-to-image, continuous editing, and multiple image providers.**
+**Complete conversational image capabilities for DeepSeek Harness: text-to-image, image-to-image, multi-image references, continuous editing, local ComfyUI, and gallery management.**
 
 [![npm version](https://img.shields.io/npm/v/dsh-image-gen.svg?style=flat-square&color=blue)](https://www.npmjs.com/package/dsh-image-gen)
 [![DSH Plugin](https://img.shields.io/badge/Plugin%20For-DeepSeek%20Harness-6366f1?style=flat-square)](https://github.com/deepseek-ai)
@@ -27,7 +27,7 @@ Install the image generation plugin by running: pnpm dsh plugin --profile web ad
 
 <br />
 
-<p align="center">After installation, enter your API Key in DSH Settings, then tell the Agent:</p>
+<p align="center">After installation, enter your API key or configure local ComfyUI in DSH Settings, then tell the Agent:</p>
 
 ```text
 Draw a cyberpunk cat on a neon street in a rainy night.
@@ -56,7 +56,7 @@ DeepSeek Harness empowers agents to use tools for various tasks. This project ad
 graph LR
     A[User Prompt] --> B[DeepSeek Harness Agent]
     B --> C[generate_image / edit_image]
-    C --> D[Gemini / OpenAI / Seedream / DashScope]
+    C --> D[Gemini / OpenAI / Seedream / DashScope / ComfyUI]
     D --> E[Image Data]
     E --> F[In-chat Conversation Stream]
 ```
@@ -91,12 +91,12 @@ pnpm dsh plugin --profile web add ./dsh-image-gen
 
 </details>
 
-### 2. Configure API Key & Workspace Settings
+### 2. Configure Provider & Workspace Settings
 
 Open DSH Web (`http://localhost:3080`):
 
 1. Navigate to **Settings → Plugins → Image generation**.
-2. Select Provider, input API Key.
+2. Select a Provider. Enter an API key for cloud providers; for local ComfyUI, enter its URL and import an API Format Workflow JSON using `{{prompt}}` for the prompt and optional `{{seed}}` for the seed.
 3. Optionally enable **Save to workspace** (enabled by default) and specify subfolder, then click **Save**.
 
 <div align="center">
@@ -128,7 +128,7 @@ Click the **`[Gallery]`** Tab in the top navigation bar to browse and search all
 - 💬 **In-Chat Image Generation**: Tell your Agent what you want to draw without switching tabs or tools.
 - 🖼️ **Native Image Gallery**: Dedicated "Gallery" tab automatically collecting all generated images with keyword search, provider filtering, single-item deletion (with confirmation and persistent tombstones), and quick copy/download.
 - 🔍 **Interactive Image Tools**: High-res fullscreen preview, one-click copy to clipboard, local download, and open in new tab.
-- 🎨 **Multi-Provider Support**: Supports Google Gemini, OpenAI Images, OpenAI Compatible API, ByteDance Seedream / Volcengine Ark, and Aliyun DashScope (Wanx / Qwen-Image).
+- 🎨 **Multi-Provider Support**: Supports Google Gemini, OpenAI Images, OpenAI Compatible API, ByteDance Seedream / Volcengine Ark, Aliyun DashScope (Wanx / Qwen-Image), and local ComfyUI workflows.
 - 🔑 **BYOK (Bring Your Own Key)**: Uses your own API keys managed securely by DSH credentials service with write-only protection.
 - 🖼️ **Durable Session Persistence**: Images integrate with DSH Attachment and conversation lifecycle, preserved across reloads.
 - 💾 **Workspace File Output**: By default each generated image is also written as a file into the current session workspace; the tool result carries the absolute file path. Can be disabled or re-pointed in settings.
@@ -145,6 +145,7 @@ Click the **`[Gallery]`** Tab in the top navigation bar to browse and search all
 | **OpenAI Compatible** | Custom | Custom Base URL |
 | **ByteDance Seedream / Volcengine Ark** | `doubao-seedream-5-0-260128` | `https://ark.cn-beijing.volces.com/api/v3` |
 | **Aliyun DashScope / Wanx** | `wanx2.1-t2i-turbo` | `https://dashscope.aliyuncs.com/api/v1` |
+| **Local ComfyUI (text-to-image only)** | Imported API Format Workflow | `http://127.0.0.1:8188` |
 
 ---
 

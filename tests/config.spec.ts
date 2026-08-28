@@ -3,6 +3,9 @@ import {
   Config,
   DEFAULT_DASHSCOPE_ENDPOINT,
   DEFAULT_DASHSCOPE_MODEL,
+  DEFAULT_COMFYUI_BASE_URL,
+  DEFAULT_COMFYUI_TIMEOUT_MS,
+  DEFAULT_COMFYUI_WORKFLOW_LABEL,
   DEFAULT_GOOGLE_ENDPOINT,
   DEFAULT_GOOGLE_MODEL,
   DEFAULT_OPENAI_BASE_URL,
@@ -31,6 +34,16 @@ describe('resolveProvider', () => {
       imageSize: '1024*1024',
     })
   })
+
+  it('resolves a credential-free ComfyUI profile', () => {
+    expect(resolveProvider({ provider: 'comfyui' })).toEqual({
+      provider: 'comfyui',
+      baseURL: DEFAULT_COMFYUI_BASE_URL,
+      workflowJson: '',
+      workflowName: DEFAULT_COMFYUI_WORKFLOW_LABEL,
+      timeoutMs: DEFAULT_COMFYUI_TIMEOUT_MS,
+    })
+  })
 })
 
 describe('Config Schema validation', () => {
@@ -39,6 +52,13 @@ describe('Config Schema validation', () => {
     expect(validated.provider).toBe('dashscope')
     expect(validated.dashscopeModel).toBe(DEFAULT_DASHSCOPE_MODEL)
     expect(validated.dashscopeEndpoint).toBe(DEFAULT_DASHSCOPE_ENDPOINT)
+  })
+
+  it('validates provider: comfyui and applies local defaults', () => {
+    const validated = Config({ provider: 'comfyui' })
+    expect(validated.provider).toBe('comfyui')
+    expect(validated.comfyuiBaseURL).toBe(DEFAULT_COMFYUI_BASE_URL)
+    expect(validated.comfyuiTimeoutMs).toBe(DEFAULT_COMFYUI_TIMEOUT_MS)
   })
 })
 

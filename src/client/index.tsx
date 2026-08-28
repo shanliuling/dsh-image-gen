@@ -1,8 +1,7 @@
 /** Web settings and generated-image cards contributed by the Bundle. */
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import type { SettingsScope, ToolCallBlock } from '@deepseek-ai/dsh-client-runtime/client'
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
@@ -11,11 +10,14 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import type {} from '@deepseek-ai/dsh-client-ui-tool/client'
 import {
   DEFAULT_BASE_URLS,
+  DEFAULT_COMFYUI_TIMEOUT_MS,
   DEFAULT_MODELS,
   IMAGE_GENERATION_NAMESPACE,
   IMAGE_ROUTE,
+  MAX_COMFYUI_WORKFLOW_BYTES,
   type ImageProvider,
 } from '../shared.js'
+import { validateComfyUIWorkflowJson } from '../comfyui-workflow.js'
 import { saveGalleryItem } from './gallery-store.js'
 import { GalleryViewTab, copyImageBlob, type LocaleService } from './gallery-view.js'
 
@@ -30,15 +32,26 @@ interface ImageSettings {
   seedreamModel?: string
   dashscopeEndpoint?: string
   dashscopeModel?: string
+  comfyuiBaseURL?: string
+  comfyuiWorkflowJson?: string
+  comfyuiWorkflowName?: string
+  comfyuiTimeoutMs?: number
   saveToWorkspace?: boolean
   workspaceFolder?: string
 }
-interface SettingsFace { scope: SettingsScope<ImageSettings>; credentials: ConnectionHandle['api']['credentials']; locale?: LocaleService | undefined }
+interface CredentialInfo { configured?: boolean }
+interface CredentialResult { ok: boolean; value?: Readonly<Record<string, CredentialInfo>> }
+interface CredentialMutationResult { ok: boolean; error?: { message?: string } }
+interface CredentialsRemote {
+  describe(refs: string[]): Promise<CredentialResult>
+  set(ref: string, value: string): Promise<CredentialMutationResult>
+}
+interface SettingsFace { scope: SettingsScope<ImageSettings>; credentials: CredentialsRemote; locale?: LocaleService | undefined }
 interface ImageCardFace { locale?: LocaleService | undefined }
 type SettingsCardProps = PropsRuntime<'settings.plugin.item'> & InjectFace<SettingsFace>
 type ImageCardProps = PropsRuntime<'tool.call.toolview'> & InjectFace<ImageCardFace>
 
-const KEY_REF: Record<Provider, string> = {
+const KEY_REF: Partial<Record<Provider, string>> = {
   google: 'GEMINI_API_KEY',
   openai: 'OPENAI_API_KEY',
   seedream: 'ARK_API_KEY',
@@ -54,6 +67,7 @@ const DICT = {
     providerOpenAI: 'OpenAI / 中转站',
     providerSeedream: '字节 Seedream',
     providerDashScope: '阿里 DashScope (通义万相 / Qwen)',
+    providerComfyUI: '本地 ComfyUI',
     apiKeyLabel: '{provider} API Key',
     apiKeyPlaceholder: '留空即可保留已配置的 Key',
     apiKeyHint: '安全保存为 {key}；页面不会读回明文。',
@@ -64,7 +78,17 @@ const DICT = {
     endpointHintOpenAI: '中转站请填其 OpenAI 兼容的 /v1 地址。',
     endpointHintSeedream: '火山方舟兼容的 /api/v3 地址。',
     endpointHintDashScope: '阿里云百炼 DashScope 官方接口地址。',
+    endpointHintComfyUI: '正在运行且 DSH Host 可以访问的 ComfyUI 地址，默认使用本机 8188 端口。',
     model: '模型',
+    workflow: 'API Workflow',
+    workflowImport: '导入 JSON 文件',
+    workflowReplace: '替换 JSON 文件',
+    workflowMissing: '尚未导入工作流',
+    workflowImported: '已导入 {name}',
+    workflowHint: '请从 ComfyUI 导出 API Format JSON，并在提示词输入位置写入 {{prompt}}；可用 {{seed}} 作为随机种子。',
+    workflowTooLarge: '工作流文件不能超过 5 MB。',
+    timeout: '生成超时（秒）',
+    timeoutHint: '包括提交、等待和下载图片；默认 300 秒。',
     saveToWorkspace: '保存到工作区',
     saveToWorkspaceHint: '每次生成后，把图片文件保存到当前会话工作区。',
     folder: '工作区文件夹',
@@ -94,6 +118,7 @@ const DICT = {
     providerOpenAI: 'OpenAI / Relay',
     providerSeedream: 'ByteDance Seedream',
     providerDashScope: 'Aliyun DashScope (Wanx / Qwen)',
+    providerComfyUI: 'Local ComfyUI',
     apiKeyLabel: '{provider} API Key',
     apiKeyPlaceholder: 'Leave empty to keep configured key',
     apiKeyHint: 'Securely saved as {key}; never read back in plaintext.',
@@ -104,7 +129,17 @@ const DICT = {
     endpointHintOpenAI: 'OpenAI-compatible /v1 base URL for relays.',
     endpointHintSeedream: 'Volcengine Ark compatible /api/v3 base URL.',
     endpointHintDashScope: 'Official Aliyun DashScope endpoint.',
+    endpointHintComfyUI: 'A running ComfyUI server reachable by the DSH Host; the default points to port 8188 on this computer.',
     model: 'Model',
+    workflow: 'API Workflow',
+    workflowImport: 'Import JSON file',
+    workflowReplace: 'Replace JSON file',
+    workflowMissing: 'No workflow imported',
+    workflowImported: 'Imported {name}',
+    workflowHint: 'Export an API Format JSON from ComfyUI and place {{prompt}} in its prompt input. {{seed}} is available for a random seed.',
+    workflowTooLarge: 'Workflow files must be no larger than 5 MB.',
+    timeout: 'Generation timeout (seconds)',
+    timeoutHint: 'Covers submission, waiting, and image download; defaults to 300 seconds.',
     saveToWorkspace: 'Save to workspace',
     saveToWorkspaceHint: 'Write each generated image as a file into the session workspace.',
     folder: 'Workspace folder',
@@ -147,6 +182,12 @@ const STYLE = `
 .dsh-ig-input{box-sizing:border-box;width:100%;padding:8px 12px;font-size:13px;border:1px solid var(--dsw-alias-border-l2,#d7dbe0);border-radius:8px;background:var(--dsw-alias-bg-layer-3,transparent);color:inherit;outline:none;transition:border-color .15s}
 .dsh-ig-input:focus{border-color:var(--dsw-alias-brand-primary,#4c78ff)}
 .dsh-ig-input-group{display:flex;gap:8px;align-items:center}
+.dsh-ig-file-row{display:flex;align-items:center;gap:10px;min-width:0}
+.dsh-ig-file-input{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;clip-path:inset(50%)}
+.dsh-ig-file-button{appearance:none;flex:none;border:1px solid var(--dsw-alias-border-l2,#d7dbe0);border-radius:8px;padding:7px 12px;background:var(--dsw-alias-bg-layer-3,#f9fafb);color:var(--dsw-alias-label-secondary,inherit);font-size:13px;cursor:pointer;transition:background .15s,border-color .15s}
+.dsh-ig-file-button:hover{background:var(--dsw-alias-bg-layer-2,#edf0f3);border-color:var(--dsw-alias-label-dimmed,#9ca3af)}
+.dsh-ig-file-button:focus-within{outline:2px solid var(--dsw-alias-brand-primary,#4c78ff);outline-offset:2px}
+.dsh-ig-file-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary,inherit);font-size:12px}
 .dsh-ig-btn-reset{appearance:none;border:1px solid var(--dsw-alias-border-l2,#d7dbe0);border-radius:8px;padding:7px 12px;background:var(--dsw-alias-bg-layer-3,#f9fafb);color:var(--dsw-alias-label-secondary,inherit);font:inherit;font-size:13px;cursor:pointer;white-space:nowrap;transition:background .15s,border-color .15s}
 .dsh-ig-btn-reset:hover{background:var(--dsw-alias-bg-layer-2,#edf0f3);border-color:var(--dsw-alias-label-dimmed,#9ca3af)}
 .dsh-ig-hint,.dsh-ig-status{margin:0;color:var(--dsw-alias-label-tertiary,#7b818b);font-size:12px;line-height:1.4}
@@ -228,13 +269,13 @@ const STYLE = `
 `
 
 /** Required browser services. */
-export const inject = ['slots', 'connection', 'remote', 'settingsScope', 'locale']
+export const inject = ['slots', 'remote', 'remote.credentials', 'settingsScope', 'locale']
 
 /** Mount the settings card, generated-image card, and native conversation gallery view. */
 export function apply(ctx: Context): void {
-  const { api } = ctx.get('connection') as ConnectionHandle
   const scope = ctx.settingsScope.bind<ImageSettings>({ namespace: IMAGE_GENERATION_NAMESPACE as never })
   const locale = ctx.get('locale') as LocaleService | undefined
+  const credentials = (ctx as Context & { remote: { credentials: CredentialsRemote } }).remote.credentials
 
   ctx.effect(() => {
     const style = document.createElement('style')
@@ -252,7 +293,7 @@ export function apply(ctx: Context): void {
   ctx.slots.inject('settings.plugin.item', () => register({
     name: 'settings.plugin.item',
     key: IMAGE_GENERATION_NAMESPACE,
-    inject: (): SettingsFace => ({ scope, credentials: api.credentials, locale }),
+    inject: (): SettingsFace => ({ scope, credentials, locale }),
   }, ImageGenerationSettingsCard))
 
   // 2. Tool result view card in chat stream
@@ -288,6 +329,9 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
   const [provider, setProvider] = useState<Provider>('google')
   const [model, setModel] = useState('')
   const [baseURL, setBaseURL] = useState('')
+  const [workflowJson, setWorkflowJson] = useState('')
+  const [workflowName, setWorkflowName] = useState('')
+  const [timeoutSeconds, setTimeoutSeconds] = useState(DEFAULT_COMFYUI_TIMEOUT_MS / 1000)
   const [saveToWorkspace, setSaveToWorkspace] = useState(true)
   const [workspaceFolder, setWorkspaceFolder] = useState('dsh-image-gen')
   const [key, setKey] = useState('')
@@ -318,20 +362,29 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
     openai: t('providerOpenAI'),
     seedream: t('providerSeedream'),
     dashscope: t('providerDashScope'),
+    comfyui: t('providerComfyUI'),
   }
 
   useEffect(() => {
     const value = snapshot.value
     const next = value?.provider ?? 'google'
     setProvider(next); setModel(modelOf(next, value)); setBaseURL(baseURLOf(next, value))
+    setWorkflowJson(value?.comfyuiWorkflowJson ?? '')
+    setWorkflowName(value?.comfyuiWorkflowName ?? '')
+    setTimeoutSeconds(Math.max(1, Math.round((value?.comfyuiTimeoutMs ?? DEFAULT_COMFYUI_TIMEOUT_MS) / 1000)))
     setSaveToWorkspace(value?.saveToWorkspace ?? true)
     setWorkspaceFolder(value?.workspaceFolder ?? 'dsh-image-gen')
   }, [snapshot])
 
   useEffect(() => {
+    const keyRef = KEY_REF[provider]
+    if (keyRef === undefined) {
+      setConfigured(undefined)
+      return
+    }
     let active = true
-    void props.credentials.describe({ refs: [KEY_REF[provider]] }).then(response => {
-      if (active) setConfigured(response.result.ok ? response.result.value.credentials[KEY_REF[provider]]?.configured ?? false : undefined)
+    void props.credentials.describe([keyRef]).then(response => {
+      if (active) setConfigured(response.ok ? response.value?.[keyRef]?.configured ?? false : undefined)
     }).catch(() => { if (active) setConfigured(undefined) })
     return () => { active = false }
   }, [props.credentials, provider])
@@ -340,13 +393,23 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
     event.preventDefault(); setSaving(true); setMessage('')
     try {
       await props.scope.set('provider', provider)
-      await props.scope.set(provider === 'google' ? 'googleModel' : provider === 'openai' ? 'openaiModel' : provider === 'seedream' ? 'seedreamModel' : 'dashscopeModel', model)
-      await props.scope.set(provider === 'google' ? 'googleEndpoint' : provider === 'openai' ? 'openaiBaseURL' : provider === 'seedream' ? 'seedreamBaseURL' : 'dashscopeEndpoint', baseURL)
+      if (provider === 'comfyui') {
+        validateComfyUIWorkflowJson(workflowJson)
+        await props.scope.set('comfyuiBaseURL', baseURL)
+        await props.scope.set('comfyuiWorkflowJson', workflowJson)
+        await props.scope.set('comfyuiWorkflowName', workflowName)
+        await props.scope.set('comfyuiTimeoutMs', Math.max(1, Math.round(timeoutSeconds)) * 1000)
+      } else {
+        await props.scope.set(provider === 'google' ? 'googleModel' : provider === 'openai' ? 'openaiModel' : provider === 'seedream' ? 'seedreamModel' : 'dashscopeModel', model)
+        await props.scope.set(provider === 'google' ? 'googleEndpoint' : provider === 'openai' ? 'openaiBaseURL' : provider === 'seedream' ? 'seedreamBaseURL' : 'dashscopeEndpoint', baseURL)
+      }
       await props.scope.set('saveToWorkspace', saveToWorkspace)
       await props.scope.set('workspaceFolder', workspaceFolder.trim())
       if (key.trim().length > 0) {
-        const response = await props.credentials.set({ ref: KEY_REF[provider], value: key.trim() })
-        if (!response.result.ok) throw new Error(response.result.error.message)
+        const keyRef = KEY_REF[provider]
+        if (keyRef === undefined) throw new Error('ComfyUI does not use an API key in this version')
+        const response = await props.credentials.set(keyRef, key.trim())
+        if (!response.ok) throw new Error(response.error?.message ?? 'Failed to save API key')
         setKey(''); setConfigured(true)
       }
       setMessage(t('saved'))
@@ -354,6 +417,24 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
   }
 
   const keyStatus = configured === undefined ? t('checkingKey') : configured ? t('keyConfigured') : t('keyNotConfigured')
+  const workflowStatus = workflowName.length > 0 ? t('workflowImported', { name: workflowName }) : t('workflowMissing')
+
+  const importWorkflow = async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (file === undefined) return
+    setMessage('')
+    try {
+      if (file.size > MAX_COMFYUI_WORKFLOW_BYTES) throw new Error(t('workflowTooLarge'))
+      const json = await file.text()
+      validateComfyUIWorkflowJson(json)
+      setWorkflowJson(json)
+      setWorkflowName(file.name)
+      setMessage(t('workflowImported', { name: file.name }))
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
 
   return (
     <li className={`dsh-ig-card ${open ? 'dsh-ig-card-open' : ''}`}>
@@ -375,26 +456,46 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
               <option value="openai">{t('providerOpenAI')}</option>
               <option value="seedream">{t('providerSeedream')}</option>
               <option value="dashscope">{t('providerDashScope')}</option>
+              <option value="comfyui">{t('providerComfyUI')}</option>
             </select>
             <span className="dsh-ig-hint">{providerLabels[provider]}</span>
           </label>
-          <label className="dsh-ig-field">
+          {provider !== 'comfyui' ? <label className="dsh-ig-field">
             <span className="dsh-ig-label">{t('apiKeyLabel', { provider: providerLabels[provider] })}</span>
             <input className="dsh-ig-input" type="password" autoComplete="off" value={key} onChange={event => { setKey(event.target.value) }} placeholder={configured ? t('apiKeyPlaceholder') : ''} />
-            <span className="dsh-ig-hint">{t('apiKeyHint', { key: KEY_REF[provider] })}</span>
-          </label>
+            <span className="dsh-ig-hint">{t('apiKeyHint', { key: KEY_REF[provider] ?? '' })}</span>
+          </label> : null}
           <label className="dsh-ig-field">
             <span className="dsh-ig-label">{t('endpoint')}</span>
             <div className="dsh-ig-input-group">
               <input className="dsh-ig-input" type="url" value={baseURL} onChange={event => { setBaseURL(event.target.value) }} required />
               <button type="button" className="dsh-ig-btn-reset" title={t('resetTitle')} onClick={() => { setBaseURL(DEFAULT_BASE_URLS[provider]) }}>{t('reset')}</button>
             </div>
-            <span className="dsh-ig-hint">{provider === 'google' ? t('endpointHintGoogle') : provider === 'openai' ? t('endpointHintOpenAI') : provider === 'seedream' ? t('endpointHintSeedream') : t('endpointHintDashScope')}</span>
+            <span className="dsh-ig-hint">{provider === 'google' ? t('endpointHintGoogle') : provider === 'openai' ? t('endpointHintOpenAI') : provider === 'seedream' ? t('endpointHintSeedream') : provider === 'dashscope' ? t('endpointHintDashScope') : t('endpointHintComfyUI')}</span>
           </label>
-          <label className="dsh-ig-field">
+          {provider !== 'comfyui' ? <label className="dsh-ig-field">
             <span className="dsh-ig-label">{t('model')}</span>
             <input className="dsh-ig-input" value={model} onChange={event => { setModel(event.target.value) }} required />
-          </label>
+          </label> : (
+            <>
+              <div className="dsh-ig-field">
+                <span className="dsh-ig-label">{t('workflow')}</span>
+                <div className="dsh-ig-file-row">
+                  <label className="dsh-ig-file-button">
+                    <input className="dsh-ig-file-input" type="file" accept=".json,application/json" onChange={event => { void importWorkflow(event) }} />
+                    {workflowName.length > 0 ? t('workflowReplace') : t('workflowImport')}
+                  </label>
+                  <span className="dsh-ig-file-name" title={workflowName}>{workflowName || t('workflowMissing')}</span>
+                </div>
+                <span className="dsh-ig-hint">{t('workflowHint')}</span>
+              </div>
+              <label className="dsh-ig-field">
+                <span className="dsh-ig-label">{t('timeout')}</span>
+                <input className="dsh-ig-input" type="number" min="1" max="3600" step="1" value={timeoutSeconds} onChange={event => { setTimeoutSeconds(Number(event.target.value)) }} required />
+                <span className="dsh-ig-hint">{t('timeoutHint')}</span>
+              </label>
+            </>
+          )}
           <div className="dsh-ig-field">
             <label className="dsh-ig-check-row">
               <input type="checkbox" checked={saveToWorkspace} onChange={event => { setSaveToWorkspace(event.target.checked) }} />
@@ -410,8 +511,8 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
             </label>
           ) : null}
           <div className="dsh-ig-actions">
-            <p className="dsh-ig-status" role="status">{message || keyStatus}</p>
-            <button className="dsh-ig-save" type="submit" disabled={saving || !snapshot.writable}>{saving ? t('saving') : t('save')}</button>
+            <p className="dsh-ig-status" role="status">{message || (provider === 'comfyui' ? workflowStatus : keyStatus)}</p>
+            <button className="dsh-ig-save" type="submit" disabled={saving || !snapshot.writable || (provider === 'comfyui' && workflowJson.length === 0)}>{saving ? t('saving') : t('save')}</button>
           </div>
         </form>
       ) : null}
@@ -570,12 +671,12 @@ export function GeneratedImageCard(props: ImageCardProps) {
 }
 
 function modelOf(provider: Provider, value: ImageSettings | undefined): string {
-  const stored = provider === 'google' ? value?.googleModel : provider === 'openai' ? value?.openaiModel : provider === 'seedream' ? value?.seedreamModel : value?.dashscopeModel
+  const stored = provider === 'google' ? value?.googleModel : provider === 'openai' ? value?.openaiModel : provider === 'seedream' ? value?.seedreamModel : provider === 'dashscope' ? value?.dashscopeModel : value?.comfyuiWorkflowName
   return typeof stored === 'string' && stored.length > 0 ? stored : DEFAULT_MODELS[provider]
 }
 
 function baseURLOf(provider: Provider, value: ImageSettings | undefined): string {
-  const stored = provider === 'google' ? value?.googleEndpoint : provider === 'openai' ? value?.openaiBaseURL : provider === 'seedream' ? value?.seedreamBaseURL : value?.dashscopeEndpoint
+  const stored = provider === 'google' ? value?.googleEndpoint : provider === 'openai' ? value?.openaiBaseURL : provider === 'seedream' ? value?.seedreamBaseURL : provider === 'dashscope' ? value?.dashscopeEndpoint : value?.comfyuiBaseURL
   return typeof stored === 'string' && stored.length > 0 ? stored : DEFAULT_BASE_URLS[provider]
 }
 

@@ -6,7 +6,7 @@
 
 # 🎨 dsh-image-gen
 
-**让 DeepSeek Harness 拥有类似 ChatGPT 的原生对话生图与图片编辑能力，支持文生图、图生图、连续编辑，并兼容多家图像模型提供商。**
+**为 DeepSeek Harness 提供完整的对话图像能力：文生图、图生图、多图参考、连续编辑、本地 ComfyUI 与画廊管理。**
 
 [![npm version](https://img.shields.io/npm/v/dsh-image-gen.svg?style=flat-square&color=blue)](https://www.npmjs.com/package/dsh-image-gen)
 [![DSH Plugin](https://img.shields.io/badge/Plugin%20For-DeepSeek%20Harness-6366f1?style=flat-square)](https://github.com/deepseek-ai)
@@ -28,7 +28,7 @@
 
 <br />
 
-<p align="center">安装完成后，在 DSH 设置中填入自己的 API Key，就可以直接对 Agent 说：</p>
+<p align="center">安装完成后，在 DSH 设置中填入自己的 API Key 或配置本地 ComfyUI，就可以直接对 Agent 说：</p>
 
 ```text
 帮我画一张雨夜霓虹街头的赛博朋克猫咪。
@@ -57,7 +57,7 @@ DeepSeek Harness 已经可以让 Agent 调用不同工具完成任务，本项�
 graph LR
     A[用户 Prompt] --> B[DeepSeek Harness Agent]
     B --> C[generate_image / edit_image]
-    C --> D[Gemini / OpenAI / Seedream / DashScope]
+    C --> D[Gemini / OpenAI / Seedream / DashScope / ComfyUI]
     D --> E[图片数据]
     E --> F[当前 Conversation 对话流]
 ```
@@ -92,12 +92,12 @@ pnpm dsh plugin --profile web add ./dsh-image-gen
 
 </details>
 
-### 2. 配置 API Key 与工作区设置
+### 2. 配置 Provider 与工作区设置
 
 打开 DSH Web 页面（默认 `http://localhost:3080`）：
 
 1. 进入 **Settings → Plugins → Image generation**。
-2. 选择 Provider，填写 API Key。
+2. 选择 Provider；云端 Provider 填写 API Key，本地 ComfyUI 填写地址并导入 API Format Workflow JSON（提示词位置使用 `{{prompt}}`，种子可选用 `{{seed}}`）。
 3. 可按需开启 **保存到工作区**（默认开启）并自定义子目录，点击 **保存** 即可。
 
 <div align="center">
@@ -137,7 +137,7 @@ Agent 会调用 `edit_image`，复用当前会话中的图片继续修改。
 - 💬 **原生对话生图与编辑**：直接在 DeepSeek Harness 对话中生成图片，也可以基于已有图片继续修改。
 - 🔁 **连续多轮编辑**：支持复用当前会话中的上传图片、历史生成图和上一轮编辑结果继续迭代。
 - 🖼️ **画廊与图片工具**：自动汇总历史图片，支持搜索、筛选、全屏预览、复制、下载与删除。
-- 🎨 **多 Provider 支持**：兼容 Google Gemini、OpenAI Images / Compatible、Seedream、DashScope Qwen Image。
+- 🎨 **多 Provider 支持**：兼容 Google Gemini、OpenAI Images / Compatible、Seedream、DashScope Qwen Image，以及用户本地的 ComfyUI 工作流。
 - 🔑 **BYOK + 原生设置**：API Key、Provider、模型和 Endpoint 都可以直接在 DSH 设置中配置。
 - 💾 **会话与工作区保存**：图片接入 DSH Attachment / Conversation，并可自动保存到当前工作区。
 
@@ -152,6 +152,7 @@ Agent 会调用 `edit_image`，复用当前会话中的图片继续修改。
 | **OpenAI Compatible** | 自定义 | 自定义 Base URL |
 | **ByteDance Seedream / 火山方舟** | `doubao-seedream-5-0-260128` | `https://ark.cn-beijing.volces.com/api/v3` |
 | **Aliyun DashScope / Qwen Image** | `qwen-image-3.0` | `https://dashscope.aliyuncs.com/api/v1` |
+| **Local ComfyUI（仅文生图）** | 用户导入的 API Format Workflow | `http://127.0.0.1:8188` |
 
 ---
 
