@@ -46,6 +46,17 @@ interface CredentialsRemote {
   describe(refs: string[]): Promise<CredentialResult>
   set(ref: string, value: string): Promise<CredentialMutationResult>
 }
+type LegacyCredentialRpcResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; error: { message?: string } }
+interface LegacyCredentialsApi {
+  describe(request: { refs: string[] }): Promise<{
+    result: LegacyCredentialRpcResult<{ credentials: Readonly<Record<string, CredentialInfo>> }>
+  }>
+  set(request: { ref: string; value: string }): Promise<{
+    result: LegacyCredentialRpcResult<unknown>
+  }>
+}
 interface SettingsFace { scope: SettingsScope<ImageSettings>; credentials: CredentialsRemote; locale?: LocaleService | undefined }
 interface ImageCardFace { locale?: LocaleService | undefined }
 type SettingsCardProps = PropsRuntime<'settings.plugin.item'> & InjectFace<SettingsFace>
@@ -269,13 +280,12 @@ const STYLE = `
 `
 
 /** Required browser services. */
-export const inject = ['slots', 'remote', 'remote.credentials', 'settingsScope', 'locale']
+export const inject = ['slots', 'connection', 'remote', 'settingsScope', 'locale']
 
 /** Mount the settings card, generated-image card, and native conversation gallery view. */
 export function apply(ctx: Context): void {
   const scope = ctx.settingsScope.bind<ImageSettings>({ namespace: IMAGE_GENERATION_NAMESPACE as never })
   const locale = ctx.get('locale') as LocaleService | undefined
-  const credentials = (ctx as Context & { remote: { credentials: CredentialsRemote } }).remote.credentials
 
   ctx.effect(() => {
     const style = document.createElement('style')
@@ -290,11 +300,27 @@ export function apply(ctx: Context): void {
   const register = ctx.slots.register.bind(ctx.slots) as unknown as (options: object, component: unknown) => () => void
 
   // 1. Settings item
-  ctx.slots.inject('settings.plugin.item', () => register({
-    name: 'settings.plugin.item',
-    key: IMAGE_GENERATION_NAMESPACE,
-    inject: (): SettingsFace => ({ scope, credentials, locale }),
-  }, ImageGenerationSettingsCard))
+  const injectSettingsItem = (owner: Context, credentials: CredentialsRemote): void => {
+    const ownerRegister = owner.slots.register.bind(owner.slots) as unknown as (options: object, component: unknown) => () => void
+    owner.slots.inject('settings.plugin.item', () => ownerRegister({
+      name: 'settings.plugin.item',
+      key: IMAGE_GENERATION_NAMESPACE,
+      inject: (): SettingsFace => ({ scope, credentials, locale }),
+    }, ImageGenerationSettingsCard))
+  }
+  const remoteCredentials = asCredentialsRemote(ctx.get('remote.credentials'))
+  const legacyCredentials = credentialsFromLegacyConnection(ctx.get('connection'))
+  if (remoteCredentials !== undefined) {
+    injectSettingsItem(ctx, remoteCredentials)
+  } else if (legacyCredentials !== undefined) {
+    injectSettingsItem(ctx, legacyCredentials)
+  } else {
+    ctx.inject(['remote.credentials'], (remoteCtx) => {
+      const credentials = asCredentialsRemote(remoteCtx.get('remote.credentials'))
+      if (credentials === undefined) throw new Error('dsh-image-gen: remote.credentials has an incompatible interface')
+      injectSettingsItem(remoteCtx, credentials)
+    })
+  }
 
   // 2. Tool result view card in chat stream
   ctx.slots.inject('tool.call.toolview', () => register({
@@ -319,6 +345,35 @@ export function apply(ctx: Context): void {
     },
     inject: () => ({ locale }),
   }, GalleryViewTab))
+}
+
+function asCredentialsRemote(value: unknown): CredentialsRemote | undefined {
+  if (value === null || typeof value !== 'object') return undefined
+  const candidate = value as Partial<CredentialsRemote>
+  return typeof candidate.describe === 'function' && typeof candidate.set === 'function'
+    ? candidate as CredentialsRemote
+    : undefined
+}
+
+function credentialsFromLegacyConnection(value: unknown): CredentialsRemote | undefined {
+  if (value === null || typeof value !== 'object') return undefined
+  const credentials = (value as { api?: { credentials?: Partial<LegacyCredentialsApi> } }).api?.credentials
+  if (credentials === undefined || typeof credentials.describe !== 'function' || typeof credentials.set !== 'function') return undefined
+  const legacy = credentials as LegacyCredentialsApi
+  return {
+    async describe(refs) {
+      const response = await legacy.describe({ refs })
+      return response.result.ok
+        ? { ok: true, value: response.result.value.credentials }
+        : { ok: false }
+    },
+    async set(ref, credentialValue) {
+      const response = await legacy.set({ ref, value: credentialValue })
+      return response.result.ok
+        ? { ok: true }
+        : { ok: false, error: response.result.error }
+    },
+  }
 }
 
 /** Edit provider settings and its write-only API credential. */
