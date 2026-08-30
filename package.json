@@ -1,6 +1,6 @@
 {
   "name": "dsh-image-gen",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Bring ChatGPT-like image generation to DeepSeek Harness — Gemini, OpenAI, Seedream, DashScope, local ComfyUI & more.",
   "type": "module",
   "author": "shanliuling",
