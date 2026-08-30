@@ -3,10 +3,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import * as plugin from '../src/client/index.js'
 import { imageRef } from '../src/client/image-ref.js'
+import { imageResultDefinition } from '../src/client/image-result-node.js'
 
 interface ClientHarness {
   ctx: Context
   registrations: Map<string, () => unknown>
+  slotInjections: Array<{ name: string; factory: () => unknown }>
+  slotRegistrations: Array<{ options: Record<string, unknown>; component: unknown }>
   injectedCredentials: () => unknown
 }
 
@@ -14,15 +17,22 @@ function clientHarness(options: {
   connection: unknown
   remote: object
   remoteCredentials?: unknown
+  uiConversation?: unknown
 }): ClientHarness {
   const registrations = new Map<string, () => unknown>()
+  const slotInjections: Array<{ name: string; factory: () => unknown }> = []
+  const slotRegistrations: Array<{ options: Record<string, unknown>; component: unknown }> = []
   let credentialsFace: unknown
   const slots = {
-    register: vi.fn((registration: { name?: string; inject?: () => { credentials?: unknown } }) => {
+    register: vi.fn((registration: { name?: string; inject?: () => { credentials?: unknown } }, component: unknown) => {
       if (registration.name === 'settings.plugin.item') credentialsFace = registration.inject?.().credentials
+      slotRegistrations.push({ options: registration as Record<string, unknown>, component })
       return vi.fn()
     }),
-    inject: vi.fn((name: string, factory: () => unknown) => { registrations.set(name, factory) }),
+    inject: vi.fn((name: string, factory: () => unknown) => {
+      registrations.set(name, factory)
+      slotInjections.push({ name, factory })
+    }),
   }
   const style = { dataset: {} as Record<string, string>, textContent: '', remove: vi.fn() }
   vi.stubGlobal('document', {
@@ -35,11 +45,12 @@ function clientHarness(options: {
   ctx.provide('connection', options.connection)
   ctx.provide('remote', options.remote)
   if (options.remoteCredentials !== undefined) ctx.provide('remote.credentials', options.remoteCredentials)
+  if (options.uiConversation !== undefined) ctx.provide('uiConversation', options.uiConversation)
   ctx.provide('settingsScope', {
     bind: vi.fn(() => ({ getSnapshot: vi.fn(), subscribe: vi.fn(), set: vi.fn() })),
   })
   ctx.provide('locale', {})
-  return { ctx, registrations, injectedCredentials: () => credentialsFace }
+  return { ctx, registrations, slotInjections, slotRegistrations, injectedCredentials: () => credentialsFace }
 }
 
 afterEach(() => { vi.unstubAllGlobals() })
@@ -93,6 +104,74 @@ describe('DSH client compatibility', () => {
     expect(injectSettingsCard).toBeTypeOf('function')
     expect(() => injectSettingsCard?.()).not.toThrow()
     expect(harness.injectedCredentials()).toBe(credentials)
+
+    await fiber.dispose()
+  })
+
+  it('promotes image results only when modern DSH exposes uiConversation events', async () => {
+    const registerEvent = vi.fn(() => vi.fn())
+    const harness = clientHarness({
+      connection: {},
+      remote: { credentials: { describe: vi.fn(), set: vi.fn() } },
+      uiConversation: { events: { register: registerEvent } },
+    })
+
+    const fiber = harness.ctx.plugin(plugin)
+    await fiber.await()
+
+    expect(registerEvent).toHaveBeenCalledWith(imageResultDefinition)
+    expect(harness.slotInjections.some(injection => injection.name === 'conversation.chat.node')).toBe(true)
+
+    for (const injection of harness.slotInjections.filter(candidate => candidate.name === 'tool.call.toolview')) {
+      injection.factory()
+    }
+    const toolRegistrations = harness.slotRegistrations.filter(({ options }) =>
+      options.name === 'tool.call.toolview')
+    expect(toolRegistrations).toHaveLength(2)
+    for (const { options } of toolRegistrations) {
+      expect((options.inject as () => unknown)()).toMatchObject({ promoted: true })
+    }
+
+    await fiber.dispose()
+  })
+
+  it('keeps the legacy tool card when modern conversation events are absent', async () => {
+    const harness = clientHarness({ connection: {}, remote: { credentials: { describe: vi.fn(), set: vi.fn() } } })
+
+    const fiber = harness.ctx.plugin(plugin)
+    await fiber.await()
+
+    expect(harness.slotInjections.some(injection => injection.name === 'conversation.chat.node')).toBe(false)
+    for (const injection of harness.slotInjections.filter(candidate => candidate.name === 'tool.call.toolview')) {
+      injection.factory()
+    }
+    for (const { options } of harness.slotRegistrations.filter(({ options }) => options.name === 'tool.call.toolview')) {
+      expect((options.inject as () => unknown)()).toMatchObject({ promoted: false })
+    }
+
+    await fiber.dispose()
+  })
+
+  it('activates promotion when uiConversation is provided after plugin startup', async () => {
+    const registerEvent = vi.fn(() => vi.fn())
+    const harness = clientHarness({ connection: {}, remote: { credentials: { describe: vi.fn(), set: vi.fn() } } })
+
+    const fiber = harness.ctx.plugin(plugin)
+    await fiber.await()
+    expect(registerEvent).not.toHaveBeenCalled()
+
+    harness.ctx.provide('uiConversation', { events: { register: registerEvent } })
+    await vi.waitFor(() => {
+      expect(registerEvent).toHaveBeenCalledWith(imageResultDefinition)
+    })
+    expect(harness.slotInjections.some(injection => injection.name === 'conversation.chat.node')).toBe(true)
+
+    for (const injection of harness.slotInjections.filter(candidate => candidate.name === 'tool.call.toolview')) {
+      injection.factory()
+    }
+    for (const { options } of harness.slotRegistrations.filter(({ options }) => options.name === 'tool.call.toolview')) {
+      expect((options.inject as () => unknown)()).toMatchObject({ promoted: true })
+    }
 
     await fiber.dispose()
   })

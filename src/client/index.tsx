@@ -20,6 +20,11 @@ import { validateComfyUIWorkflowJson } from '../comfyui-workflow.js'
 import { saveGalleryItem } from './gallery-store.js'
 import { GalleryViewTab, copyImageBlob, type LocaleService } from './gallery-view.js'
 import { imageRef } from './image-ref.js'
+import {
+  IMAGE_RESULT_NODE_KIND,
+  imageResultDefinition,
+  type ImageResultPresentation,
+} from './image-result-node.js'
 
 type Provider = ImageProvider
 interface ImageSettings {
@@ -58,9 +63,16 @@ interface LegacyCredentialsApi {
   }>
 }
 interface SettingsFace { scope: SettingsScope<ImageSettings>; credentials: CredentialsRemote; locale?: LocaleService | undefined }
-interface ImageCardFace { locale?: LocaleService | undefined }
+interface ImageCardFace { locale?: LocaleService | undefined; promoted: boolean }
 type SettingsCardProps = PropsRuntime<'settings.plugin.item'> & InjectFace<SettingsFace>
 type ImageCardProps = PropsRuntime<'tool.call.toolview'> & InjectFace<ImageCardFace>
+interface ImageResultNodeProps {
+  node: { data: { results: readonly ImageResultPresentation[] } }
+  locale?: LocaleService | undefined
+}
+interface ModernUiConversation {
+  events: { register(definition: typeof imageResultDefinition): () => void }
+}
 
 const KEY_REF: Partial<Record<Provider, string>> = {
   google: 'GEMINI_API_KEY',
@@ -115,6 +127,7 @@ const DICT = {
     loading: '正在加载图片…',
     loadFailed: '图片读取失败 ({status})',
     generatedTitle: '已生成图片',
+    resultShown: '图片结果已显示在对话中',
     copyImg: '复制图片',
     download: '下载图片',
     openNewTab: '新标签页打开',
@@ -166,6 +179,7 @@ const DICT = {
     loading: 'Loading image…',
     loadFailed: 'Failed to load image ({status})',
     generatedTitle: 'Generated image',
+    resultShown: 'Image result is shown in the conversation',
     copyImg: 'Copy Image',
     download: 'Download Image',
     openNewTab: 'Open in new tab',
@@ -210,6 +224,7 @@ const STYLE = `
 .dsh-ig-save:disabled{opacity:.4;cursor:default}
 
 .dsh-ig-result{display:grid;gap:10px;max-width:520px}
+.dsh-ig-promoted-results{display:grid;gap:16px}
 .dsh-ig-result-title{font-size:14px;font-weight:600}
 .dsh-ig-container{position:relative;display:inline-block;width:fit-content;max-width:100%;justify-self:start;border-radius:12px;overflow:hidden;line-height:0}
 .dsh-ig-container:hover .dsh-ig-toolbar{opacity:1;pointer-events:auto}
@@ -288,6 +303,7 @@ export const inject = ['slots', 'connection', 'remote', 'settingsScope', 'locale
 export function apply(ctx: Context): void {
   const scope = ctx.settingsScope.bind<ImageSettings>({ namespace: IMAGE_GENERATION_NAMESPACE as never })
   const locale = ctx.get('locale') as LocaleService | undefined
+  const promotion = { enabled: false }
 
   ctx.effect(() => {
     const style = document.createElement('style')
@@ -300,6 +316,27 @@ export function apply(ctx: Context): void {
   }, 'dsh-image-gen: styles')
 
   const register = ctx.slots.register.bind(ctx.slots) as unknown as (options: object, component: unknown) => () => void
+
+  ;(ctx.inject as unknown as (services: string[], callback: (owner: Context) => void) => void)(
+    ['uiConversation'],
+    (owner) => {
+      const uiConversation = asModernUiConversation(owner.get('uiConversation'))
+      if (uiConversation === undefined) {
+        throw new Error('dsh-image-gen: uiConversation has an incompatible interface')
+      }
+      promotion.enabled = true
+      const ownerRegister = owner.slots.register.bind(owner.slots) as unknown as (options: object, component: unknown) => () => void
+      owner.effect(
+      () => uiConversation.events.register(imageResultDefinition),
+      'dsh-image-gen: promoted image result node',
+      )
+      ;(owner.slots.inject as any)('conversation.chat.node', () => ownerRegister({
+        name: 'conversation.chat.node',
+        key: IMAGE_RESULT_NODE_KIND,
+        inject: () => ({ locale }),
+      }, PromotedImageResultNode))
+    },
+  )
 
   // 1. Settings item
   const injectSettingsItem = (owner: Context, credentials: CredentialsRemote): void => {
@@ -328,12 +365,12 @@ export function apply(ctx: Context): void {
   ctx.slots.inject('tool.call.toolview', () => register({
     name: 'tool.call.toolview',
     key: 'generate_image',
-    inject: (): ImageCardFace => ({ locale }),
+    inject: (): ImageCardFace => ({ locale, promoted: promotion.enabled }),
   }, GeneratedImageCard))
   ctx.slots.inject('tool.call.toolview', () => register({
     name: 'tool.call.toolview',
     key: 'edit_image',
-    inject: (): ImageCardFace => ({ locale }),
+    inject: (): ImageCardFace => ({ locale, promoted: promotion.enabled }),
   }, GeneratedImageCard))
 
   // 3. Native conversation view tab (DSH official slot: 'conversation.view')
@@ -347,6 +384,15 @@ export function apply(ctx: Context): void {
     },
     inject: () => ({ locale }),
   }, GalleryViewTab))
+}
+
+function asModernUiConversation(value: unknown): ModernUiConversation | undefined {
+  if (value === null || typeof value !== 'object') return undefined
+  const events = (value as { events?: unknown }).events
+  if (events === null || typeof events !== 'object') return undefined
+  return typeof (events as { register?: unknown }).register === 'function'
+    ? value as ModernUiConversation
+    : undefined
 }
 
 function asCredentialsRemote(value: unknown): CredentialsRemote | undefined {
@@ -577,22 +623,41 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
   )
 }
 
-/** Render the durable attachment referenced by a completed image tool call. */
+/** Keep the legacy Tool row for old DSH and hand modern results to the independent Chat node. */
 export function GeneratedImageCard(props: ImageCardProps) {
-  const attachment = imageRef(props.block)
-  const savedTo = imageSavedTo(props.block)
+  const result = imageResultFromBlock(props.block)
+  if (props.promoted && result !== undefined) return <PromotedResultNotice locale={props.locale} />
+  return <ImageResultCard result={result} locale={props.locale} />
+}
+
+/** Render modern image artifacts as final conversation output instead of Tool process content. */
+export function PromotedImageResultNode(props: ImageResultNodeProps) {
+  return <div className="dsh-ig-promoted-results">
+    {props.node.data.results.map(result =>
+      <ImageResultCard key={result.attachment.attachmentId} result={result} locale={props.locale} />)}
+  </div>
+}
+
+function PromotedResultNotice({ locale }: { locale?: LocaleService | undefined }) {
+  const lang = usePluginLanguage(locale)
+  return <div className="dsh-ig-loading">{DICT[lang].resultShown}</div>
+}
+
+function ImageResultCard({
+  result,
+  locale,
+}: {
+  result?: ImageResultPresentation | undefined
+  locale?: LocaleService | undefined
+}) {
+  const attachment = result?.attachment
+  const savedTo = result?.savedTo
   const [url, setUrl] = useState<string>()
   const [blob, setBlob] = useState<Blob>()
   const [error, setError] = useState<string>()
   const [previewOpen, setPreviewOpen] = useState(false)
   const [toast, setToast] = useState<string>()
-  const [lang, setLang] = useState(() => (props.locale?.getSnapshot?.()?.active?.startsWith('en') ? 'en' : 'zh'))
-
-  useEffect(() => {
-    return props.locale?.subscribe?.(() => {
-      setLang(props.locale?.getSnapshot?.()?.active?.startsWith('en') ? 'en' : 'zh')
-    })
-  }, [props.locale])
+  const lang = usePluginLanguage(locale)
 
 
   const t = (keyName: DictKey, params?: Record<string, string>): string => {
@@ -608,27 +673,17 @@ export function GeneratedImageCard(props: ImageCardProps) {
 
   // Auto-collect into gallery IndexedDB
   useEffect(() => {
-    if (attachment === undefined) return
-    const blockAny = props.block as unknown as {
-      meta?: Record<string, unknown>
-      resultView?: { meta?: Record<string, unknown> }
-      call?: { args?: { prompt?: string } }
-    }
-    const meta = blockAny.meta ?? blockAny.resultView?.meta
-    const prompt = typeof meta?.prompt === 'string' ? meta.prompt : blockAny.call?.args?.prompt ?? 'Generated Image'
-    const provider = (typeof meta?.provider === 'string' ? meta.provider : 'google') as ImageProvider
-    const model = typeof meta?.model === 'string' ? meta.model : ''
-    const output = typeof meta?.output === 'string' ? meta.output : ''
+    if (result === undefined) return
 
     void saveGalleryItem({
-      id: attachment.attachmentId,
-      attachment,
-      prompt,
-      provider,
-      model,
-      output,
+      id: result.attachment.attachmentId,
+      attachment: result.attachment,
+      prompt: result.prompt,
+      provider: result.provider as ImageProvider,
+      model: result.model,
+      output: result.output,
     })
-  }, [attachment?.attachmentId])
+  }, [result?.attachment.attachmentId])
 
   useEffect(() => {
     if (!previewOpen) return
@@ -728,6 +783,33 @@ export function GeneratedImageCard(props: ImageCardProps) {
   </section>
 }
 
+function usePluginLanguage(locale: LocaleService | undefined): 'en' | 'zh' {
+  const [lang, setLang] = useState<'en' | 'zh'>(() => locale?.getSnapshot?.()?.active?.startsWith('en') ? 'en' : 'zh')
+  useEffect(() => locale?.subscribe?.(() => {
+    setLang(locale?.getSnapshot?.()?.active?.startsWith('en') ? 'en' : 'zh')
+  }), [locale])
+  return lang
+}
+
+function imageResultFromBlock(block: ToolCallBlock): ImageResultPresentation | undefined {
+  const attachment = imageRef(block)
+  if (attachment === undefined) return undefined
+  const blockValue = block as unknown as {
+    meta?: Record<string, unknown>
+    resultView?: { meta?: Record<string, unknown> }
+    call?: { args?: { prompt?: string } }
+  }
+  const meta = blockValue.meta ?? blockValue.resultView?.meta
+  return {
+    attachment,
+    prompt: typeof meta?.prompt === 'string' ? meta.prompt : blockValue.call?.args?.prompt ?? 'Generated Image',
+    provider: typeof meta?.provider === 'string' ? meta.provider : 'google',
+    model: typeof meta?.model === 'string' ? meta.model : '',
+    output: typeof meta?.output === 'string' ? meta.output : '',
+    ...(typeof meta?.savedTo === 'string' ? { savedTo: meta.savedTo } : {}),
+  }
+}
+
 function modelOf(provider: Provider, value: ImageSettings | undefined): string {
   const stored = provider === 'google' ? value?.googleModel : provider === 'openai' ? value?.openaiModel : provider === 'seedream' ? value?.seedreamModel : provider === 'dashscope' ? value?.dashscopeModel : value?.comfyuiWorkflowName
   return typeof stored === 'string' && stored.length > 0 ? stored : DEFAULT_MODELS[provider]
@@ -736,12 +818,4 @@ function modelOf(provider: Provider, value: ImageSettings | undefined): string {
 function baseURLOf(provider: Provider, value: ImageSettings | undefined): string {
   const stored = provider === 'google' ? value?.googleEndpoint : provider === 'openai' ? value?.openaiBaseURL : provider === 'seedream' ? value?.seedreamBaseURL : provider === 'dashscope' ? value?.dashscopeEndpoint : value?.comfyuiBaseURL
   return typeof stored === 'string' && stored.length > 0 ? stored : DEFAULT_BASE_URLS[provider]
-}
-
-/** The workspace file path a completed image call saved, when the result meta carries one. */
-function imageSavedTo(block: ToolCallBlock): string | undefined {
-  if (!('kind' in block)) return undefined
-  const meta = (block as unknown as { meta?: { savedTo?: unknown } }).meta
-    ?? (block.resultView as unknown as { meta?: { savedTo?: unknown } } | undefined)?.meta
-  return typeof meta?.savedTo === 'string' ? meta.savedTo : undefined
 }
