@@ -2,6 +2,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import * as plugin from '../src/client/index.js'
+import { imageRef } from '../src/client/image-ref.js'
 
 interface ClientHarness {
   ctx: Context
@@ -114,5 +115,80 @@ describe('DSH client compatibility', () => {
     expect(harness.injectedCredentials()).toBe(credentials)
 
     await fiber.dispose()
+  })
+
+  describe('imageRef dual-path compatibility', () => {
+    const attachment = {
+      attachmentId: 'sha256:test1234',
+      mediaType: 'image/jpeg' as const,
+      bytes: 4096,
+      width: 512,
+      height: 512,
+    }
+
+    it('resolves image attachment from legacy rc.2 resultView.content', () => {
+      const block = {
+        kind: 'tool-result' as const,
+        seq: 1,
+        time: 1000,
+        callId: 'call-1',
+        call: { name: 'generate_image', argsRaw: '{}' },
+        callTime: 900,
+        content: [{ type: 'text' as const, text: 'Generated one image' }],
+        isError: false,
+        callView: null,
+        resultView: {
+          card: 'generic' as const,
+          title: 'Generated image',
+          content: [{ type: 'image' as const, attachment }],
+        },
+        subCalls: [],
+      }
+      expect(imageRef(block)).toEqual(attachment)
+    })
+
+    it('resolves image attachment from new DSH block.content without resultView fields', () => {
+      const block = {
+        kind: 'tool-result' as const,
+        seq: 2,
+        time: 2000,
+        callId: 'call-2',
+        call: { name: 'generate_image', argsRaw: '{}' },
+        callTime: 1900,
+        content: [
+          { type: 'text' as const, text: 'Generated one image' },
+          { type: 'image' as const, attachment },
+        ],
+        isError: false,
+        subCalls: [],
+      }
+      expect(imageRef(block as never)).toEqual(attachment)
+    })
+
+    it('returns undefined while tool is running or when no image exists', () => {
+      const runningCall = {
+        callId: 'call-3',
+        name: 'generate_image',
+        argsRaw: '{}',
+        turn: 1,
+        step: 1,
+        time: 3000,
+        subCalls: [],
+      }
+      expect(imageRef(runningCall as never)).toBeUndefined()
+
+      const textOnlyResult = {
+        kind: 'tool-result' as const,
+        seq: 4,
+        time: 4000,
+        callId: 'call-4',
+        call: { name: 'generate_image', argsRaw: '{}' },
+        callTime: 3900,
+        content: [{ type: 'text' as const, text: 'no image' }],
+        isError: false,
+        subCalls: [],
+      }
+      expect(imageRef(textOnlyResult as never)).toBeUndefined()
+    })
   })
 })

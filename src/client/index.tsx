@@ -1,4 +1,3 @@
-/** Web settings and generated-image cards contributed by the Bundle. */
 import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
@@ -20,6 +19,7 @@ import {
 import { validateComfyUIWorkflowJson } from '../comfyui-workflow.js'
 import { saveGalleryItem } from './gallery-store.js'
 import { GalleryViewTab, copyImageBlob, type LocaleService } from './gallery-view.js'
+import { imageRef } from './image-ref.js'
 
 type Provider = ImageProvider
 interface ImageSettings {
@@ -278,6 +278,8 @@ const STYLE = `
 /* Hide floating chat composer when gallery page is active */
 [data-conversation-scroll]:has(.dsh-ig-gallery-page) [data-composer-seat]{display:none!important}
 `
+
+
 
 /** Required browser services. */
 export const inject = ['slots', 'connection', 'remote', 'settingsScope', 'locale']
@@ -592,6 +594,7 @@ export function GeneratedImageCard(props: ImageCardProps) {
     })
   }, [props.locale])
 
+
   const t = (keyName: DictKey, params?: Record<string, string>): string => {
     const dict = lang === 'en' ? DICT.en : DICT.zh
     let text: string = dict[keyName] || DICT.zh[keyName] || keyName
@@ -734,8 +737,6 @@ function baseURLOf(provider: Provider, value: ImageSettings | undefined): string
   const stored = provider === 'google' ? value?.googleEndpoint : provider === 'openai' ? value?.openaiBaseURL : provider === 'seedream' ? value?.seedreamBaseURL : provider === 'dashscope' ? value?.dashscopeEndpoint : value?.comfyuiBaseURL
   return typeof stored === 'string' && stored.length > 0 ? stored : DEFAULT_BASE_URLS[provider]
 }
-
-function imageRef(block: ToolCallBlock): ImageAttachmentRef | undefined { if (!('kind' in block) || block.resultView?.card !== 'generic') return undefined; const image = block.resultView.content?.find(item => item.type === 'image'); return image?.type === 'image' ? image.attachment : undefined }
 
 /** The workspace file path a completed image call saved, when the result meta carries one. */
 function imageSavedTo(block: ToolCallBlock): string | undefined {
