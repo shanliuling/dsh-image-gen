@@ -96,7 +96,7 @@ export const Config: z<Config> = z.object({
   dashscopeEndpoint: z.string().default(DEFAULT_DASHSCOPE_ENDPOINT),
   dashscopeModel: z.string().default(DEFAULT_DASHSCOPE_MODEL),
   comfyuiBaseURL: z.string().default(DEFAULT_COMFYUI_BASE_URL),
-  comfyuiWorkflows: z.array(z.object({ name: z.string(), json: z.string() })).default([]),
+  comfyuiWorkflows: z.array(z.object({ name: z.string(), json: z.string(), presetPrompt: z.string().default('') })).default([]),
   comfyuiActiveWorkflow: z.string().default(''),
   comfyuiWorkflowJson: z.string().default(''),
   comfyuiWorkflowName: z.string().default(''),

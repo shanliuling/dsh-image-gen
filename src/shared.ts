@@ -31,6 +31,8 @@ export interface ComfyUIWorkflowEntry {
   name: string
   /** API-format workflow JSON with {{prompt}} / {{seed}} and optional {{image}} placeholders. */
   json: string
+  /** Optional preset prepended to the user prompt on every call of this workflow. */
+  presetPrompt?: string
 }
 
 /** Raw ComfyUI workflow fields as persisted through DSH Settings. */
@@ -50,7 +52,10 @@ export function resolveComfyUIWorkflows(source: ComfyUIWorkflowSource): ComfyUIW
   for (const entry of source.comfyuiWorkflows ?? []) {
     const name = typeof entry?.name === 'string' ? entry.name.trim() : ''
     const json = typeof entry?.json === 'string' ? entry.json : ''
-    if (name.length > 0 && json.trim().length > 0) named.push({ name, json })
+    if (name.length > 0 && json.trim().length > 0) {
+      const presetPrompt = typeof entry.presetPrompt === 'string' ? entry.presetPrompt.trim() : ''
+      named.push(presetPrompt.length > 0 ? { name, json, presetPrompt } : { name, json })
+    }
   }
   if (named.length > 0) return named
   const legacyJson = typeof source.comfyuiWorkflowJson === 'string' ? source.comfyuiWorkflowJson : ''
@@ -75,6 +80,19 @@ export function uniqueComfyUIWorkflowName(name: string, existing: readonly strin
     const candidate = `${base} (${index})`
     if (!existing.includes(candidate)) return candidate
   }
+}
+
+/**
+ * Combine a workflow's preset with the user prompt: preset first, user second,
+ * joined by one comma — never doubled when the preset already ends in a
+ * separator, and reduced to the non-empty side when the other is blank.
+ */
+export function mergeComfyUIPrompt(preset: string | undefined, user: string): string {
+  const presetText = typeof preset === 'string' ? preset.trim().replace(/[,;\s]+$/, '') : ''
+  const userText = user.trim()
+  if (presetText.length === 0) return userText
+  if (userText.length === 0) return presetText
+  return `${presetText}, ${userText}`
 }
 
 export const DEFAULT_MODELS: Record<ImageProvider, string> = {

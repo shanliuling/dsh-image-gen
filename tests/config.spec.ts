@@ -15,7 +15,7 @@ import {
   resolveProvider,
   selectComfyUIWorkflow,
 } from '../src/config.js'
-import { uniqueComfyUIWorkflowName } from '../src/shared.js'
+import { mergeComfyUIPrompt, resolveComfyUIWorkflows, uniqueComfyUIWorkflowName } from '../src/shared.js'
 
 describe('resolveProvider', () => {
   it('resolves the Google defaults', () => {
@@ -96,6 +96,37 @@ describe('ComfyUI workflow resolution', () => {
   })
 })
 
+describe('mergeComfyUIPrompt', () => {
+  it('prepends the preset before the user prompt with one separator', () => {
+    expect(mergeComfyUIPrompt('masterpiece, best quality', 'a cat')).toBe('masterpiece, best quality, a cat')
+  })
+
+  it('never doubles separators when the preset ends with commas or whitespace', () => {
+    expect(mergeComfyUIPrompt('masterpiece, ', 'a cat')).toBe('masterpiece, a cat')
+    expect(mergeComfyUIPrompt('masterpiece,', 'a cat')).toBe('masterpiece, a cat')
+    expect(mergeComfyUIPrompt('masterpiece ;', 'a cat')).toBe('masterpiece, a cat')
+  })
+
+  it('reduces to the non-empty side', () => {
+    expect(mergeComfyUIPrompt('', 'a cat')).toBe('a cat')
+    expect(mergeComfyUIPrompt(undefined, 'a cat')).toBe('a cat')
+    expect(mergeComfyUIPrompt('masterpiece', '')).toBe('masterpiece')
+    expect(mergeComfyUIPrompt('  ', '  ')).toBe('')
+  })
+})
+
+describe('resolveComfyUIWorkflows preset handling', () => {
+  it('keeps trimmed presets on named entries and omits blank ones', () => {
+    expect(resolveComfyUIWorkflows({ comfyuiWorkflows: [
+      { name: 'a.json', json: 'x', presetPrompt: ' masterpiece, ' },
+      { name: 'b.json', json: 'y', presetPrompt: '   ' },
+    ] })).toEqual([
+      { name: 'a.json', json: 'x', presetPrompt: 'masterpiece,' },
+      { name: 'b.json', json: 'y' },
+    ])
+  })
+})
+
 describe('selectComfyUIWorkflow', () => {
   const workflows = [
     { name: 'gen.json', json: '{"gen":{}}' },
@@ -139,13 +170,16 @@ describe('Config Schema validation', () => {
     expect(validated.comfyuiActiveWorkflow).toBe('')
   })
 
-  it('round-trips named workflows through the schema', () => {
+  it('round-trips named workflows through the schema, defaulting blank presets', () => {
     const validated = Config({
       provider: 'comfyui',
-      comfyuiWorkflows: [{ name: 'a.json', json: '{}' }],
+      comfyuiWorkflows: [{ name: 'a.json', json: '{}' }, { name: 'b.json', json: '{}', presetPrompt: 'masterpiece' }],
       comfyuiActiveWorkflow: 'a.json',
     })
-    expect(validated.comfyuiWorkflows).toEqual([{ name: 'a.json', json: '{}' }])
+    expect(validated.comfyuiWorkflows).toEqual([
+      { name: 'a.json', json: '{}', presetPrompt: '' },
+      { name: 'b.json', json: '{}', presetPrompt: 'masterpiece' },
+    ])
     expect(validated.comfyuiActiveWorkflow).toBe('a.json')
   })
 })

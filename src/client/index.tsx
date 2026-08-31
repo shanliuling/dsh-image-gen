@@ -117,6 +117,8 @@ const DICT = {
     workflowTooLarge: '工作流文件不能超过 5 MB。',
     workflowActiveTitle: '设为当前使用的工作流',
     workflowRemove: '删除',
+    workflowPresetPlaceholder: '预设提示词，留空则只用对话内容',
+    workflowPresetTitle: '预设提示词：每次调用此工作流时自动加在用户提示词前面。',
     workflowNameRequired: '工作流名称不能为空。',
     workflowDuplicateName: '工作流名称不能重复。',
     timeout: '生成超时（秒）',
@@ -172,6 +174,8 @@ const DICT = {
     workflowTooLarge: 'Workflow files must be no larger than 5 MB.',
     workflowActiveTitle: 'Make this the active workflow',
     workflowRemove: 'Remove',
+    workflowPresetPlaceholder: 'Preset prompt (optional)',
+    workflowPresetTitle: 'Preset prompt: automatically prepended to the user prompt on every call of this workflow.',
     workflowNameRequired: 'Workflow names cannot be empty.',
     workflowDuplicateName: 'Workflow names must be unique.',
     timeout: 'Generation timeout (seconds)',
@@ -226,7 +230,8 @@ const STYLE = `
 .dsh-ig-file-button:focus-within{outline:2px solid var(--dsw-alias-brand-primary,#4c78ff);outline-offset:2px}
 .dsh-ig-file-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary,inherit);font-size:12px}
 .dsh-ig-workflow-list{list-style:none;margin:0;padding:0;display:grid;gap:8px}
-.dsh-ig-workflow-row{display:flex;align-items:center;gap:8px}
+.dsh-ig-workflow-row{display:flex;flex-direction:column;gap:6px;padding:8px;border:1px solid var(--dsw-alias-border-l2,#eee);border-radius:8px}
+.dsh-ig-workflow-main{display:flex;align-items:center;gap:8px}
 .dsh-ig-workflow-active{display:inline-flex;align-items:center;cursor:pointer;flex:none}
 .dsh-ig-workflow-active input[type=radio]{width:15px;height:15px;accent-color:var(--dsw-alias-brand-primary,#4c78ff);margin:0;cursor:pointer}
 .dsh-ig-workflow-name{flex:1;min-width:0}
@@ -518,7 +523,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
     try {
       await props.scope.set('provider', provider)
       if (provider === 'comfyui') {
-        const entries = workflows.map(entry => ({ name: entry.name.trim(), json: entry.json }))
+        const entries = workflows.map(entry => ({ name: entry.name.trim(), json: entry.json, presetPrompt: (entry.presetPrompt ?? '').trim() }))
         for (const entry of entries) {
           if (entry.name.length === 0) throw new Error(t('workflowNameRequired'))
           validateComfyUIWorkflowJson(entry.json)
@@ -585,6 +590,11 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
     if (previous !== undefined && previous.name === activeWorkflow) setActiveWorkflow(next[0]?.name ?? '')
   }
 
+  /** Editing one entry's preset leaves the rest of the entry untouched. */
+  const setWorkflowPreset = (index: number, presetPrompt: string): void => {
+    setWorkflows(current => current.map((entry, position) => position === index ? { ...entry, presetPrompt } : entry))
+  }
+
   return (
     <li className={`dsh-ig-card ${open ? 'dsh-ig-card-open' : ''}`}>
       <button type="button" className="dsh-ig-head" aria-expanded={open} onClick={() => { setOpen(value => !value) }}>
@@ -640,22 +650,31 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
                   <ul className="dsh-ig-workflow-list">
                     {workflows.map((entry, index) => (
                       <li className="dsh-ig-workflow-row" key={String(index)}>
-                        <label className="dsh-ig-workflow-active" title={t('workflowActiveTitle')}>
+                        <div className="dsh-ig-workflow-main">
+                          <label className="dsh-ig-workflow-active" title={t('workflowActiveTitle')}>
+                            <input
+                              type="radio"
+                              name="dsh-ig-active-workflow"
+                              aria-label={t('workflowActiveTitle')}
+                              checked={entry.name === activeWorkflow}
+                              onChange={() => { setActiveWorkflow(entry.name) }}
+                            />
+                          </label>
                           <input
-                            type="radio"
-                            name="dsh-ig-active-workflow"
-                            aria-label={t('workflowActiveTitle')}
-                            checked={entry.name === activeWorkflow}
-                            onChange={() => { setActiveWorkflow(entry.name) }}
+                            className="dsh-ig-input dsh-ig-workflow-name"
+                            value={entry.name}
+                            title={entry.name}
+                            onChange={event => { renameWorkflow(index, event.target.value) }}
                           />
-                        </label>
+                          <button type="button" className="dsh-ig-btn-reset" onClick={() => { removeWorkflow(index) }}>{t('workflowRemove')}</button>
+                        </div>
                         <input
-                          className="dsh-ig-input dsh-ig-workflow-name"
-                          value={entry.name}
-                          title={entry.name}
-                          onChange={event => { renameWorkflow(index, event.target.value) }}
+                          className="dsh-ig-input dsh-ig-workflow-preset"
+                          value={entry.presetPrompt ?? ''}
+                          placeholder={t('workflowPresetPlaceholder')}
+                          title={t('workflowPresetTitle')}
+                          onChange={event => { setWorkflowPreset(index, event.target.value) }}
                         />
-                        <button type="button" className="dsh-ig-btn-reset" onClick={() => { removeWorkflow(index) }}>{t('workflowRemove')}</button>
                       </li>
                     ))}
                   </ul>

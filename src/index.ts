@@ -13,7 +13,7 @@ import { IMAGE_ROUTE, imageAttachmentFromMeta, serveImage } from './image-route.
 import { editOpenAICompatibleImage, generateOpenAICompatibleImage } from './openai-compatible.js'
 import { resolveReferenceImages } from './reference-image.js'
 import { editSeedreamImage } from './seedream.js'
-import { IMAGE_GENERATION_NAMESPACE } from './shared.js'
+import { IMAGE_GENERATION_NAMESPACE, mergeComfyUIPrompt } from './shared.js'
 import { saveImageToWorkspace } from './workspace-save.js'
 
 export { Config } from './config.js'
@@ -61,7 +61,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         const generated = await generateComfyUIImage({
           baseURL: active.baseURL,
           workflowJson: workflow.json,
-          prompt: args.prompt,
+          prompt: mergeComfyUIPrompt(workflow.presetPrompt, args.prompt),
           timeoutMs: active.timeoutMs,
           maxBytes: ctx.attachments.imageLimits.maxImageBytes,
           signal: exec.signal,
@@ -126,7 +126,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         const generated = await editComfyUIImage({
           baseURL: active.baseURL,
           workflowJson: workflow.json,
-          prompt: args.prompt,
+          prompt: mergeComfyUIPrompt(workflow.presetPrompt, args.prompt),
           sourceImage: { data: sourceImage.data, mediaType: sourceImage.mediaType },
           timeoutMs: active.timeoutMs,
           maxBytes: ctx.attachments.imageLimits.maxImageBytes,
