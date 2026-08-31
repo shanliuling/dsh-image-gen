@@ -5,7 +5,7 @@ import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { defineTool, type ToolResult } from '@deepseek-ai/dsh-tools'
-import { Config, resolveProvider, type AspectRatio, type ImageProvider, type ImageSize } from './config.js'
+import { Config, resolveProvider, selectComfyUIWorkflow, type AspectRatio, type ImageProvider, type ImageSize } from './config.js'
 import { editComfyUIImage, generateComfyUIImage } from './comfyui.js'
 import { editDashScopeImage, generateDashScopeImage } from './dashscope.js'
 import { editGoogleImage, generateGoogleImage } from './google.js'
@@ -51,20 +51,22 @@ export function apply(ctx: Context, config: Config = {}): void {
       aspect_ratio: { type: 'string', enum: ['1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16'], description: 'Optional output aspect ratio for Google Gemini.' },
       image_size: { type: 'string', enum: ['1K', '2K', '4K'], description: 'Optional output resolution for Google Gemini.' },
       size: { type: 'string', description: 'Optional dimensions or size tier for OpenAI, Seedream, or DashScope.' },
+      workflow: { type: 'string', description: 'Optional name of the ComfyUI workflow to run; omit to use the active workflow from settings. Only meaningful when the ComfyUI provider is selected.' },
     },
     output: imageOutput('Generated'),
     async execute(args, exec): Promise<GeneratedValue> {
       const active = resolveProvider(current())
       if (active.provider === 'comfyui') {
+        const workflow = selectComfyUIWorkflow(active, args.workflow)
         const generated = await generateComfyUIImage({
           baseURL: active.baseURL,
-          workflowJson: active.workflowJson,
+          workflowJson: workflow.json,
           prompt: args.prompt,
           timeoutMs: active.timeoutMs,
           maxBytes: ctx.attachments.imageLimits.maxImageBytes,
           signal: exec.signal,
         })
-        return saveGenerated(ctx, generated, active.provider, active.workflowName, 'API workflow', current(), exec)
+        return saveGenerated(ctx, generated, active.provider, workflow.name, 'API workflow', current(), exec)
       }
       const credential = await ctx.credentials.resolve(credentialRef(active.apiKeyEnv))
       if (credential === undefined || credential.value.length === 0) throw new Error(`generate_image requires the ${active.apiKeyEnv} credential; configure it in Settings > Plugins > Image generation.`)
@@ -98,6 +100,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       aspect_ratio: { type: 'string', enum: ['1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16'], description: 'Optional output aspect ratio for Google Gemini.' },
       image_size: { type: 'string', enum: ['1K', '2K', '4K'], description: 'Optional output resolution for Google Gemini.' },
       size: { type: 'string', description: 'Optional output size for OpenAI, Seedream, or DashScope.' },
+      workflow: { type: 'string', description: 'Optional name of the ComfyUI workflow to run; omit to use the active workflow from settings. Only meaningful when the ComfyUI provider is selected.' },
     },
     output: imageOutput('Edited'),
     async execute(args, exec): Promise<GeneratedValue> {
@@ -119,16 +122,17 @@ export function apply(ctx: Context, config: Config = {}): void {
         }
         const sourceImage = sourceImages[0]
         if (sourceImage === undefined) throw new Error('edit_image requires a reference image')
+        const workflow = selectComfyUIWorkflow(active, args.workflow)
         const generated = await editComfyUIImage({
           baseURL: active.baseURL,
-          workflowJson: active.workflowJson,
+          workflowJson: workflow.json,
           prompt: args.prompt,
           sourceImage: { data: sourceImage.data, mediaType: sourceImage.mediaType },
           timeoutMs: active.timeoutMs,
           maxBytes: ctx.attachments.imageLimits.maxImageBytes,
           signal: exec.signal,
         })
-        return saveGenerated(ctx, generated, active.provider, active.workflowName, 'API workflow', current(), exec)
+        return saveGenerated(ctx, generated, active.provider, workflow.name, 'API workflow', current(), exec)
       }
 
       const credential = await ctx.credentials.resolve(credentialRef(active.apiKeyEnv))

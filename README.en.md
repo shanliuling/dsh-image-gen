@@ -96,7 +96,7 @@ pnpm dsh plugin --profile web add ./dsh-image-gen
 Open DSH Web (`http://localhost:3080`):
 
 1. Navigate to **Settings → Plugins → Image generation**.
-2. Select a Provider. Enter an API key for cloud providers; for local ComfyUI, enter its URL and import an API Format Workflow JSON using `{{prompt}}` for the prompt and optional `{{seed}}` for the seed.
+2. Select a Provider. Enter an API key for cloud providers; for local ComfyUI, enter its URL and import an API Format Workflow JSON using `{{prompt}}` for the prompt and optional `{{seed}}` for the seed. For image editing, put `{{image}}` (exactly once) in the LoadImage `image` input; the plugin uploads the source image and fills in the stored filename. ComfyUI supports importing multiple named workflows with one active at a time, and the Agent can also pick one by name via the optional `workflow` tool parameter.
 3. Optionally enable **Save to workspace** (enabled by default) and specify subfolder, then click **Save**.
 
 <div align="center">

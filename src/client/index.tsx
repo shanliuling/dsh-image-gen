@@ -14,6 +14,10 @@ import {
   IMAGE_GENERATION_NAMESPACE,
   IMAGE_ROUTE,
   MAX_COMFYUI_WORKFLOW_BYTES,
+  activeComfyUIWorkflow,
+  resolveComfyUIWorkflows,
+  uniqueComfyUIWorkflowName,
+  type ComfyUIWorkflowEntry,
   type ImageProvider,
 } from '../shared.js'
 import { validateComfyUIWorkflowJson } from '../comfyui-workflow.js'
@@ -38,6 +42,8 @@ interface ImageSettings {
   dashscopeEndpoint?: string
   dashscopeModel?: string
   comfyuiBaseURL?: string
+  comfyuiWorkflows?: ComfyUIWorkflowEntry[]
+  comfyuiActiveWorkflow?: string
   comfyuiWorkflowJson?: string
   comfyuiWorkflowName?: string
   comfyuiTimeoutMs?: number
@@ -103,13 +109,16 @@ const DICT = {
     endpointHintDashScope: '阿里云百炼 DashScope 官方接口地址。',
     endpointHintComfyUI: '正在运行且 DSH Host 可以访问的 ComfyUI 地址，默认使用本机 8188 端口。',
     model: '模型',
-    workflow: 'API Workflow',
+    workflow: 'API Workflow 工作流',
     workflowImport: '导入 JSON 文件',
-    workflowReplace: '替换 JSON 文件',
     workflowMissing: '尚未导入工作流',
     workflowImported: '已导入 {name}',
-    workflowHint: '请从 ComfyUI 导出 API Format JSON，并在提示词输入位置写入 {{prompt}}；可用 {{seed}} 作为随机种子。',
+    workflowHint: '从 ComfyUI 导出 API Format JSON，在提示词输入写入 {{prompt}}，种子可用 {{seed}}；图生图工作流在 LoadImage 的 image 输入写入 {{image}}（仅一次）。可导入多个工作流，Agent 也能在调用时按名称指定。',
     workflowTooLarge: '工作流文件不能超过 5 MB。',
+    workflowActiveTitle: '设为当前使用的工作流',
+    workflowRemove: '删除',
+    workflowNameRequired: '工作流名称不能为空。',
+    workflowDuplicateName: '工作流名称不能重复。',
     timeout: '生成超时（秒）',
     timeoutHint: '包括提交、等待和下载图片；默认 300 秒。',
     saveToWorkspace: '保存到工作区',
@@ -155,13 +164,16 @@ const DICT = {
     endpointHintDashScope: 'Official Aliyun DashScope endpoint.',
     endpointHintComfyUI: 'A running ComfyUI server reachable by the DSH Host; the default points to port 8188 on this computer.',
     model: 'Model',
-    workflow: 'API Workflow',
+    workflow: 'API Workflows',
     workflowImport: 'Import JSON file',
-    workflowReplace: 'Replace JSON file',
     workflowMissing: 'No workflow imported',
     workflowImported: 'Imported {name}',
-    workflowHint: 'Export an API Format JSON from ComfyUI and place {{prompt}} in its prompt input. {{seed}} is available for a random seed.',
+    workflowHint: 'Export an API Format JSON from ComfyUI and place {{prompt}} in its prompt input; {{seed}} is available for a random seed. For image editing put {{image}} (exactly once) in the LoadImage image input. Import as many workflows as you need; the Agent can also pick one by name.',
     workflowTooLarge: 'Workflow files must be no larger than 5 MB.',
+    workflowActiveTitle: 'Make this the active workflow',
+    workflowRemove: 'Remove',
+    workflowNameRequired: 'Workflow names cannot be empty.',
+    workflowDuplicateName: 'Workflow names must be unique.',
     timeout: 'Generation timeout (seconds)',
     timeoutHint: 'Covers submission, waiting, and image download; defaults to 300 seconds.',
     saveToWorkspace: 'Save to workspace',
@@ -213,6 +225,11 @@ const STYLE = `
 .dsh-ig-file-button:hover{background:var(--dsw-alias-bg-layer-2,#edf0f3);border-color:var(--dsw-alias-label-dimmed,#9ca3af)}
 .dsh-ig-file-button:focus-within{outline:2px solid var(--dsw-alias-brand-primary,#4c78ff);outline-offset:2px}
 .dsh-ig-file-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary,inherit);font-size:12px}
+.dsh-ig-workflow-list{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.dsh-ig-workflow-row{display:flex;align-items:center;gap:8px}
+.dsh-ig-workflow-active{display:inline-flex;align-items:center;cursor:pointer;flex:none}
+.dsh-ig-workflow-active input[type=radio]{width:15px;height:15px;accent-color:var(--dsw-alias-brand-primary,#4c78ff);margin:0;cursor:pointer}
+.dsh-ig-workflow-name{flex:1;min-width:0}
 .dsh-ig-btn-reset{appearance:none;border:1px solid var(--dsw-alias-border-l2,#d7dbe0);border-radius:8px;padding:7px 12px;background:var(--dsw-alias-bg-layer-3,#f9fafb);color:var(--dsw-alias-label-secondary,inherit);font:inherit;font-size:13px;cursor:pointer;white-space:nowrap;transition:background .15s,border-color .15s}
 .dsh-ig-btn-reset:hover{background:var(--dsw-alias-bg-layer-2,#edf0f3);border-color:var(--dsw-alias-label-dimmed,#9ca3af)}
 .dsh-ig-hint,.dsh-ig-status{margin:0;color:var(--dsw-alias-label-tertiary,#7b818b);font-size:12px;line-height:1.4}
@@ -432,8 +449,8 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
   const [provider, setProvider] = useState<Provider>('google')
   const [model, setModel] = useState('')
   const [baseURL, setBaseURL] = useState('')
-  const [workflowJson, setWorkflowJson] = useState('')
-  const [workflowName, setWorkflowName] = useState('')
+  const [workflows, setWorkflows] = useState<ComfyUIWorkflowEntry[]>([])
+  const [activeWorkflow, setActiveWorkflow] = useState('')
   const [timeoutSeconds, setTimeoutSeconds] = useState(DEFAULT_COMFYUI_TIMEOUT_MS / 1000)
   const [saveToWorkspace, setSaveToWorkspace] = useState(true)
   const [workspaceFolder, setWorkspaceFolder] = useState('dsh-image-gen')
@@ -472,8 +489,8 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
     const value = snapshot.value
     const next = value?.provider ?? 'google'
     setProvider(next); setModel(modelOf(next, value)); setBaseURL(baseURLOf(next, value))
-    setWorkflowJson(value?.comfyuiWorkflowJson ?? '')
-    setWorkflowName(value?.comfyuiWorkflowName ?? '')
+    setWorkflows(resolveComfyUIWorkflows(value ?? {}))
+    setActiveWorkflow(activeComfyUIWorkflow(value ?? {})?.name ?? '')
     setTimeoutSeconds(Math.max(1, Math.round((value?.comfyuiTimeoutMs ?? DEFAULT_COMFYUI_TIMEOUT_MS) / 1000)))
     setSaveToWorkspace(value?.saveToWorkspace ?? true)
     setWorkspaceFolder(value?.workspaceFolder ?? 'dsh-image-gen')
@@ -497,10 +514,19 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
     try {
       await props.scope.set('provider', provider)
       if (provider === 'comfyui') {
-        validateComfyUIWorkflowJson(workflowJson)
+        const entries = workflows.map(entry => ({ name: entry.name.trim(), json: entry.json }))
+        for (const entry of entries) {
+          if (entry.name.length === 0) throw new Error(t('workflowNameRequired'))
+          validateComfyUIWorkflowJson(entry.json)
+        }
+        if (new Set(entries.map(entry => entry.name)).size !== entries.length) throw new Error(t('workflowDuplicateName'))
+        const activeEntry = entries.find(entry => entry.name === activeWorkflow) ?? entries[0]
         await props.scope.set('comfyuiBaseURL', baseURL)
-        await props.scope.set('comfyuiWorkflowJson', workflowJson)
-        await props.scope.set('comfyuiWorkflowName', workflowName)
+        await props.scope.set('comfyuiWorkflows', entries)
+        await props.scope.set('comfyuiActiveWorkflow', activeEntry === undefined ? '' : activeEntry.name)
+        // Keep the legacy single-workflow fields in sync so older plugin versions keep working.
+        await props.scope.set('comfyuiWorkflowJson', activeEntry === undefined ? '' : activeEntry.json)
+        await props.scope.set('comfyuiWorkflowName', activeEntry === undefined ? '' : activeEntry.name)
         await props.scope.set('comfyuiTimeoutMs', Math.max(1, Math.round(timeoutSeconds)) * 1000)
       } else {
         await props.scope.set(provider === 'google' ? 'googleModel' : provider === 'openai' ? 'openaiModel' : provider === 'seedream' ? 'seedreamModel' : 'dashscopeModel', model)
@@ -520,7 +546,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
   }
 
   const keyStatus = configured === undefined ? t('checkingKey') : configured ? t('keyConfigured') : t('keyNotConfigured')
-  const workflowStatus = workflowName.length > 0 ? t('workflowImported', { name: workflowName }) : t('workflowMissing')
+  const workflowStatus = activeWorkflow.length > 0 ? t('workflowImported', { name: activeWorkflow }) : t('workflowMissing')
 
   const importWorkflow = async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
     const file = event.target.files?.[0]
@@ -531,12 +557,28 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
       if (file.size > MAX_COMFYUI_WORKFLOW_BYTES) throw new Error(t('workflowTooLarge'))
       const json = await file.text()
       validateComfyUIWorkflowJson(json)
-      setWorkflowJson(json)
-      setWorkflowName(file.name)
-      setMessage(t('workflowImported', { name: file.name }))
+      const name = uniqueComfyUIWorkflowName(file.name, workflows.map(entry => entry.name))
+      setWorkflows(current => [...current, { name, json }])
+      setActiveWorkflow(current => current.length > 0 ? current : name)
+      setMessage(t('workflowImported', { name }))
     } catch (cause) {
       setMessage(cause instanceof Error ? cause.message : String(cause))
     }
+  }
+
+  /** Renaming the active entry keeps the active selection following its new name. */
+  const renameWorkflow = (index: number, name: string): void => {
+    const previous = workflows[index]
+    setWorkflows(current => current.map((entry, position) => position === index ? { ...entry, name } : entry))
+    if (previous !== undefined && previous.name === activeWorkflow) setActiveWorkflow(name)
+  }
+
+  /** Removing the active entry moves the selection to the first remaining workflow. */
+  const removeWorkflow = (index: number): void => {
+    const previous = workflows[index]
+    const next = workflows.filter((_entry, position) => position !== index)
+    setWorkflows(next)
+    if (previous !== undefined && previous.name === activeWorkflow) setActiveWorkflow(next[0]?.name ?? '')
   }
 
   return (
@@ -586,10 +628,34 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
                 <div className="dsh-ig-file-row">
                   <label className="dsh-ig-file-button">
                     <input className="dsh-ig-file-input" type="file" accept=".json,application/json" onChange={event => { void importWorkflow(event) }} />
-                    {workflowName.length > 0 ? t('workflowReplace') : t('workflowImport')}
+                    {t('workflowImport')}
                   </label>
-                  <span className="dsh-ig-file-name" title={workflowName}>{workflowName || t('workflowMissing')}</span>
+                  {workflows.length === 0 ? <span className="dsh-ig-file-name">{t('workflowMissing')}</span> : null}
                 </div>
+                {workflows.length > 0 ? (
+                  <ul className="dsh-ig-workflow-list">
+                    {workflows.map((entry, index) => (
+                      <li className="dsh-ig-workflow-row" key={String(index)}>
+                        <label className="dsh-ig-workflow-active" title={t('workflowActiveTitle')}>
+                          <input
+                            type="radio"
+                            name="dsh-ig-active-workflow"
+                            aria-label={t('workflowActiveTitle')}
+                            checked={entry.name === activeWorkflow}
+                            onChange={() => { setActiveWorkflow(entry.name) }}
+                          />
+                        </label>
+                        <input
+                          className="dsh-ig-input dsh-ig-workflow-name"
+                          value={entry.name}
+                          title={entry.name}
+                          onChange={event => { renameWorkflow(index, event.target.value) }}
+                        />
+                        <button type="button" className="dsh-ig-btn-reset" onClick={() => { removeWorkflow(index) }}>{t('workflowRemove')}</button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
                 <span className="dsh-ig-hint">{t('workflowHint')}</span>
               </div>
               <label className="dsh-ig-field">
@@ -615,7 +681,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
           ) : null}
           <div className="dsh-ig-actions">
             <p className="dsh-ig-status" role="status">{message || (provider === 'comfyui' ? workflowStatus : keyStatus)}</p>
-            <button className="dsh-ig-save" type="submit" disabled={saving || !snapshot.writable || (provider === 'comfyui' && workflowJson.length === 0)}>{saving ? t('saving') : t('save')}</button>
+            <button className="dsh-ig-save" type="submit" disabled={saving || !snapshot.writable || (provider === 'comfyui' && workflows.length === 0)}>{saving ? t('saving') : t('save')}</button>
           </div>
         </form>
       ) : null}
@@ -813,7 +879,7 @@ function imageResultFromBlock(block: ToolCallBlock): ImageResultPresentation | u
 }
 
 function modelOf(provider: Provider, value: ImageSettings | undefined): string {
-  const stored = provider === 'google' ? value?.googleModel : provider === 'openai' ? value?.openaiModel : provider === 'seedream' ? value?.seedreamModel : provider === 'dashscope' ? value?.dashscopeModel : value?.comfyuiWorkflowName
+  const stored = provider === 'google' ? value?.googleModel : provider === 'openai' ? value?.openaiModel : provider === 'seedream' ? value?.seedreamModel : provider === 'dashscope' ? value?.dashscopeModel : activeComfyUIWorkflow(value ?? {})?.name
   return typeof stored === 'string' && stored.length > 0 ? stored : DEFAULT_MODELS[provider]
 }
 

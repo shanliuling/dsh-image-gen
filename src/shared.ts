@@ -25,6 +25,58 @@ export const DEFAULT_OPENAI_MODEL = 'gpt-image-2'
 export const DEFAULT_SEEDREAM_MODEL = 'doubao-seedream-5-0-260128'
 export const DEFAULT_DASHSCOPE_MODEL = 'qwen-image-3.0'
 
+/** One named ComfyUI API-format workflow imported through settings. */
+export interface ComfyUIWorkflowEntry {
+  /** Unique human-readable label; used as the result model and by tool calls. */
+  name: string
+  /** API-format workflow JSON with {{prompt}} / {{seed}} and optional {{image}} placeholders. */
+  json: string
+}
+
+/** Raw ComfyUI workflow fields as persisted through DSH Settings. */
+export interface ComfyUIWorkflowSource {
+  /** Named workflows managed by the Web settings page. */
+  comfyuiWorkflows?: readonly ComfyUIWorkflowEntry[]
+  /** Name of the entry ComfyUI calls use by default. */
+  comfyuiActiveWorkflow?: string
+  /** Legacy single-workflow storage; synced to the active entry for downgrades. */
+  comfyuiWorkflowJson?: string
+  comfyuiWorkflowName?: string
+}
+
+/** Named workflows, falling back to the legacy single-workflow fields when the list is empty. */
+export function resolveComfyUIWorkflows(source: ComfyUIWorkflowSource): ComfyUIWorkflowEntry[] {
+  const named: ComfyUIWorkflowEntry[] = []
+  for (const entry of source.comfyuiWorkflows ?? []) {
+    const name = typeof entry?.name === 'string' ? entry.name.trim() : ''
+    const json = typeof entry?.json === 'string' ? entry.json : ''
+    if (name.length > 0 && json.trim().length > 0) named.push({ name, json })
+  }
+  if (named.length > 0) return named
+  const legacyJson = typeof source.comfyuiWorkflowJson === 'string' ? source.comfyuiWorkflowJson : ''
+  if (legacyJson.trim().length === 0) return []
+  const legacyName = typeof source.comfyuiWorkflowName === 'string' ? source.comfyuiWorkflowName.trim() : ''
+  return [{ name: legacyName.length > 0 ? legacyName : DEFAULT_COMFYUI_WORKFLOW_LABEL, json: legacyJson }]
+}
+
+/** The workflow ComfyUI calls use by default: the configured active name, else the first entry. */
+export function activeComfyUIWorkflow(source: ComfyUIWorkflowSource): ComfyUIWorkflowEntry | undefined {
+  const workflows = resolveComfyUIWorkflows(source)
+  if (workflows.length === 0) return undefined
+  const activeName = typeof source.comfyuiActiveWorkflow === 'string' ? source.comfyuiActiveWorkflow.trim() : ''
+  return workflows.find(workflow => workflow.name === activeName) ?? workflows[0]
+}
+
+/** Derive a workflow label that does not collide with the given existing names. */
+export function uniqueComfyUIWorkflowName(name: string, existing: readonly string[]): string {
+  const base = name.trim().length > 0 ? name.trim() : DEFAULT_COMFYUI_WORKFLOW_LABEL
+  if (!existing.includes(base)) return base
+  for (let index = 2; ; index += 1) {
+    const candidate = `${base} (${index})`
+    if (!existing.includes(candidate)) return candidate
+  }
+}
+
 export const DEFAULT_MODELS: Record<ImageProvider, string> = {
   google: DEFAULT_GOOGLE_MODEL,
   openai: DEFAULT_OPENAI_MODEL,

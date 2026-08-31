@@ -97,7 +97,7 @@ pnpm dsh plugin --profile web add ./dsh-image-gen
 打开 DSH Web 页面（默认 `http://localhost:3080`）：
 
 1. 进入 **Settings → Plugins → Image generation**。
-2. 选择 Provider；云端 Provider 填写 API Key，本地 ComfyUI 填写地址并导入 API Format Workflow JSON（提示词位置使用 `{{prompt}}`，种子可选用 `{{seed}}`）。
+2. 选择 Provider；云端 Provider 填写 API Key，本地 ComfyUI 填写地址并导入 API Format Workflow JSON（提示词位置使用 `{{prompt}}`，种子可选用 `{{seed}}`；图生图工作流在 LoadImage 的 `image` 输入中使用 `{{image}}`，调用时插件会自动上传源图并回填文件名，仅允许出现一次）。ComfyUI 支持导入多个命名工作流并选择当前使用的一个，Agent 也可以在调用时通过 `workflow` 参数按名称指定。
 3. 可按需开启 **保存到工作区**（默认开启）并自定义子目录，点击 **保存** 即可。
 
 <div align="center">

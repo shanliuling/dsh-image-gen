@@ -137,6 +137,95 @@ describe('image tool registration', () => {
     expect(ctx.credentials.resolve).not.toHaveBeenCalled()
   })
 
+  it('runs the ComfyUI workflow named by the call instead of the active one', async () => {
+    const { ctx, tools } = harnessContext()
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ prompt_id: 'job-1' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        'job-1': {
+          status: { status_str: 'success', completed: true },
+          outputs: { save: { images: [{ filename: 'final.png', subfolder: '', type: 'output' }] } },
+        },
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: { 'content-type': 'image/png' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    apply(ctx, {
+      provider: 'comfyui',
+      comfyuiWorkflows: [
+        { name: 'gen.json', json: JSON.stringify({ 6: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}}' } } }) },
+        { name: 'alt.json', json: JSON.stringify({ 6: { class_type: 'CLIPTextEncode', inputs: { text: 'ALT {{prompt}}' } } }) },
+      ],
+      comfyuiActiveWorkflow: 'gen.json',
+      saveToWorkspace: false,
+    })
+
+    const value = await toolByName(tools, 'generate_image').execute(
+      { prompt: 'a portrait', workflow: 'alt.json' },
+      { signal: new AbortController().signal } as never,
+    ) as { provider: string; model: string }
+
+    const submitted = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.body)) as { prompt: { 6: { inputs: { text: string } } } }
+    expect(submitted.prompt[6].inputs.text).toBe('ALT a portrait')
+    expect(value.model).toBe('alt.json')
+    expect(ctx.credentials.resolve).not.toHaveBeenCalled()
+  })
+
+  it('uses the active ComfyUI workflow when the call does not name one', async () => {
+    const { ctx, tools } = harnessContext()
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ prompt_id: 'job-1' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        'job-1': {
+          status: { status_str: 'success', completed: true },
+          outputs: { save: { images: [{ filename: 'final.png', subfolder: '', type: 'output' }] } },
+        },
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: { 'content-type': 'image/png' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    apply(ctx, {
+      provider: 'comfyui',
+      comfyuiWorkflows: [
+        { name: 'gen.json', json: JSON.stringify({ 6: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}}' } } }) },
+        { name: 'alt.json', json: JSON.stringify({ 6: { class_type: 'CLIPTextEncode', inputs: { text: 'ALT {{prompt}}' } } }) },
+      ],
+      comfyuiActiveWorkflow: 'alt.json',
+      saveToWorkspace: false,
+    })
+
+    const value = await toolByName(tools, 'generate_image').execute(
+      { prompt: 'a portrait' },
+      { signal: new AbortController().signal } as never,
+    ) as { model: string }
+
+    const submitted = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.body)) as { prompt: { 6: { inputs: { text: string } } } }
+    expect(submitted.prompt[6].inputs.text).toBe('ALT a portrait')
+    expect(value.model).toBe('alt.json')
+  })
+
+  it('lists configured ComfyUI workflows when the call names an unknown one', async () => {
+    const { ctx, tools } = harnessContext()
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    apply(ctx, {
+      provider: 'comfyui',
+      comfyuiWorkflows: [
+        { name: 'gen.json', json: JSON.stringify({ 6: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}}' } } }) },
+        { name: 'img2img.json', json: JSON.stringify({
+          1: { class_type: 'LoadImage', inputs: { image: '{{image}}' } },
+          6: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}}' } },
+        }) },
+      ],
+      saveToWorkspace: false,
+    })
+
+    await expect(toolByName(tools, 'generate_image').execute(
+      { prompt: 'a portrait', workflow: 'missing.json' },
+      { signal: new AbortController().signal } as never,
+    )).rejects.toThrow('No ComfyUI workflow named "missing.json" is configured. Available workflows: gen.json, img2img.json.')
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(ctx.credentials.resolve).not.toHaveBeenCalled()
+  })
+
   it('fails clearly before image lookup when ComfyUI editing is requested', async () => {
     const { ctx, tools } = harnessContext()
     apply(ctx, { provider: 'comfyui', saveToWorkspace: false })
