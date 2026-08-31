@@ -3,7 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type {} from '@deepseek-ai/dsh-host-webserver'
-import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
+import * as dshSettings from '@deepseek-ai/dsh-settings'
 import { defineTool, type ToolResult } from '@deepseek-ai/dsh-tools'
 import { Config, resolveProvider, selectComfyUIWorkflow, type AspectRatio, type ImageProvider, type ImageSize } from './config.js'
 import { editComfyUIImage, generateComfyUIImage } from './comfyui.js'
@@ -35,7 +35,7 @@ interface GeneratedValue {
 
 export function apply(ctx: Context, config: Config = {}): void {
   let current: () => Config = () => config
-  installSettingsSection(ctx, settingsNamespace(IMAGE_GENERATION_NAMESPACE), Config, config, {
+  installImageSettings(ctx, config, {
     setSource: source => { current = source }, onChange: () => {},
   })
   ctx.effect(() => ctx.webServer.register({
@@ -227,4 +227,47 @@ async function saveGenerated(
 function imagePresentation(result: ToolResult) {
   const attachment = imageAttachmentFromMeta(result.meta)
   return attachment === undefined ? undefined : { card: 'generic' as const, title: 'Generated image', content: [{ type: 'image' as const, attachment }] }
+}
+
+/** Settings hooks shape shared by both dsh-settings API generations. */
+interface SettingsHooks {
+  setSource: (source: () => Config) => void
+  onChange: () => void
+}
+
+/** Top-level relay functions exported by dsh-settings <= 0.1.1-rc.2. */
+interface LegacySettingsApi {
+  installSettingsSection?: {
+    (ctx: Context, ns: unknown, schema: unknown, entry: unknown, hooks: SettingsHooks): void
+  }
+  settingsNamespace?: (value: string) => unknown
+}
+
+/**
+ * Wire the settings namespace across both dsh-settings API generations.
+ * A namespace import keeps module loading safe on either version; the branch
+ * picks the service method (0.1.2+) or the legacy top-level relay (<= rc.2),
+ * and falls back to the composition entry with a warning when neither exists
+ * so an incompatible host degrades the settings UI instead of failing boot.
+ */
+function installImageSettings(ctx: Context, config: Config, hooks: SettingsHooks): void {
+  const namespace = dshSettings as typeof dshSettings & LegacySettingsApi
+  // Runtime probe, not compile-time presence: the host decides which API
+  // generation is live, whichever dsh-settings this bundle was typed against.
+  const modern = namespace.SettingsProvider?.prototype?.installSection
+  if (typeof modern === 'function') {
+    // The injected context is typed by the current dsh-settings, whose module
+    // extension already declares the `settings` service on Context.
+    ctx.inject(['settings'], (settingsCtx: Context) => {
+      settingsCtx.settings.installSection(ctx, IMAGE_GENERATION_NAMESPACE, Config, config, hooks)
+    })
+    return
+  }
+  const legacyInstall = namespace.installSettingsSection
+  const legacyNamespace = namespace.settingsNamespace
+  if (typeof legacyInstall === 'function' && typeof legacyNamespace === 'function') {
+    legacyInstall(ctx, legacyNamespace(IMAGE_GENERATION_NAMESPACE), Config, config, hooks)
+    return
+  }
+  ctx.logger.warn('dsh-image-gen: this DSH exposes neither settings API generation; settings UI stays on the composition entry')
 }

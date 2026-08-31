@@ -3,10 +3,13 @@ import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('@deepseek-ai/dsh-settings', () => ({
-  settingsNamespace: (value: string) => value,
-  installSettingsSection: vi.fn(),
-}))
+vi.mock('@deepseek-ai/dsh-settings', () => {
+  // Prototype method so the dual-path detection in src/index.ts sees it.
+  class SettingsProvider {
+    installSection(): void {}
+  }
+  return { SettingsProvider }
+})
 
 import { apply } from '../src/index.js'
 
@@ -37,13 +40,17 @@ function execWithUserImages(...ids: string[]): never {
   } as never
 }
 
-function harnessContext(): { ctx: Context; tools: ToolDefinition[] } {
+function harnessContext(): { ctx: Context; tools: ToolDefinition[]; installSection: ReturnType<typeof vi.fn> } {
   const tools: ToolDefinition[] = []
+  const installSection = vi.fn()
   const ctx = {
     tools: { register: (tool: ToolDefinition) => { tools.push(tool) } },
     effect: (setup: () => unknown) => setup(),
     webServer: { register: vi.fn(() => () => {}) },
     credentials: { resolve: vi.fn(async () => ({ value: 'test-key' })) },
+    inject: (services: readonly string[], callback: (owner: unknown) => void) => {
+      if (services.includes('settings')) callback({ settings: { installSection } })
+    },
     attachments: {
       imageLimits: {
         maxImageBytes: 10 * 1024 * 1024,
@@ -54,7 +61,7 @@ function harnessContext(): { ctx: Context; tools: ToolDefinition[] } {
     },
     logger: { warn: vi.fn() },
   } as unknown as Context
-  return { ctx, tools }
+  return { ctx, tools, installSection }
 }
 
 function toolByName(tools: ToolDefinition[], name: string): ToolDefinition {
@@ -66,6 +73,23 @@ function toolByName(tools: ToolDefinition[], name: string): ToolDefinition {
 describe('image tool registration', () => {
   beforeEach(() => { vi.clearAllMocks() })
   afterEach(() => { vi.unstubAllGlobals() })
+
+  it('installs the settings section through the modern service API', () => {
+    const { ctx, tools, installSection } = harnessContext()
+    apply(ctx, { provider: 'google', saveToWorkspace: false })
+    expect(tools.map(tool => tool.name)).toEqual(['generate_image', 'edit_image'])
+    expect(installSection).toHaveBeenCalledTimes(1)
+    const [owner, ns, schema, entry, hooks] = installSection.mock.calls[0] as unknown as [Context, string, unknown, unknown, { setSource(): void; onChange(): void }]
+    expect(owner).toBe(ctx)
+    expect(ns).toBe('image-generation')
+    expect((schema as { toJSON?(): unknown }).toJSON).toBeTypeOf('function')
+    expect(entry).toMatchObject({ provider: 'google', saveToWorkspace: false })
+    expect(hooks.setSource).toBeTypeOf('function')
+    expect(hooks.onChange).toBeTypeOf('function')
+    // setSource must rewire the live config the tools read through.
+    hooks.setSource(() => ({ provider: 'openai', saveToWorkspace: false }))
+    expect(ctx.logger.warn).not.toHaveBeenCalled()
+  })
 
   it('registers generate_image and edit_image', () => {
     const { ctx, tools } = harnessContext()
