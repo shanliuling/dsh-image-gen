@@ -233,6 +233,7 @@ const STYLE = `
 .dsh-ig-btn-reset{appearance:none;border:1px solid var(--dsw-alias-border-l2,#d7dbe0);border-radius:8px;padding:7px 12px;background:var(--dsw-alias-bg-layer-3,#f9fafb);color:var(--dsw-alias-label-secondary,inherit);font:inherit;font-size:13px;cursor:pointer;white-space:nowrap;transition:background .15s,border-color .15s}
 .dsh-ig-btn-reset:hover{background:var(--dsw-alias-bg-layer-2,#edf0f3);border-color:var(--dsw-alias-label-dimmed,#9ca3af)}
 .dsh-ig-hint,.dsh-ig-status{margin:0;color:var(--dsw-alias-label-tertiary,#7b818b);font-size:12px;line-height:1.4}
+.dsh-ig-status-error{color:var(--dsw-alias-label-error,#d33);font-weight:500}
 .dsh-ig-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:16px;padding-top:12px;border-top:1px solid var(--dsw-alias-border-l2,#eee)}
 .dsh-ig-check-row{display:flex;align-items:center;gap:8px;cursor:pointer}
 .dsh-ig-check-row input[type=checkbox]{width:15px;height:15px;accent-color:var(--dsw-alias-brand-primary,#4c78ff);margin:0}
@@ -458,6 +459,9 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
   const [configured, setConfigured] = useState<boolean | undefined>()
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
+  const [messageIsError, setMessageIsError] = useState(false)
+  const reportMessage = (text: string): void => { setMessage(text); setMessageIsError(false) }
+  const reportError = (text: string): void => { setMessage(text); setMessageIsError(true) }
 
   useEffect(() => props.scope.subscribe(() => { setSnapshot(props.scope.getSnapshot()) }), [props.scope])
   useEffect(() => {
@@ -541,8 +545,8 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
         if (!response.ok) throw new Error(response.error?.message ?? 'Failed to save API key')
         setKey(''); setConfigured(true)
       }
-      setMessage(t('saved'))
-    } catch (cause) { setMessage(cause instanceof Error ? cause.message : String(cause)) } finally { setSaving(false) }
+      reportMessage(t('saved'))
+    } catch (cause) { reportError(cause instanceof Error ? cause.message : String(cause)) } finally { setSaving(false) }
   }
 
   const keyStatus = configured === undefined ? t('checkingKey') : configured ? t('keyConfigured') : t('keyNotConfigured')
@@ -552,7 +556,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
     const file = event.target.files?.[0]
     event.target.value = ''
     if (file === undefined) return
-    setMessage('')
+    reportMessage('')
     try {
       if (file.size > MAX_COMFYUI_WORKFLOW_BYTES) throw new Error(t('workflowTooLarge'))
       const json = await file.text()
@@ -560,9 +564,9 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
       const name = uniqueComfyUIWorkflowName(file.name, workflows.map(entry => entry.name))
       setWorkflows(current => [...current, { name, json }])
       setActiveWorkflow(current => current.length > 0 ? current : name)
-      setMessage(t('workflowImported', { name }))
+      reportMessage(t('workflowImported', { name }))
     } catch (cause) {
-      setMessage(cause instanceof Error ? cause.message : String(cause))
+      reportError(cause instanceof Error ? cause.message : String(cause))
     }
   }
 
@@ -680,7 +684,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
             </label>
           ) : null}
           <div className="dsh-ig-actions">
-            <p className="dsh-ig-status" role="status">{message || (provider === 'comfyui' ? workflowStatus : keyStatus)}</p>
+            <p className={`dsh-ig-status${messageIsError ? ' dsh-ig-status-error' : ''}`} role="status">{message || (provider === 'comfyui' ? workflowStatus : keyStatus)}</p>
             <button className="dsh-ig-save" type="submit" disabled={saving || !snapshot.writable || (provider === 'comfyui' && workflows.length === 0)}>{saving ? t('saving') : t('save')}</button>
           </div>
         </form>
