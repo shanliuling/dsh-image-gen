@@ -1,6 +1,6 @@
-/** ComfyUI text-to-image adapter using an imported API-format workflow. */
+/** ComfyUI text-to-image and image-to-image adapters using an imported API-format workflow. */
 import type { ImageMediaType } from '@deepseek-ai/dsh-attachment'
-import { prepareComfyUIWorkflow } from './comfyui-workflow.js'
+import { prepareComfyUIWorkflow, randomSeed } from './comfyui-workflow.js'
 
 const ERROR_LIMIT = 4096
 const POLL_INTERVAL_MS = 500
@@ -9,29 +9,67 @@ const MAX_HISTORY_BYTES = 16 * 1024 * 1024
 export interface GeneratedComfyUIImage {
   data: Uint8Array
   mediaType: ImageMediaType
+  /** Concrete seed injected into the workflow, surfaced for provenance metadata. */
+  seed: number
 }
 
-/** Run one ComfyUI workflow and return its first final image. */
-export async function generateComfyUIImage(input: {
+/** Source image bytes a ComfyUI workflow accepts through its image input. */
+export interface ComfyUISourceImage {
+  data: Uint8Array
+  mediaType: ImageMediaType
+}
+
+interface ComfyUIJobInput {
   baseURL: string
+  timeoutMs: number
+  signal: AbortSignal
+}
+
+/** Run one ComfyUI text-to-image workflow and return its first final image. */
+export async function generateComfyUIImage(input: ComfyUIJobInput & {
   workflowJson: string
   prompt: string
-  timeoutMs: number
   maxBytes: number
-  signal: AbortSignal
 }): Promise<GeneratedComfyUIImage> {
+  const seed = randomSeed()
+  const workflow = prepareComfyUIWorkflow(input.workflowJson, input.prompt, seed)
+  const output = await runJob(input, async (baseURL, signal) => {
+    const promptId = await submitWorkflow(baseURL, workflow, signal)
+    const result = await waitForOutput(baseURL, promptId, signal)
+    return await downloadOutput(baseURL, result, input.maxBytes, signal)
+  })
+  return { ...output, seed }
+}
+
+/** Upload one source image, run the workflow, and return its first final image. */
+export async function editComfyUIImage(input: ComfyUIJobInput & {
+  workflowJson: string
+  prompt: string
+  sourceImage: ComfyUISourceImage
+  maxBytes: number
+}): Promise<GeneratedComfyUIImage> {
+  const seed = randomSeed()
+  const output = await runJob(input, async (baseURL, signal) => {
+    const imageName = await uploadSourceImage(baseURL, input.sourceImage, signal)
+    const workflow = prepareComfyUIWorkflow(input.workflowJson, input.prompt, seed, imageName)
+    const promptId = await submitWorkflow(baseURL, workflow, signal)
+    const result = await waitForOutput(baseURL, promptId, signal)
+    return await downloadOutput(baseURL, result, input.maxBytes, signal)
+  })
+  return { ...output, seed }
+}
+
+/** Share abort forwarding, the single timeout, and error normalization. */
+async function runJob<T>(input: ComfyUIJobInput, run: (baseURL: URL, signal: AbortSignal) => Promise<T>): Promise<T> {
   input.signal.throwIfAborted()
   const baseURL = comfyUIBaseURL(input.baseURL)
-  const workflow = prepareComfyUIWorkflow(input.workflowJson, input.prompt)
   const controller = new AbortController()
   const forwardAbort = (): void => { controller.abort(input.signal.reason) }
   input.signal.addEventListener('abort', forwardAbort, { once: true })
   const timeout = setTimeout(() => { controller.abort(new Error('ComfyUI generation timed out')) }, input.timeoutMs)
 
   try {
-    const promptId = await submitWorkflow(baseURL, workflow, controller.signal)
-    const output = await waitForOutput(baseURL, promptId, controller.signal)
-    return await downloadOutput(baseURL, output, input.maxBytes, controller.signal)
+    return await run(baseURL, controller.signal)
   } catch (error) {
     input.signal.throwIfAborted()
     if (controller.signal.aborted) throw new Error(`ComfyUI generation timed out after ${String(input.timeoutMs)} ms`)
@@ -41,6 +79,41 @@ export async function generateComfyUIImage(input: {
     clearTimeout(timeout)
     input.signal.removeEventListener('abort', forwardAbort)
   }
+}
+
+/** Upload the source image and return the LoadImage-compatible name ComfyUI stored it under. */
+async function uploadSourceImage(baseURL: URL, image: ComfyUISourceImage, signal: AbortSignal): Promise<string> {
+  const filename = uploadFilename(image.mediaType)
+  // Copy into a fresh ArrayBuffer-backed view so the bytes are a valid BlobPart.
+  const bytes = new Uint8Array(image.data.byteLength)
+  bytes.set(image.data)
+  const form = new FormData()
+  form.append('image', new Blob([bytes], { type: image.mediaType }), filename)
+  const response = await fetch(endpoint(baseURL, 'upload/image'), {
+    method: 'POST', redirect: 'error', signal,
+    headers: { accept: 'application/json' },
+    body: form,
+  })
+  const text = await readBoundedText(response, ERROR_LIMIT)
+  if (!response.ok) throw new Error(`ComfyUI image upload failed (${response.status}): ${text}`)
+  const payload = parseJsonRecord(text, 'ComfyUI /upload/image returned invalid JSON')
+  if (typeof payload.name !== 'string' || payload.name.length === 0) {
+    throw new Error(`ComfyUI /upload/image returned no name: ${text}`)
+  }
+  const subfolder = typeof payload.subfolder === 'string' ? payload.subfolder : ''
+  return subfolder.length > 0 ? `${subfolder}/${payload.name}` : payload.name
+}
+
+/** LoadImage-style inputs need a file name with a decodable extension. */
+function uploadFilename(mediaType: ImageMediaType): string {
+  const extension = mediaType === 'image/png' ? 'png'
+    : mediaType === 'image/jpeg' ? 'jpg'
+    : mediaType === 'image/webp' ? 'webp'
+    : undefined
+  if (extension === undefined) {
+    throw new Error(`ComfyUI edit_image accepts PNG, JPEG, or WebP source images; got ${mediaType}`)
+  }
+  return `dsh-image-gen-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.${extension}`
 }
 
 async function submitWorkflow(baseURL: URL, workflow: Record<string, unknown>, signal: AbortSignal): Promise<string> {
@@ -107,7 +180,7 @@ function firstOutputImage(value: unknown): ComfyUIImageOutput | undefined {
   return undefined
 }
 
-async function downloadOutput(baseURL: URL, output: ComfyUIImageOutput, maxBytes: number, signal: AbortSignal): Promise<GeneratedComfyUIImage> {
+async function downloadOutput(baseURL: URL, output: ComfyUIImageOutput, maxBytes: number, signal: AbortSignal): Promise<{ data: Uint8Array; mediaType: ImageMediaType }> {
   const url = endpoint(baseURL, 'view')
   url.searchParams.set('filename', output.filename)
   url.searchParams.set('subfolder', output.subfolder)

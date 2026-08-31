@@ -21,6 +21,22 @@ function attachment(id: string): ImageAttachmentRef {
   }
 }
 
+/** Tool exec carrying a latest user message with the given inline images. */
+function execWithUserImages(...ids: string[]): never {
+  return {
+    signal: new AbortController().signal,
+    agent: {
+      session: {
+        header: {},
+        deriveMessages: () => [{
+          source: { kind: 'user' },
+          content: ids.map(id => ({ type: 'image', attachment: attachment(id) })),
+        }],
+      },
+    },
+  } as never
+}
+
 function harnessContext(): { ctx: Context; tools: ToolDefinition[] } {
   const tools: ToolDefinition[] = []
   const ctx = {
@@ -128,7 +144,61 @@ describe('image tool registration', () => {
     await expect(toolByName(tools, 'edit_image').execute(
       { prompt: 'restyle it' },
       { signal: new AbortController().signal } as never,
-    )).rejects.toThrow('edit_image is not yet supported by the ComfyUI provider')
+    )).rejects.toThrow('edit_image requires an active DSH agent session')
+    expect(ctx.credentials.resolve).not.toHaveBeenCalled()
+  })
+
+  it('routes ComfyUI editing through upload and the imported workflow', async () => {
+    const { ctx, tools } = harnessContext()
+    vi.mocked(ctx.attachments.readImage).mockResolvedValue({
+      ref: { mediaType: 'image/png', attachmentId: 'sha256:source-image' as ImageAttachmentRef['attachmentId'], bytes: 3, width: 4, height: 4 },
+      data: new Uint8Array([1, 2, 3]),
+    } as never)
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ name: 'source.png', subfolder: '' }), { status: 200, headers: { 'content-type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ prompt_id: 'job-1' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        'job-1': {
+          status: { status_str: 'success', completed: true },
+          outputs: { save: { images: [{ filename: 'final.png', subfolder: '', type: 'output' }] } },
+        },
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(new Uint8Array([7, 8, 9]), { status: 200, headers: { 'content-type': 'image/png' } })))
+    apply(ctx, {
+      provider: 'comfyui',
+      comfyuiWorkflowJson: JSON.stringify({
+        1: { class_type: 'LoadImage', inputs: { image: '{{image}}' } },
+        6: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}}' } },
+      }),
+      comfyuiWorkflowName: 'img2img.json',
+      saveToWorkspace: false,
+    })
+
+    const value = await toolByName(tools, 'edit_image').execute(
+      { prompt: 'restyle it' },
+      execWithUserImages('sha256:source-image'),
+    ) as { provider: string; model: string; attachment: ImageAttachmentRef; seed?: number }
+
+    expect(value).toMatchObject({ provider: 'comfyui', model: 'img2img.json', attachment: attachment('sha256:saved-image') })
+    expect(value.seed).toBeTypeOf('number')
+    expect(ctx.credentials.resolve).not.toHaveBeenCalled()
+  })
+
+  it('rejects ComfyUI editing of several images with a selector hint', async () => {
+    const { ctx, tools } = harnessContext()
+    vi.mocked(ctx.attachments.readImage).mockResolvedValue({
+      ref: { mediaType: 'image/png', attachmentId: 'sha256:a' as ImageAttachmentRef['attachmentId'], bytes: 1, width: 2, height: 2 },
+      data: new Uint8Array([1]),
+    } as never)
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    apply(ctx, { provider: 'comfyui', saveToWorkspace: false })
+
+    await expect(toolByName(tools, 'edit_image').execute(
+      { prompt: 'restyle it' },
+      execWithUserImages('sha256:a', 'sha256:b'),
+    )).rejects.toThrow('exactly one source image')
+    expect(fetchMock).not.toHaveBeenCalled()
     expect(ctx.credentials.resolve).not.toHaveBeenCalled()
   })
 })

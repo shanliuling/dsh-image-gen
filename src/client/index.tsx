@@ -682,6 +682,7 @@ function ImageResultCard({
       provider: result.provider as ImageProvider,
       model: result.model,
       output: result.output,
+      ...(result.seed !== undefined ? { seed: result.seed } : {}),
     })
   }, [result?.attachment.attachmentId])
 
@@ -807,6 +808,7 @@ function imageResultFromBlock(block: ToolCallBlock): ImageResultPresentation | u
     model: typeof meta?.model === 'string' ? meta.model : '',
     output: typeof meta?.output === 'string' ? meta.output : '',
     ...(typeof meta?.savedTo === 'string' ? { savedTo: meta.savedTo } : {}),
+    ...(typeof meta?.seed === 'number' ? { seed: meta.seed } : {}),
   }
 }
 

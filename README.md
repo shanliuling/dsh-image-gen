@@ -152,7 +152,7 @@ Agent 会调用 `edit_image`，复用当前会话中的图片继续修改。
 | **OpenAI Compatible** | 自定义 | 自定义 Base URL |
 | **ByteDance Seedream / 火山方舟** | `doubao-seedream-5-0-260128` | `https://ark.cn-beijing.volces.com/api/v3` |
 | **Aliyun DashScope / Qwen Image** | `qwen-image-3.0` | `https://dashscope.aliyuncs.com/api/v1` |
-| **Local ComfyUI（仅文生图）** | 用户导入的 API Format Workflow | `http://127.0.0.1:8188` |
+| **Local ComfyUI（文生图 + 图生图）** | 用户导入的 API Format Workflow | `http://127.0.0.1:8188` |
 
 ---
 

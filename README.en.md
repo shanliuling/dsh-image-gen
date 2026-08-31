@@ -145,7 +145,7 @@ Click the **`[Gallery]`** Tab in the top navigation bar to browse and search all
 | **OpenAI Compatible** | Custom | Custom Base URL |
 | **ByteDance Seedream / Volcengine Ark** | `doubao-seedream-5-0-260128` | `https://ark.cn-beijing.volces.com/api/v3` |
 | **Aliyun DashScope / Wanx** | `wanx2.1-t2i-turbo` | `https://dashscope.aliyuncs.com/api/v1` |
-| **Local ComfyUI (text-to-image only)** | Imported API Format Workflow | `http://127.0.0.1:8188` |
+| **Local ComfyUI (text-to-image & image-to-image)** | Imported API Format Workflow | `http://127.0.0.1:8188` |
 
 ---
 

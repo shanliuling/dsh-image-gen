@@ -16,6 +16,8 @@ export interface GalleryItem {
   aspectRatio?: string
   imageSize?: string
   output?: string
+  /** Workflow seed reported by the ComfyUI provider. Optional so records written by older versions stay readable; the object store is schemaless, so no IndexedDB version bump is needed. */
+  seed?: number
 }
 
 const DB_NAME = 'dsh_image_gen_db'

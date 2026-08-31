@@ -6,7 +6,7 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { defineTool, type ToolResult } from '@deepseek-ai/dsh-tools'
 import { Config, resolveProvider, type AspectRatio, type ImageProvider, type ImageSize } from './config.js'
-import { generateComfyUIImage } from './comfyui.js'
+import { editComfyUIImage, generateComfyUIImage } from './comfyui.js'
 import { editDashScopeImage, generateDashScopeImage } from './dashscope.js'
 import { editGoogleImage, generateGoogleImage } from './google.js'
 import { IMAGE_ROUTE, imageAttachmentFromMeta, serveImage } from './image-route.js'
@@ -29,6 +29,8 @@ interface GeneratedValue {
   output: string
   savedTo?: string
   saveError?: string
+  /** Concrete workflow seed, exposed by the ComfyUI provider for provenance. */
+  seed?: number
 }
 
 export function apply(ctx: Context, config: Config = {}): void {
@@ -100,11 +102,6 @@ export function apply(ctx: Context, config: Config = {}): void {
     output: imageOutput('Edited'),
     async execute(args, exec): Promise<GeneratedValue> {
       const active = resolveProvider(current())
-      if (active.provider === 'comfyui') {
-        throw new Error('edit_image is not yet supported by the ComfyUI provider; switch providers or use generate_image')
-      }
-      const credential = await ctx.credentials.resolve(credentialRef(active.apiKeyEnv))
-      if (credential === undefined || credential.value.length === 0) throw new Error(`edit_image requires the ${active.apiKeyEnv} credential; configure it in Settings > Plugins > Image generation.`)
       const sourceImages = await resolveReferenceImages({
         ...(exec.agent === undefined ? {} : { agent: exec.agent }),
         attachments: ctx.attachments,
@@ -116,6 +113,26 @@ export function apply(ctx: Context, config: Config = {}): void {
         signal: exec.signal,
       })
 
+      if (active.provider === 'comfyui') {
+        if (sourceImages.length > 1) {
+          throw new Error(`ComfyUI edit_image supports exactly one source image per call; this call resolved ${String(sourceImages.length)} images. Call edit_image again with source_attachment_id set to the single attachment ID of the image to edit.`)
+        }
+        const sourceImage = sourceImages[0]
+        if (sourceImage === undefined) throw new Error('edit_image requires a reference image')
+        const generated = await editComfyUIImage({
+          baseURL: active.baseURL,
+          workflowJson: active.workflowJson,
+          prompt: args.prompt,
+          sourceImage: { data: sourceImage.data, mediaType: sourceImage.mediaType },
+          timeoutMs: active.timeoutMs,
+          maxBytes: ctx.attachments.imageLimits.maxImageBytes,
+          signal: exec.signal,
+        })
+        return saveGenerated(ctx, generated, active.provider, active.workflowName, 'API workflow', current(), exec)
+      }
+
+      const credential = await ctx.credentials.resolve(credentialRef(active.apiKeyEnv))
+      if (credential === undefined || credential.value.length === 0) throw new Error(`edit_image requires the ${active.apiKeyEnv} credential; configure it in Settings > Plugins > Image generation.`)
       if (active.provider === 'google') {
         const aspectRatio = (args.aspect_ratio ?? active.aspectRatio) as AspectRatio
         const imageSize = (args.image_size ?? active.imageSize) as ImageSize
@@ -161,6 +178,7 @@ function imageOutput(verb: 'Generated' | 'Edited') {
       kind: 'dsh-image-gen', attachment: attachmentMeta(value.attachment), provider: value.provider, model: value.model, output: value.output,
       ...(verb === 'Edited' ? { operation: 'edit' } : {}),
       ...(typeof value.savedTo === 'string' ? { savedTo: value.savedTo } : {}),
+      ...(typeof value.seed === 'number' ? { seed: value.seed } : {}),
       prompt: (args as { prompt: string }).prompt,
     }),
   } as const
@@ -176,7 +194,7 @@ function attachmentMeta(ref: ImageAttachmentRef) {
 
 async function saveGenerated(
   ctx: Context,
-  generated: { data: Uint8Array; mediaType: ImageAttachmentRef['mediaType'] },
+  generated: { data: Uint8Array; mediaType: ImageAttachmentRef['mediaType']; seed?: number },
   provider: ImageProvider,
   model: string,
   output: string,
@@ -185,7 +203,10 @@ async function saveGenerated(
 ): Promise<GeneratedValue> {
   if (!ctx.attachments.imageLimits.mediaTypes.includes(generated.mediaType)) throw new Error(`This DSH deployment does not accept ${generated.mediaType} generated images`)
   const attachment = await ctx.attachments.saveImage({ data: generated.data, mediaType: generated.mediaType, name: 'generated-image' })
-  const value: GeneratedValue = { attachment, provider, model, output }
+  const value: GeneratedValue = {
+    attachment, provider, model, output,
+    ...(typeof generated.seed === 'number' ? { seed: generated.seed } : {}),
+  }
   if (config.saveToWorkspace === false) return value
   const workspaceRoot = exec.agent?.session.header.cwd
   if (workspaceRoot === undefined) return value
