@@ -10,6 +10,8 @@ export interface ImageResultPresentation {
   readonly model: string
   readonly output: string
   readonly savedTo?: string
+  /** Workflow seed reported by the ComfyUI provider, when available. */
+  readonly seed?: number
 }
 
 interface ImageResultState {
@@ -116,6 +118,7 @@ export function imageResultFromMeta(value: unknown): ImageResultPresentation | u
     model: stringValue(meta.model, ''),
     output: stringValue(meta.output, ''),
     ...(typeof meta.savedTo === 'string' ? { savedTo: meta.savedTo } : {}),
+    ...(typeof meta.seed === 'number' ? { seed: meta.seed } : {}),
   }
 }
 

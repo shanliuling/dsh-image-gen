@@ -3,17 +3,17 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type {} from '@deepseek-ai/dsh-host-webserver'
-import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
+import * as dshSettings from '@deepseek-ai/dsh-settings'
 import { defineTool, type ToolResult } from '@deepseek-ai/dsh-tools'
-import { Config, resolveProvider, type AspectRatio, type ImageProvider, type ImageSize } from './config.js'
-import { generateComfyUIImage } from './comfyui.js'
+import { Config, resolveProvider, selectComfyUIWorkflow, type AspectRatio, type ImageProvider, type ImageSize } from './config.js'
+import { editComfyUIImage, generateComfyUIImage } from './comfyui.js'
 import { editDashScopeImage, generateDashScopeImage } from './dashscope.js'
 import { editGoogleImage, generateGoogleImage } from './google.js'
 import { IMAGE_ROUTE, imageAttachmentFromMeta, serveImage } from './image-route.js'
 import { editOpenAICompatibleImage, generateOpenAICompatibleImage } from './openai-compatible.js'
 import { resolveReferenceImages } from './reference-image.js'
 import { editSeedreamImage } from './seedream.js'
-import { IMAGE_GENERATION_NAMESPACE } from './shared.js'
+import { IMAGE_GENERATION_NAMESPACE, mergeComfyUIPrompt } from './shared.js'
 import { saveImageToWorkspace } from './workspace-save.js'
 
 export { Config } from './config.js'
@@ -29,11 +29,13 @@ interface GeneratedValue {
   output: string
   savedTo?: string
   saveError?: string
+  /** Concrete workflow seed, exposed by the ComfyUI provider for provenance. */
+  seed?: number
 }
 
 export function apply(ctx: Context, config: Config = {}): void {
   let current: () => Config = () => config
-  installSettingsSection(ctx, settingsNamespace(IMAGE_GENERATION_NAMESPACE), Config, config, {
+  installImageSettings(ctx, config, {
     setSource: source => { current = source }, onChange: () => {},
   })
   ctx.effect(() => ctx.webServer.register({
@@ -49,20 +51,22 @@ export function apply(ctx: Context, config: Config = {}): void {
       aspect_ratio: { type: 'string', enum: ['1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16'], description: 'Optional output aspect ratio for Google Gemini.' },
       image_size: { type: 'string', enum: ['1K', '2K', '4K'], description: 'Optional output resolution for Google Gemini.' },
       size: { type: 'string', description: 'Optional dimensions or size tier for OpenAI, Seedream, or DashScope.' },
+      workflow: { type: 'string', description: 'Optional name of the ComfyUI workflow to run; omit to use the active workflow from settings. Only meaningful when the ComfyUI provider is selected.' },
     },
     output: imageOutput('Generated'),
     async execute(args, exec): Promise<GeneratedValue> {
       const active = resolveProvider(current())
       if (active.provider === 'comfyui') {
+        const workflow = selectComfyUIWorkflow(active, args.workflow)
         const generated = await generateComfyUIImage({
           baseURL: active.baseURL,
-          workflowJson: active.workflowJson,
-          prompt: args.prompt,
+          workflowJson: workflow.json,
+          prompt: mergeComfyUIPrompt(workflow.presetPrompt, args.prompt),
           timeoutMs: active.timeoutMs,
           maxBytes: ctx.attachments.imageLimits.maxImageBytes,
           signal: exec.signal,
         })
-        return saveGenerated(ctx, generated, active.provider, active.workflowName, 'API workflow', current(), exec)
+        return saveGenerated(ctx, generated, active.provider, workflow.name, 'API workflow', current(), exec)
       }
       const credential = await ctx.credentials.resolve(credentialRef(active.apiKeyEnv))
       if (credential === undefined || credential.value.length === 0) throw new Error(`generate_image requires the ${active.apiKeyEnv} credential; configure it in Settings > Plugins > Image generation.`)
@@ -96,15 +100,11 @@ export function apply(ctx: Context, config: Config = {}): void {
       aspect_ratio: { type: 'string', enum: ['1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16'], description: 'Optional output aspect ratio for Google Gemini.' },
       image_size: { type: 'string', enum: ['1K', '2K', '4K'], description: 'Optional output resolution for Google Gemini.' },
       size: { type: 'string', description: 'Optional output size for OpenAI, Seedream, or DashScope.' },
+      workflow: { type: 'string', description: 'Optional name of the ComfyUI workflow to run; omit to use the active workflow from settings. Only meaningful when the ComfyUI provider is selected.' },
     },
     output: imageOutput('Edited'),
     async execute(args, exec): Promise<GeneratedValue> {
       const active = resolveProvider(current())
-      if (active.provider === 'comfyui') {
-        throw new Error('edit_image is not yet supported by the ComfyUI provider; switch providers or use generate_image')
-      }
-      const credential = await ctx.credentials.resolve(credentialRef(active.apiKeyEnv))
-      if (credential === undefined || credential.value.length === 0) throw new Error(`edit_image requires the ${active.apiKeyEnv} credential; configure it in Settings > Plugins > Image generation.`)
       const sourceImages = await resolveReferenceImages({
         ...(exec.agent === undefined ? {} : { agent: exec.agent }),
         attachments: ctx.attachments,
@@ -116,6 +116,27 @@ export function apply(ctx: Context, config: Config = {}): void {
         signal: exec.signal,
       })
 
+      if (active.provider === 'comfyui') {
+        if (sourceImages.length > 1) {
+          throw new Error(`ComfyUI edit_image supports exactly one source image per call; this call resolved ${String(sourceImages.length)} images. Call edit_image again with source_attachment_id set to the single attachment ID of the image to edit.`)
+        }
+        const sourceImage = sourceImages[0]
+        if (sourceImage === undefined) throw new Error('edit_image requires a reference image')
+        const workflow = selectComfyUIWorkflow(active, args.workflow)
+        const generated = await editComfyUIImage({
+          baseURL: active.baseURL,
+          workflowJson: workflow.json,
+          prompt: mergeComfyUIPrompt(workflow.presetPrompt, args.prompt),
+          sourceImage: { data: sourceImage.data, mediaType: sourceImage.mediaType },
+          timeoutMs: active.timeoutMs,
+          maxBytes: ctx.attachments.imageLimits.maxImageBytes,
+          signal: exec.signal,
+        })
+        return saveGenerated(ctx, generated, active.provider, workflow.name, 'API workflow', current(), exec)
+      }
+
+      const credential = await ctx.credentials.resolve(credentialRef(active.apiKeyEnv))
+      if (credential === undefined || credential.value.length === 0) throw new Error(`edit_image requires the ${active.apiKeyEnv} credential; configure it in Settings > Plugins > Image generation.`)
       if (active.provider === 'google') {
         const aspectRatio = (args.aspect_ratio ?? active.aspectRatio) as AspectRatio
         const imageSize = (args.image_size ?? active.imageSize) as ImageSize
@@ -161,6 +182,7 @@ function imageOutput(verb: 'Generated' | 'Edited') {
       kind: 'dsh-image-gen', attachment: attachmentMeta(value.attachment), provider: value.provider, model: value.model, output: value.output,
       ...(verb === 'Edited' ? { operation: 'edit' } : {}),
       ...(typeof value.savedTo === 'string' ? { savedTo: value.savedTo } : {}),
+      ...(typeof value.seed === 'number' ? { seed: value.seed } : {}),
       prompt: (args as { prompt: string }).prompt,
     }),
   } as const
@@ -176,7 +198,7 @@ function attachmentMeta(ref: ImageAttachmentRef) {
 
 async function saveGenerated(
   ctx: Context,
-  generated: { data: Uint8Array; mediaType: ImageAttachmentRef['mediaType'] },
+  generated: { data: Uint8Array; mediaType: ImageAttachmentRef['mediaType']; seed?: number },
   provider: ImageProvider,
   model: string,
   output: string,
@@ -185,7 +207,10 @@ async function saveGenerated(
 ): Promise<GeneratedValue> {
   if (!ctx.attachments.imageLimits.mediaTypes.includes(generated.mediaType)) throw new Error(`This DSH deployment does not accept ${generated.mediaType} generated images`)
   const attachment = await ctx.attachments.saveImage({ data: generated.data, mediaType: generated.mediaType, name: 'generated-image' })
-  const value: GeneratedValue = { attachment, provider, model, output }
+  const value: GeneratedValue = {
+    attachment, provider, model, output,
+    ...(typeof generated.seed === 'number' ? { seed: generated.seed } : {}),
+  }
   if (config.saveToWorkspace === false) return value
   const workspaceRoot = exec.agent?.session.header.cwd
   if (workspaceRoot === undefined) return value
@@ -202,4 +227,47 @@ async function saveGenerated(
 function imagePresentation(result: ToolResult) {
   const attachment = imageAttachmentFromMeta(result.meta)
   return attachment === undefined ? undefined : { card: 'generic' as const, title: 'Generated image', content: [{ type: 'image' as const, attachment }] }
+}
+
+/** Settings hooks shape shared by both dsh-settings API generations. */
+interface SettingsHooks {
+  setSource: (source: () => Config) => void
+  onChange: () => void
+}
+
+/** Top-level relay functions exported by dsh-settings <= 0.1.1-rc.2. */
+interface LegacySettingsApi {
+  installSettingsSection?: {
+    (ctx: Context, ns: unknown, schema: unknown, entry: unknown, hooks: SettingsHooks): void
+  }
+  settingsNamespace?: (value: string) => unknown
+}
+
+/**
+ * Wire the settings namespace across both dsh-settings API generations.
+ * A namespace import keeps module loading safe on either version; the branch
+ * picks the service method (0.1.2+) or the legacy top-level relay (<= rc.2),
+ * and falls back to the composition entry with a warning when neither exists
+ * so an incompatible host degrades the settings UI instead of failing boot.
+ */
+function installImageSettings(ctx: Context, config: Config, hooks: SettingsHooks): void {
+  const namespace = dshSettings as typeof dshSettings & LegacySettingsApi
+  // Runtime probe, not compile-time presence: the host decides which API
+  // generation is live, whichever dsh-settings this bundle was typed against.
+  const modern = namespace.SettingsProvider?.prototype?.installSection
+  if (typeof modern === 'function') {
+    // The injected context is typed by the current dsh-settings, whose module
+    // extension already declares the `settings` service on Context.
+    ctx.inject(['settings'], (settingsCtx: Context) => {
+      settingsCtx.settings.installSection(ctx, IMAGE_GENERATION_NAMESPACE, Config, config, hooks)
+    })
+    return
+  }
+  const legacyInstall = namespace.installSettingsSection
+  const legacyNamespace = namespace.settingsNamespace
+  if (typeof legacyInstall === 'function' && typeof legacyNamespace === 'function') {
+    legacyInstall(ctx, legacyNamespace(IMAGE_GENERATION_NAMESPACE), Config, config, hooks)
+    return
+  }
+  ctx.logger.warn('dsh-image-gen: this DSH exposes neither settings API generation; settings UI stays on the composition entry')
 }

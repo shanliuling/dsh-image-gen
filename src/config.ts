@@ -14,6 +14,9 @@ import {
   DEFAULT_SEEDREAM_BASE_URL,
   DEFAULT_SEEDREAM_MODEL,
   IMAGE_PROVIDERS,
+  activeComfyUIWorkflow,
+  resolveComfyUIWorkflows,
+  type ComfyUIWorkflowEntry,
   type ImageProvider,
 } from './shared.js'
 
@@ -30,6 +33,9 @@ export {
   DEFAULT_SEEDREAM_BASE_URL,
   DEFAULT_SEEDREAM_MODEL,
   IMAGE_PROVIDERS,
+  activeComfyUIWorkflow,
+  resolveComfyUIWorkflows,
+  type ComfyUIWorkflowEntry,
   type ImageProvider,
 }
 
@@ -63,9 +69,13 @@ export interface Config {
   dashscopeEndpoint?: string
   dashscopeModel?: string
   comfyuiBaseURL?: string
-  /** ComfyUI API-format workflow JSON imported through the Web settings page. */
+  /** Named ComfyUI workflows managed by the Web settings page. */
+  comfyuiWorkflows?: ComfyUIWorkflowEntry[]
+  /** Name of the workflow ComfyUI calls use by default. */
+  comfyuiActiveWorkflow?: string
+  /** Legacy single-workflow storage; synced to the active entry for downgrades. */
   comfyuiWorkflowJson?: string
-  /** Original imported file name, used as a human-readable result label. */
+  /** Original imported file name of the legacy single workflow. */
   comfyuiWorkflowName?: string
   comfyuiTimeoutMs?: number
   /** Also write every generated image as a file under the session workspace. */
@@ -86,6 +96,8 @@ export const Config: z<Config> = z.object({
   dashscopeEndpoint: z.string().default(DEFAULT_DASHSCOPE_ENDPOINT),
   dashscopeModel: z.string().default(DEFAULT_DASHSCOPE_MODEL),
   comfyuiBaseURL: z.string().default(DEFAULT_COMFYUI_BASE_URL),
+  comfyuiWorkflows: z.array(z.object({ name: z.string(), json: z.string(), presetPrompt: z.string().default('') })).default([]),
+  comfyuiActiveWorkflow: z.string().default(''),
   comfyuiWorkflowJson: z.string().default(''),
   comfyuiWorkflowName: z.string().default(''),
   comfyuiTimeoutMs: z.number().min(1_000).max(3_600_000).default(DEFAULT_COMFYUI_TIMEOUT_MS),
@@ -99,18 +111,39 @@ export function resolveProvider(config: Config):
   | { provider: 'openai'; apiKeyEnv: string; model: string; baseURL: string; imageSize: string }
   | { provider: 'seedream'; apiKeyEnv: string; model: string; baseURL: string; imageSize: string }
   | { provider: 'dashscope'; apiKeyEnv: string; model: string; endpoint: string; imageSize: string }
-  | { provider: 'comfyui'; baseURL: string; workflowJson: string; workflowName: string; timeoutMs: number } {
+  | { provider: 'comfyui'; baseURL: string; workflows: ComfyUIWorkflowEntry[]; workflow?: ComfyUIWorkflowEntry; timeoutMs: number } {
   switch (config.provider ?? 'google') {
     case 'openai': return { provider: 'openai', apiKeyEnv: OPENAI_API_KEY_ENV, model: config.openaiModel ?? DEFAULT_OPENAI_MODEL, baseURL: config.openaiBaseURL ?? DEFAULT_OPENAI_BASE_URL, imageSize: '1024x1024' }
     case 'seedream': return { provider: 'seedream', apiKeyEnv: SEEDREAM_API_KEY_ENV, model: config.seedreamModel ?? DEFAULT_SEEDREAM_MODEL, baseURL: config.seedreamBaseURL ?? DEFAULT_SEEDREAM_BASE_URL, imageSize: '2K' }
     case 'dashscope': return { provider: 'dashscope', apiKeyEnv: DASHSCOPE_API_KEY_ENV, model: config.dashscopeModel ?? DEFAULT_DASHSCOPE_MODEL, endpoint: config.dashscopeEndpoint ?? DEFAULT_DASHSCOPE_ENDPOINT, imageSize: '1024*1024' }
-    case 'comfyui': return {
-      provider: 'comfyui',
-      baseURL: config.comfyuiBaseURL ?? DEFAULT_COMFYUI_BASE_URL,
-      workflowJson: config.comfyuiWorkflowJson ?? '',
-      workflowName: config.comfyuiWorkflowName?.trim() || DEFAULT_COMFYUI_WORKFLOW_LABEL,
-      timeoutMs: config.comfyuiTimeoutMs ?? DEFAULT_COMFYUI_TIMEOUT_MS,
+    case 'comfyui': {
+      const workflows = resolveComfyUIWorkflows(config)
+      const workflow = activeComfyUIWorkflow(config)
+      return {
+        provider: 'comfyui',
+        baseURL: config.comfyuiBaseURL ?? DEFAULT_COMFYUI_BASE_URL,
+        workflows,
+        ...(workflow === undefined ? {} : { workflow }),
+        timeoutMs: config.comfyuiTimeoutMs ?? DEFAULT_COMFYUI_TIMEOUT_MS,
+      }
     }
     case 'google': return { provider: 'google', apiKeyEnv: GOOGLE_API_KEY_ENV, model: config.googleModel ?? DEFAULT_GOOGLE_MODEL, endpoint: config.googleEndpoint ?? DEFAULT_GOOGLE_ENDPOINT, aspectRatio: '1:1', imageSize: '1K' }
   }
+}
+
+/** The workflow a ComfyUI call runs: the requested name when given, else the active one. */
+export function selectComfyUIWorkflow(
+  active: { workflows: ComfyUIWorkflowEntry[]; workflow?: ComfyUIWorkflowEntry },
+  requested?: string,
+): ComfyUIWorkflowEntry {
+  if (active.workflow === undefined) {
+    throw new Error('ComfyUI image generation requires an imported workflow; import one in Settings > Plugins > Image generation.')
+  }
+  if (typeof requested !== 'string' || requested.trim().length === 0) return active.workflow
+  const name = requested.trim()
+  const workflow = active.workflows.find(candidate => candidate.name === name)
+  if (workflow === undefined) {
+    throw new Error(`No ComfyUI workflow named "${name}" is configured. Available workflows: ${active.workflows.map(entry => entry.name).join(', ')}.`)
+  }
+  return workflow
 }

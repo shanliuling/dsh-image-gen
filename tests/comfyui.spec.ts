@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { generateComfyUIImage } from '../src/comfyui.js'
+import { editComfyUIImage, generateComfyUIImage } from '../src/comfyui.js'
 import { prepareComfyUIWorkflow, validateComfyUIWorkflowJson } from '../src/comfyui-workflow.js'
 
 const WORKFLOW = JSON.stringify({
@@ -9,11 +9,36 @@ const WORKFLOW = JSON.stringify({
   },
 })
 
+const LEGACY_WORKFLOW = JSON.stringify({
+  6: {
+    class_type: 'CLIPTextEncode',
+    inputs: { text: 'masterpiece, %prompt%', seed: '%seed%' },
+  },
+})
+
+const EDIT_WORKFLOW = JSON.stringify({
+  1: { class_type: 'LoadImage', inputs: { image: '{{image}}', upload: 'image' } },
+  6: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}}' } },
+})
+
 function options(overrides: Partial<Parameters<typeof generateComfyUIImage>[0]> = {}): Parameters<typeof generateComfyUIImage>[0] {
   return {
     baseURL: 'http://127.0.0.1:8188',
     workflowJson: WORKFLOW,
     prompt: 'rainy neon street',
+    timeoutMs: 5_000,
+    maxBytes: 1024,
+    signal: new AbortController().signal,
+    ...overrides,
+  }
+}
+
+function editOptions(overrides: Partial<Parameters<typeof editComfyUIImage>[0]> = {}): Parameters<typeof editComfyUIImage>[0] {
+  return {
+    baseURL: 'http://127.0.0.1:8188',
+    workflowJson: EDIT_WORKFLOW,
+    prompt: 'cyberpunk restyle',
+    sourceImage: { data: new Uint8Array([1, 2, 3]), mediaType: 'image/png' },
     timeoutMs: 5_000,
     maxBytes: 1024,
     signal: new AbortController().signal,
@@ -39,6 +64,63 @@ describe('ComfyUI workflow preparation', () => {
     expect(() => validateComfyUIWorkflowJson(JSON.stringify({ nodes: [{ widgets_values: ['{{prompt}}'] }] })))
       .toThrow('must contain {{prompt}}')
   })
+
+  it('accepts legacy %prompt% and %seed% placeholders embedded in longer text', () => {
+    const prepared = prepareComfyUIWorkflow(LEGACY_WORKFLOW, 'a red panda', 7)
+    expect(prepared).toEqual({
+      6: {
+        class_type: 'CLIPTextEncode',
+        inputs: { text: 'masterpiece, a red panda', seed: 7 },
+      },
+    })
+  })
+
+  it('injects the uploaded image name into the single image input when editing', () => {
+    const prepared = prepareComfyUIWorkflow(EDIT_WORKFLOW, 'cyberpunk restyle', 7, 'stored/source.png')
+    expect(prepared).toEqual({
+      1: { class_type: 'LoadImage', inputs: { image: 'stored/source.png', upload: 'image' } },
+      6: { class_type: 'CLIPTextEncode', inputs: { text: 'cyberpunk restyle' } },
+    })
+  })
+
+  it('accepts the legacy %image% placeholder for editing', () => {
+    const workflow = JSON.stringify({
+      1: { class_type: 'LoadImage', inputs: { image: '%image%' } },
+      6: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}}' } },
+    })
+    expect(prepareComfyUIWorkflow(workflow, 'p', 1, 'up.png')).toMatchObject({
+      1: { inputs: { image: 'up.png' } },
+    })
+  })
+
+  it('treats {{image}} inside a text input as plain text during generation', () => {
+    const workflow = JSON.stringify({
+      6: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}} with {{image}} inside' } },
+    })
+    const prepared = prepareComfyUIWorkflow(workflow, 'p', 1) as { 6: { inputs: { text: string } } }
+    expect(prepared[6].inputs.text).toBe('p with {{image}} inside')
+  })
+
+  it('fails an edit when the workflow has no image placeholder', () => {
+    expect(() => prepareComfyUIWorkflow(WORKFLOW, 'p', 1, 'up.png'))
+      .toThrow('must contain exactly one {{image}}')
+  })
+
+  it('fails an edit when the workflow has several image placeholders', () => {
+    const workflow = JSON.stringify({
+      1: { class_type: 'LoadImage', inputs: { image: '{{image}}' } },
+      2: { class_type: 'LoadImageMask', inputs: { image: '%image%' } },
+      6: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}}' } },
+    })
+    expect(() => prepareComfyUIWorkflow(workflow, 'p', 1, 'up.png'))
+      .toThrow('found 2')
+    expect(() => validateComfyUIWorkflowJson(workflow)).toThrow('at most one {{image}}')
+  })
+
+  it('fails a generation whose workflow still contains an image placeholder', () => {
+    expect(() => prepareComfyUIWorkflow(EDIT_WORKFLOW, 'p', 1))
+      .toThrow('requires edit_image')
+  })
 })
 
 describe('ComfyUI image generation', () => {
@@ -62,7 +144,8 @@ describe('ComfyUI image generation', () => {
 
     const result = await generateComfyUIImage(options())
 
-    expect(result).toEqual({ data: new Uint8Array([1, 2, 3]), mediaType: 'image/png' })
+    expect(result).toMatchObject({ data: new Uint8Array([1, 2, 3]), mediaType: 'image/png' })
+    expect(result.seed).toBeTypeOf('number')
     const submitted = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.body)) as { prompt: { 6: { inputs: { text: string } } } }
     expect(submitted.prompt[6].inputs.text).toBe('rainy neon street')
     expect(String(fetchMock.mock.calls[1]?.[0])).toBe('http://127.0.0.1:8188/history/job-1')
@@ -116,5 +199,78 @@ describe('ComfyUI image generation', () => {
     const assertion = expect(pending).rejects.toThrow('timed out after 1000 ms')
     await vi.advanceTimersByTimeAsync(1_001)
     await assertion
+  })
+})
+
+describe('ComfyUI image editing', () => {
+  beforeEach(() => { vi.restoreAllMocks() })
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals() })
+
+  function editFetchMock(uploadResponse: Response): ReturnType<typeof vi.fn> {
+    return vi.fn()
+      .mockResolvedValueOnce(uploadResponse)
+      .mockResolvedValueOnce(new Response(JSON.stringify({ prompt_id: 'job-1' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        'job-1': {
+          status: { status_str: 'success', completed: true },
+          outputs: { save: { images: [{ filename: 'final.png', subfolder: '', type: 'output' }] } },
+        },
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(new Uint8Array([7, 8, 9]), { status: 200, headers: { 'content-type': 'image/png' } }))
+  }
+
+  it('uploads the source image, injects its stored name, and returns the edited image', async () => {
+    const fetchMock = editFetchMock(new Response(JSON.stringify({ name: 'source.png', subfolder: '', type: 'input' }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await editComfyUIImage(editOptions())
+
+    expect(result).toMatchObject({ data: new Uint8Array([7, 8, 9]), mediaType: 'image/png' })
+    expect(result.seed).toBeTypeOf('number')
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('http://127.0.0.1:8188/upload/image')
+    const uploadInit = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined
+    expect(uploadInit?.method).toBe('POST')
+    expect(uploadInit?.body).toBeInstanceOf(FormData)
+    const submitted = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit | undefined)?.body)) as {
+      prompt: { 1: { inputs: { image: string } }, 6: { inputs: { text: string } } }
+    }
+    expect(submitted.prompt[1].inputs.image).toBe('source.png')
+    expect(submitted.prompt[6].inputs.text).toBe('cyberpunk restyle')
+    expect(String(fetchMock.mock.calls[2]?.[0])).toBe('http://127.0.0.1:8188/history/job-1')
+    expect(String(fetchMock.mock.calls[3]?.[0])).toContain('/view?filename=final.png')
+  })
+
+  it('joins the subfolder ComfyUI stored the upload under', async () => {
+    const fetchMock = editFetchMock(new Response(JSON.stringify({ name: 'source.png', subfolder: 'uploads' }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await editComfyUIImage(editOptions())
+
+    const submitted = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit | undefined)?.body)) as {
+      prompt: { 1: { inputs: { image: string } } }
+    }
+    expect(submitted.prompt[1].inputs.image).toBe('uploads/source.png')
+  })
+
+  it('rejects unsupported source media types before uploading', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(editComfyUIImage(editOptions({
+      sourceImage: { data: new Uint8Array([1]), mediaType: 'image/gif' },
+    }))).rejects.toThrow('ComfyUI edit_image accepts PNG, JPEG, or WebP source images; got image/gif')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('reports a failed upload with the ComfyUI error body', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('folder missing', { status: 404 })))
+
+    await expect(editComfyUIImage(editOptions())).rejects.toThrow('ComfyUI image upload failed (404): folder missing')
+  })
+
+  it('reports an upload response without a stored name', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })))
+
+    await expect(editComfyUIImage(editOptions())).rejects.toThrow('returned no name')
   })
 })

@@ -26,6 +26,7 @@ const DICT = {
     filterOpenAI: 'OpenAI / 中转站',
     filterSeedream: '字节 Seedream',
     filterDashScope: '阿里 DashScope',
+    filterComfyUI: '本地 ComfyUI',
     emptyTitle: '暂无生图记录',
     emptyDesc: '在对话中让 Agent 生图后，生成的图片会自动收录到这里。',
     noMatchTitle: '未找到匹配结果',
@@ -52,6 +53,7 @@ const DICT = {
     filterOpenAI: 'OpenAI / Relay',
     filterSeedream: 'ByteDance Seedream',
     filterDashScope: 'Aliyun DashScope',
+    filterComfyUI: 'Local ComfyUI',
     emptyTitle: 'No images generated yet',
     emptyDesc: 'Images generated during conversations will automatically appear here.',
     noMatchTitle: 'No matching images',
@@ -209,6 +211,7 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
             <option value="openai">{t('filterOpenAI')}</option>
             <option value="seedream">{t('filterSeedream')}</option>
             <option value="dashscope">{t('filterDashScope')}</option>
+            <option value="comfyui">{t('filterComfyUI')}</option>
           </select>
         </div>
       </header>
