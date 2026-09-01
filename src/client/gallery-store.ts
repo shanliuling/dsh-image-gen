@@ -13,11 +13,15 @@ export interface GalleryItem {
   provider: ImageProvider
   model: string
   createdAt: number
-  aspectRatio?: string
-  imageSize?: string
-  output?: string
+  aspectRatio?: string | undefined
+  imageSize?: string | undefined
+  output?: string | undefined
   /** Workflow seed reported by the ComfyUI provider. Optional so records written by older versions stay readable; the object store is schemaless, so no IndexedDB version bump is needed. */
-  seed?: number
+  seed?: number | undefined
+  /** Whether this item is marked as favorite */
+  isFavorite?: boolean | undefined
+  /** Custom tags or collection markers */
+  tags?: string[] | undefined
 }
 
 const DB_NAME = 'dsh_image_gen_db'
@@ -112,6 +116,7 @@ export function subscribeGallery(listener: GalleryListener): () => void {
 /**
  * Save or update a gallery record by attachmentId.
  * Skipped if the item was previously deleted (tombstoned).
+ * Preserves existing isFavorite, tags, and original createdAt on re-renders.
  */
 export async function saveGalleryItem(
   item: Omit<GalleryItem, 'createdAt'> & { createdAt?: number }
@@ -122,16 +127,28 @@ export async function saveGalleryItem(
     if (tombstones.has(item.id)) {
       return
     }
-    const record: GalleryItem = {
-      ...item,
-      createdAt: item.createdAt ?? Date.now(),
-    }
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(STORE_NAME, 'readwrite')
       const store = tx.objectStore(STORE_NAME)
-      const req = store.put(record)
-      req.onsuccess = () => resolve()
-      req.onerror = () => reject(req.error)
+      const getReq = store.get(item.id)
+
+      getReq.onsuccess = () => {
+        const existing = getReq.result as GalleryItem | undefined
+        const fav = item.isFavorite !== undefined ? item.isFavorite : existing?.isFavorite
+        const userTags = item.tags !== undefined ? item.tags : existing?.tags
+        const record: GalleryItem = {
+          ...existing,
+          ...item,
+          // Preserve original generation timestamp if already recorded
+          createdAt: existing?.createdAt ?? item.createdAt ?? Date.now(),
+          ...(fav !== undefined ? { isFavorite: fav } : {}),
+          ...(userTags !== undefined ? { tags: userTags } : {}),
+        }
+        const putReq = store.put(record)
+        putReq.onsuccess = () => resolve()
+        putReq.onerror = () => reject(putReq.error)
+      }
+      getReq.onerror = () => reject(getReq.error)
     })
     notifyListeners()
   } catch (err) {
@@ -166,6 +183,40 @@ export async function getGalleryItems(): Promise<GalleryItem[]> {
   } catch (err) {
     console.warn('[dsh-image-gen] Failed to read gallery items from IndexedDB:', err)
     return []
+  }
+}
+
+/**
+ * Toggle favorite status of a gallery item.
+ * Returns the new favorite status (true if favorited, false if unfavorited).
+ */
+export async function toggleFavoriteGalleryItem(id: string): Promise<boolean> {
+  try {
+    const db = await getDB()
+    const newStatus = await new Promise<boolean>((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, 'readwrite')
+      const store = tx.objectStore(STORE_NAME)
+      const getReq = store.get(id)
+
+      getReq.onsuccess = () => {
+        const item = getReq.result as GalleryItem | undefined
+        if (!item) {
+          resolve(false)
+          return
+        }
+        const nextFavorite = !item.isFavorite
+        item.isFavorite = nextFavorite
+        const putReq = store.put(item)
+        putReq.onsuccess = () => resolve(nextFavorite)
+        putReq.onerror = () => reject(putReq.error)
+      }
+      getReq.onerror = () => reject(getReq.error)
+    })
+    notifyListeners()
+    return newStatus
+  } catch (err) {
+    console.warn('[dsh-image-gen] Failed to toggle favorite item in IndexedDB:', err)
+    return false
   }
 }
 

@@ -33,6 +33,9 @@ const client: UserConfig = {
   clean: false,
   external: CLIENT_EXTERNALS,
   noExternal: (id: string) => CLIENT_EXTERNALS.includes(id) ? undefined : true,
+  alias: {
+    'lucide-react': 'lucide-react/dist/esm/lucide-react.mjs',
+  },
   outputOptions: {
     entryFileNames: 'client.js',
     banner: 'window.__ModuleLoader__.load({ id: "dsh-image-gen", factory: (require) => {',
