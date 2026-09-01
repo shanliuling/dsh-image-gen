@@ -3,7 +3,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import * as plugin from '../src/client/index.js'
 import { imageRef } from '../src/client/image-ref.js'
-import { imageResultDefinition } from '../src/client/image-result-node.js'
+import { IMAGE_RESULT_NODE_KIND } from '../src/client/image-result-node.js'
+
+const imageResultNodeShape = expect.objectContaining({
+  kind: IMAGE_RESULT_NODE_KIND,
+  target: 'chat',
+})
 
 interface ClientHarness {
   ctx: Context
@@ -119,7 +124,7 @@ describe('DSH client compatibility', () => {
     const fiber = harness.ctx.plugin(plugin)
     await fiber.await()
 
-    expect(registerEvent).toHaveBeenCalledWith(imageResultDefinition)
+    expect(registerEvent).toHaveBeenCalledWith(imageResultNodeShape)
     expect(harness.slotInjections.some(injection => injection.name === 'conversation.chat.node')).toBe(true)
 
     for (const injection of harness.slotInjections.filter(candidate => candidate.name === 'tool.call.toolview')) {
@@ -162,7 +167,7 @@ describe('DSH client compatibility', () => {
 
     harness.ctx.provide('uiConversation', { events: { register: registerEvent } })
     await vi.waitFor(() => {
-      expect(registerEvent).toHaveBeenCalledWith(imageResultDefinition)
+      expect(registerEvent).toHaveBeenCalledWith(imageResultNodeShape)
     })
     expect(harness.slotInjections.some(injection => injection.name === 'conversation.chat.node')).toBe(true)
 

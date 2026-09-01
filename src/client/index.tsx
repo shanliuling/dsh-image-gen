@@ -26,7 +26,7 @@ import { GalleryViewTab, copyImageBlob, type LocaleService } from './gallery-vie
 import { imageRef } from './image-ref.js'
 import {
   IMAGE_RESULT_NODE_KIND,
-  imageResultDefinition,
+  createImageResultDefinition,
   type ImageResultPresentation,
 } from './image-result-node.js'
 
@@ -77,7 +77,7 @@ interface ImageResultNodeProps {
   locale?: LocaleService | undefined
 }
 interface ModernUiConversation {
-  events: { register(definition: typeof imageResultDefinition): () => void }
+  events: { register(definition: ReturnType<typeof createImageResultDefinition>): () => void }
 }
 
 const KEY_REF: Partial<Record<Provider, string>> = {
@@ -325,6 +325,10 @@ export const inject = ['slots', 'connection', 'remote', 'settingsScope', 'locale
 /** Mount the settings card, generated-image card, and native conversation gallery view. */
 export function apply(ctx: Context): void {
   const scope = ctx.settingsScope.bind<ImageSettings>({ namespace: IMAGE_GENERATION_NAMESPACE as never })
+  // Host-owned chat transcript preference ("ui-chat" transcriptView). Unknown,
+  // unavailable, or not-yet-loaded reads fall back to Compact-safe anchoring.
+  const chatScope = ctx.settingsScope.bind<{ transcriptView?: string }>({ namespace: 'ui-chat' as never })
+  const isCompactTranscript = (): boolean => chatScope.getSnapshot().value?.transcriptView !== 'normal'
   const locale = ctx.get('locale') as LocaleService | undefined
   const promotion = { enabled: false }
 
@@ -350,7 +354,7 @@ export function apply(ctx: Context): void {
       promotion.enabled = true
       const ownerRegister = owner.slots.register.bind(owner.slots) as unknown as (options: object, component: unknown) => () => void
       owner.effect(
-      () => uiConversation.events.register(imageResultDefinition),
+      () => uiConversation.events.register(createImageResultDefinition({ isCompactTranscript })),
       'dsh-image-gen: promoted image result node',
       )
       ;(owner.slots.inject as any)('conversation.chat.node', () => ownerRegister({

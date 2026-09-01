@@ -49,60 +49,96 @@ interface ConversationNodeDefinitionLike<State> {
   buildViewNode(context: ContextLike<State>): Record<string, unknown> | null
 }
 
-/** One image result row per Turn, re-anchored to Turn end after the final answer settles. */
-export const imageResultDefinition: ConversationNodeDefinitionLike<ImageResultState> = {
-  kind: IMAGE_RESULT_NODE_KIND,
-  target: 'chat',
-  match: (event) => {
-    const turn = eventTurn(event)
-    if (turn === undefined) return null
-    if (event.type === 'turn/start') return { id: String(turn), role: 'start' }
-    if (event.type === 'turn/end') return { id: String(turn), role: 'update' }
-    if (event.type === 'assistant/message') return { id: String(turn), role: 'update' }
-    if (event.type === 'tool/result' && imageResultFromMeta(event.data.meta) !== undefined) {
-      return { id: String(turn), role: 'update' }
-    }
-    return null
-  },
-  start: (_context, match) => {
-    const turn = eventTurn(match.event)
-    if (match.event.type !== 'turn/start' || turn === undefined) {
-      throw new Error('dsh-image-result start requires turn/start')
-    }
-    return { turn, results: [] }
-  },
-  update: (context, match) => {
-    if (match.event.type === 'turn/end') return { ...context.state, endSeq: match.event.seq }
-    if (match.event.type === 'assistant/message') return { ...context.state, answerSeq: match.event.seq }
-    if (match.event.type !== 'tool/result') return context.state
-    const result = imageResultFromMeta(match.event.data.meta)
-    if (result === undefined) return context.state
-    if (context.state.results.some(candidate => candidate.attachment.attachmentId === result.attachment.attachmentId)) {
-      return context.state
-    }
-    return { ...context.state, results: [...context.state.results, { ...result, seq: match.event.seq }] }
-  },
-  buildViewNode: (context) => {
-    const state = context.state
-    const last = state?.results.at(-1)
-    if (state === undefined || last === undefined) return null
-    const location = context.matches.at(-1)?.location ?? context.start?.location ?? { kind: 'unresolved' }
-    return {
-      key: context.key,
-      kind: IMAGE_RESULT_NODE_KIND,
-      id: context.id,
-      target: 'chat',
-      // Compact folds only nodes before the finalized answer boundary. Sharing
-      // that boundary keeps the artifact beside the answer and outside process.
-      anchorSeq: state.answerSeq ?? state.endSeq ?? last.seq,
-      location,
-      visibility: 'visible',
-      data: {
-        turn: state.turn,
-        results: state.results.map(({ seq: _seq, ...result }) => result),
-      },
-    }
-  },
+/** Options controlling where the artifact anchors as its Turn progresses. */
+export interface ImageResultNodeOptions {
+  /**
+   * Whether the host transcript view folds completed-Turn process content
+   * (Compact mode). Omission or a thrown/unavailable read falls back to
+   * Compact-safe anchoring, which keeps the artifact always visible.
+   */
+  readonly isCompactTranscript?: () => boolean
+}
+
+/** Default definition: unknown transcript mode falls back to Compact-safe anchoring. */
+export const imageResultDefinition: ConversationNodeDefinitionLike<ImageResultState> =
+  createImageResultDefinition()
+
+/**
+ * One image result row per Turn, anchored at its own tool/result position while
+ * the Turn runs, then optionally re-anchored beside the final answer once the
+ * Turn closes (only needed under the folding Compact transcript view).
+ */
+export function createImageResultDefinition(
+  options: ImageResultNodeOptions = {},
+): ConversationNodeDefinitionLike<ImageResultState> {
+  return {
+    kind: IMAGE_RESULT_NODE_KIND,
+    target: 'chat',
+    match: (event) => {
+      const turn = eventTurn(event)
+      if (turn === undefined) return null
+      if (event.type === 'turn/start') return { id: String(turn), role: 'start' }
+      if (event.type === 'turn/end') return { id: String(turn), role: 'update' }
+      if (event.type === 'assistant/message') return { id: String(turn), role: 'update' }
+      if (event.type === 'tool/result' && imageResultFromMeta(event.data.meta) !== undefined) {
+        return { id: String(turn), role: 'update' }
+      }
+      return null
+    },
+    start: (_context, match) => {
+      const turn = eventTurn(match.event)
+      if (match.event.type !== 'turn/start' || turn === undefined) {
+        throw new Error('dsh-image-result start requires turn/start')
+      }
+      return { turn, results: [] }
+    },
+    update: (context, match) => {
+      if (match.event.type === 'turn/end') return { ...context.state, endSeq: match.event.seq }
+      if (match.event.type === 'assistant/message') return { ...context.state, answerSeq: match.event.seq }
+      if (match.event.type !== 'tool/result') return context.state
+      const result = imageResultFromMeta(match.event.data.meta)
+      if (result === undefined) return context.state
+      if (context.state.results.some(candidate => candidate.attachment.attachmentId === result.attachment.attachmentId)) {
+        return context.state
+      }
+      return { ...context.state, results: [...context.state.results, { ...result, seq: match.event.seq }] }
+    },
+    buildViewNode: (context) => {
+      const state = context.state
+      const last = state?.results.at(-1)
+      if (state === undefined || last === undefined) return null
+      const location = context.matches.at(-1)?.location ?? context.start?.location ?? { kind: 'unresolved' }
+      return {
+        key: context.key,
+        kind: IMAGE_RESULT_NODE_KIND,
+        id: context.id,
+        target: 'chat',
+        // While the Turn is open the artifact stays at its own tool/result
+        // position, so later messages in the same Turn order below it. Once the
+        // Turn closes, Compact folds every node before the finalized answer
+        // boundary, so the artifact re-anchors beside that answer to stay
+        // visible; Normal mode has no folding and keeps the natural position.
+        // An unknown transcript mode falls back to the Compact-safe behavior.
+        anchorSeq: state.endSeq !== undefined && compactTranscript(options)
+          ? state.answerSeq ?? state.endSeq ?? last.seq
+          : last.seq,
+        location,
+        visibility: 'visible',
+        data: {
+          turn: state.turn,
+          results: state.results.map(({ seq: _seq, ...result }) => result),
+        },
+      }
+    },
+  }
+}
+
+function compactTranscript(options: ImageResultNodeOptions): boolean {
+  try {
+    return options.isCompactTranscript?.() ?? true
+  } catch {
+    return true
+  }
 }
 
 /** Parse the plugin-owned durable presentation metadata from a Tool result event. */
