@@ -133,7 +133,7 @@ export function resolveProvider(config: Config):
 
 /** The workflow a ComfyUI call runs: the requested name when given, else the active one. */
 export function selectComfyUIWorkflow(
-  active: { workflows: ComfyUIWorkflowEntry[]; workflow?: ComfyUIWorkflowEntry },
+  active: { workflows: ComfyUIWorkflowEntry[]; workflow?: ComfyUIWorkflowEntry | undefined },
   requested?: string,
 ): ComfyUIWorkflowEntry {
   if (active.workflow === undefined) {

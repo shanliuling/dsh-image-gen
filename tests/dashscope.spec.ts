@@ -17,8 +17,8 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   })
 }
 
-function imageResponse(bytes: Buffer, contentType = 'image/png'): Response {
-  return new Response(bytes, {
+function imageResponse(bytes: Uint8Array, contentType = 'image/png'): Response {
+  return new Response(bytes as never, {
     status: 200,
     headers: { 'content-type': contentType },
   })

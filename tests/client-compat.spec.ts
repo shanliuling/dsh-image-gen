@@ -223,7 +223,7 @@ describe('DSH client compatibility', () => {
         },
         subCalls: [],
       }
-      expect(imageRef(block)).toEqual(attachment)
+      expect(imageRef(block as never)).toEqual(attachment)
     })
 
     it('resolves image attachment from new DSH block.content without resultView fields', () => {

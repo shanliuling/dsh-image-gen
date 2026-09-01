@@ -4,20 +4,15 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "lib": ["ES2024", "DOM", "DOM.Iterable"],
-    "types": ["node", "react"],
+    "jsx": "react-jsx",
     "strict": true,
     "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
     "verbatimModuleSyntax": true,
-    "jsx": "react-jsx",
-    "rootDir": "src",
-    "outDir": "lib/types",
-    "declaration": true,
-    "declarationMap": false,
-    "sourceMap": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "types": ["node", "react"]
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx"],
-  "exclude": ["lib", "tests"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "tsdown.config.ts"]
 }

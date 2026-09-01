@@ -79,7 +79,7 @@ describe('image tool registration', () => {
     apply(ctx, { provider: 'google', saveToWorkspace: false })
     expect(tools.map(tool => tool.name)).toEqual(['generate_image', 'edit_image'])
     expect(installSection).toHaveBeenCalledTimes(1)
-    const [owner, ns, schema, entry, hooks] = installSection.mock.calls[0] as unknown as [Context, string, unknown, unknown, { setSource(): void; onChange(): void }]
+    const [owner, ns, schema, entry, hooks] = installSection.mock.calls[0] as unknown as [Context, string, unknown, unknown, { setSource(fn: () => unknown): void; onChange(): void }]
     expect(owner).toBe(ctx)
     expect(ns).toBe('image-generation')
     expect((schema as { toJSON?(): unknown }).toJSON).toBeTypeOf('function')
@@ -105,10 +105,10 @@ describe('image tool registration', () => {
 
     for (const name of ['generate_image', 'edit_image']) {
       const tool = toolByName(tools, name)
-      const content = tool.output.render({ prompt: 'test prompt' }, value)
+      const content = (tool.output as unknown as { render(args: unknown, value: unknown): Array<{ type?: string; text?: string; attachment?: unknown }> }).render({ prompt: 'test prompt' }, value)
       expect(content).toHaveLength(2)
       expect(content[0]).toMatchObject({ type: 'text' })
-      expect(content[0]?.type === 'text' ? content[0].text : '').toContain('Attachment ID: sha256:full-attachment-id')
+      expect(content[0]?.type === 'text' ? content[0]?.text : '').toContain('Attachment ID: sha256:full-attachment-id')
       expect(content[1]).toEqual({ type: 'image', attachment: ref })
     }
   })

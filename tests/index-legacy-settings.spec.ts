@@ -13,7 +13,8 @@ vi.mock('@deepseek-ai/dsh-settings', () => ({
 }))
 
 import { apply } from '../src/index.js'
-import { installSettingsSection } from '@deepseek-ai/dsh-settings'
+import * as dshSettings from '@deepseek-ai/dsh-settings'
+const installSettingsSection = (dshSettings as unknown as { installSettingsSection: unknown }).installSettingsSection as ReturnType<typeof vi.fn>
 
 function attachment(id: string): ImageAttachmentRef {
   return {

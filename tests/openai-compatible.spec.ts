@@ -10,7 +10,7 @@ describe('OpenAI-compatible images', () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: [{ b64_json: image }] }), { headers: { 'content-type': 'application/json' } }))
     vi.stubGlobal('fetch', fetchMock)
     await expect(generateOpenAICompatibleImage({ provider: 'openai', apiKey: 'key', baseURL: 'https://relay.example/v1', model: 'image-model', prompt: 'a cat', size: '1024x1024', maxBytes: 1024, signal })).resolves.toEqual({ data: new Uint8Array(Buffer.from('image bytes')), mediaType: 'image/png' })
-    expect(fetchMock.mock.calls[0]?.[0]).toBe('https://relay.example/v1/images/generations')
+    expect(((fetchMock.mock.calls as unknown[][])[0])?.[0]).toBe('https://relay.example/v1/images/generations')
   })
 
   it('uses multipart /images/edits with the source image', async () => {

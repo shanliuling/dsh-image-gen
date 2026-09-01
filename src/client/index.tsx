@@ -1,7 +1,6 @@
 import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import type { SettingsScope, ToolCallBlock } from '@deepseek-ai/dsh-client-runtime/client'
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
@@ -23,7 +22,14 @@ import {
 import { validateComfyUIWorkflowJson } from '../comfyui-workflow.js'
 import { saveGalleryItem } from './gallery-store.js'
 import { GalleryViewTab, copyImageBlob, type LocaleService } from './gallery-view.js'
-import { imageRef } from './image-ref.js'
+import { imageRef, type ToolCallBlock } from './image-ref.js'
+
+export interface SettingsScope<T> {
+  getSnapshot(): { value: T | undefined; writable?: boolean }
+  subscribe(listener: () => void): () => void
+  set(field: string, value: unknown): Promise<void>
+  unset?(field: string): Promise<void>
+}
 import {
   IMAGE_RESULT_NODE_KIND,
   imageResultDefinition,
@@ -881,8 +887,8 @@ function usePluginLanguage(locale: LocaleService | undefined): 'en' | 'zh' {
   return lang
 }
 
-function imageResultFromBlock(block: ToolCallBlock): ImageResultPresentation | undefined {
-  const attachment = imageRef(block)
+function imageResultFromBlock(block: unknown): ImageResultPresentation | undefined {
+  const attachment = imageRef(block as never)
   if (attachment === undefined) return undefined
   const blockValue = block as unknown as {
     meta?: Record<string, unknown>

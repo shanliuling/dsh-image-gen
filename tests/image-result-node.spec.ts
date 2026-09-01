@@ -75,15 +75,15 @@ describe('promoted image result conversation node', () => {
     const answerMatch = match(answerEvent, 'update')
     const endMatch = match(endEvent, 'update', 8)
     const reader = { previous: () => undefined }
-    let state = imageResultDefinition.start(context(undefined, [startMatch]), startMatch, reader)
-    state = imageResultDefinition.update(context(state, [startMatch, resultMatch]), resultMatch)
+    let state = imageResultDefinition.start(context(undefined, [startMatch]) as never, startMatch as never, reader as never)
+    state = imageResultDefinition.update(context(state, [startMatch, resultMatch]) as never, resultMatch as never)
 
-    const liveNode = imageResultDefinition.buildViewNode?.(context(state, [startMatch, resultMatch]))
+    const liveNode = imageResultDefinition.buildViewNode?.(context(state, [startMatch, resultMatch]) as never)
     expect(liveNode).toMatchObject({ kind: 'dsh-image-result', anchorSeq: 4 })
 
-    state = imageResultDefinition.update(context(state, [startMatch, resultMatch, answerMatch]), answerMatch)
-    state = imageResultDefinition.update(context(state, [startMatch, resultMatch, answerMatch, endMatch], 8), endMatch)
-    const closedNode = imageResultDefinition.buildViewNode?.(context(state, [startMatch, resultMatch, answerMatch, endMatch], 8))
+    state = imageResultDefinition.update(context(state, [startMatch, resultMatch, answerMatch]) as never, answerMatch as never)
+    state = imageResultDefinition.update(context(state, [startMatch, resultMatch, answerMatch, endMatch], 8) as never, endMatch as never)
+    const closedNode = imageResultDefinition.buildViewNode?.(context(state, [startMatch, resultMatch, answerMatch, endMatch], 8) as never)
 
     expect(closedNode).toMatchObject({
       kind: 'dsh-image-result',
