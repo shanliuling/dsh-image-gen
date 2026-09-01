@@ -5,7 +5,7 @@
  */
 import { useEffect, useState, useMemo, useRef, type FC, type MouseEvent } from 'react'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import { IMAGE_ROUTE, type ImageProvider } from '../shared.js'
+import { IMAGE_ROUTE, DELETE_ROUTE, type ImageProvider } from '../shared.js'
 import {
   Image as ImageIcon,
   SlidersHorizontal,
@@ -20,11 +20,15 @@ import {
   X,
   ChevronLeft,
   ChevronRight,
+  CheckSquare,
+  Check,
+  AlertTriangle,
 } from 'lucide-react'
 import {
   getGalleryItems,
   subscribeGallery,
   deleteGalleryItem,
+  bulkDeleteGalleryItems,
   toggleFavoriteGalleryItem,
   type GalleryItem,
 } from './gallery-store.js'
@@ -86,6 +90,26 @@ const DICT = {
     close: '关闭 (Esc)',
     prevImage: '上一张 (←)',
     nextImage: '下一张 (→)',
+
+    // 批量管理与删除
+    manage: '批量删除',
+    exitManage: '退出选择',
+    selectedCount: '已选 {n} 项',
+    selectAll: '全选',
+    invertSelect: '反选',
+    clearSelect: '清空',
+    batchDelete: '批量删除',
+    batchDeleteTitle: '确认批量删除选中的 {count} 张图片？',
+    batchDeleteTitleSingle: '确认从画廊中删除这张图片？',
+    batchDeleteDesc: '将从画廊历史记录中移除所选图片。',
+    deleteWorkspaceFilesOpt: '同时清理工作区磁盘物理文件（不可恢复）',
+    cancel: '取消',
+    confirmBatchDelete: '确认删除 ({count})',
+    confirmDeleteSingle: '确认删除',
+    batchDeletedToast: '已删除 {count} 张图片',
+    batchDeletedWithFilesToast: '已删除 {count} 张图片，并清理了 {files} 个工作区文件',
+    deleteFailedFileLocked: '已删除 {count} 张图片，但有 {files} 个文件因被系统占用未能删除',
+    deleteFailedDatabase: '删除失败：本地数据库操作异常',
 
     // 时间格式化
     justNow: '刚刚',
@@ -151,6 +175,26 @@ const DICT = {
     close: 'Close (Esc)',
     prevImage: 'Previous (←)',
     nextImage: 'Next (→)',
+
+    // Batch Management & Delete
+    manage: 'Batch Delete',
+    exitManage: 'Done',
+    selectedCount: '{n} selected',
+    selectAll: 'Select All',
+    invertSelect: 'Invert',
+    clearSelect: 'Clear',
+    batchDelete: 'Batch Delete',
+    batchDeleteTitle: 'Delete {count} selected images?',
+    batchDeleteTitleSingle: 'Delete this image from gallery?',
+    batchDeleteDesc: 'These images will be removed from your gallery history.',
+    deleteWorkspaceFilesOpt: 'Also delete files from workspace disk (cannot be undone)',
+    cancel: 'Cancel',
+    confirmBatchDelete: 'Delete ({count})',
+    confirmDeleteSingle: 'Delete',
+    batchDeletedToast: 'Deleted {count} images',
+    batchDeletedWithFilesToast: 'Deleted {count} images and cleaned {files} workspace files',
+    deleteFailedFileLocked: 'Deleted {count} images, but {files} files could not be deleted (busy/locked)',
+    deleteFailedDatabase: 'Failed to delete: local database error',
 
     // Relative Time
     justNow: 'Just now',
@@ -255,6 +299,21 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [previewBlob, setPreviewBlob] = useState<Blob | null>(null)
   const [toast, setToast] = useState<string | null>(null)
+
+  // Batch Management & Shift-Selection State
+  const [isManageMode, setIsManageMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const lastSelectedIndexRef = useRef<number | null>(null)
+  const [showDeleteModal, setShowDeleteModal] = useState(false)
+  const [deleteWorkspaceFiles, setDeleteWorkspaceFiles] = useState(true)
+  const [isDeleting, setIsDeleting] = useState(false)
+
+  // Clear batch selection and shift anchor when switching tabs, searching, or changing filters
+  useEffect(() => {
+    setSelectedIds(new Set())
+    lastSelectedIndexRef.current = null
+  }, [activeTab, search, selectedProvider, selectedRatio, sortBy])
+
   const [lang, setLang] = useState<'zh' | 'en'>(() => {
     const active = locale?.getSnapshot?.()?.active
     return active?.startsWith('en') ? 'en' : 'zh'
@@ -465,26 +524,220 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
     }
   }, [previewUrl])
 
-  // Keyboard navigation: Esc (close), ArrowLeft (prev), ArrowRight (next)
+  // Keyboard navigation: Esc (close modal or preview), ArrowLeft (prev), ArrowRight (next)
   useEffect(() => {
-    if (!previewItem) return
     const onKeyDown = (e: KeyboardEvent) => {
       if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) {
         return
       }
-      if (e.key === 'Escape') {
-        handleClosePreview()
-      } else if (e.key === 'ArrowLeft' || e.key === 'Left') {
-        e.preventDefault()
-        goToPrev()
-      } else if (e.key === 'ArrowRight' || e.key === 'Right') {
-        e.preventDefault()
-        goToNext()
+      if (showDeleteModal) {
+        if (e.key === 'Escape' && !isDeleting) {
+          e.preventDefault()
+          setShowDeleteModal(false)
+          if (!isManageMode) setSelectedIds(new Set())
+        }
+        return
+      }
+      if (previewItem) {
+        if (e.key === 'Escape') {
+          handleClosePreview()
+        } else if (e.key === 'ArrowLeft' || e.key === 'Left') {
+          e.preventDefault()
+          goToPrev()
+        } else if (e.key === 'ArrowRight' || e.key === 'Right') {
+          e.preventDefault()
+          goToNext()
+        }
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [previewItem, currentPreviewIndex, filteredItems])
+  }, [showDeleteModal, isDeleting, isManageMode, previewItem, currentPreviewIndex, filteredItems])
+
+  // Shift-Click Range Selection & Card Click Handler
+  const handleCardClick = (item: GalleryItem, index: number, e: MouseEvent, blob?: Blob) => {
+    // If holding Shift, or if currently in manage mode:
+    if (e.shiftKey || isManageMode) {
+      e.stopPropagation()
+      if (!isManageMode) {
+        setIsManageMode(true)
+      }
+
+      if (e.shiftKey && lastSelectedIndexRef.current !== null) {
+        const from = Math.min(lastSelectedIndexRef.current, index)
+        const to = Math.max(lastSelectedIndexRef.current, index)
+        const rangeItems = filteredItems.slice(from, to + 1)
+        setSelectedIds((prev) => {
+          const next = new Set(prev)
+          for (const r of rangeItems) {
+            next.add(r.id)
+          }
+          return next
+        })
+      } else {
+        setSelectedIds((prev) => {
+          const next = new Set(prev)
+          if (next.has(item.id)) {
+            next.delete(item.id)
+          } else {
+            next.add(item.id)
+          }
+          return next
+        })
+        lastSelectedIndexRef.current = index
+      }
+      return
+    }
+
+    // Normal click -> open preview
+    if (blob) {
+      openPreviewItem(item, blob)
+    }
+  }
+
+  // Toggle selection for a specific card index
+  const handleToggleSelect = (id: string, index: number, e: MouseEvent) => {
+    e.stopPropagation()
+    if (!isManageMode) {
+      setIsManageMode(true)
+    }
+
+    if (e.shiftKey && lastSelectedIndexRef.current !== null) {
+      const from = Math.min(lastSelectedIndexRef.current, index)
+      const to = Math.max(lastSelectedIndexRef.current, index)
+      const rangeItems = filteredItems.slice(from, to + 1)
+      setSelectedIds((prev) => {
+        const next = new Set(prev)
+        for (const r of rangeItems) {
+          next.add(r.id)
+        }
+        return next
+      })
+    } else {
+      setSelectedIds((prev) => {
+        const next = new Set(prev)
+        if (next.has(id)) {
+          next.delete(id)
+        } else {
+          next.add(id)
+        }
+        return next
+      })
+      lastSelectedIndexRef.current = index
+    }
+  }
+
+  const handleSelectAll = () => {
+    setSelectedIds(new Set(filteredItems.map((i) => i.id)))
+  }
+
+  const handleInvertSelect = () => {
+    setSelectedIds((prev) => {
+      const next = new Set<string>()
+      for (const item of filteredItems) {
+        if (!prev.has(item.id)) {
+          next.add(item.id)
+        }
+      }
+      return next
+    })
+  }
+
+  const handleClearSelect = () => {
+    setSelectedIds(new Set())
+    lastSelectedIndexRef.current = null
+  }
+
+  const handleExitManage = () => {
+    setIsManageMode(false)
+    setSelectedIds(new Set())
+    lastSelectedIndexRef.current = null
+  }
+
+  // Request single image deletion through the unified modal
+  const requestSingleDelete = (item: GalleryItem, e?: MouseEvent) => {
+    if (e) e.stopPropagation()
+    setSelectedIds(new Set([item.id]))
+    setShowDeleteModal(true)
+  }
+
+  // Execute batch deletion (IndexedDB single transaction + optional workspace disk unlink)
+  const handleConfirmBatchDelete = async () => {
+    if (selectedIds.size === 0 || isDeleting) return
+    setIsDeleting(true)
+
+    const idsToDelete = Array.from(selectedIds)
+    const itemsToDelete = items.filter((i) => selectedIds.has(i.id))
+
+    // 1. Separate items: if savedTo is known, ONLY use exact path (no broad scan!)
+    const pathsToDelete = itemsToDelete
+      .map((i) => i.savedTo)
+      .filter((p): p is string => typeof p === 'string' && p.trim().length > 0)
+
+    // 2. Only send attachmentId as fallback for legacy items that lack savedTo:
+    const fallbackAttachmentIds = itemsToDelete
+      .filter((i) => !i.savedTo || !i.savedTo.trim())
+      .map((i) => i.id)
+
+    let deletedFiles = 0
+    let failedFilesCount = 0
+
+    if (deleteWorkspaceFiles && (pathsToDelete.length > 0 || fallbackAttachmentIds.length > 0)) {
+      try {
+        const res = await fetch(DELETE_ROUTE, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            paths: pathsToDelete,
+            attachmentIds: fallbackAttachmentIds,
+          }),
+        })
+        if (res.ok) {
+          const data = (await res.json()) as {
+            deletedCount?: number
+            failedFiles?: { path: string; error: string }[]
+          }
+          deletedFiles = data.deletedCount ?? 0
+          if (Array.isArray(data.failedFiles)) {
+            failedFilesCount = data.failedFiles.length
+          }
+        }
+      } catch (err) {
+        console.warn('[dsh-image-gen] Workspace file deletion failed:', err)
+      }
+    }
+
+    // 3. Perform IndexedDB deletion with real error handling
+    try {
+      await bulkDeleteGalleryItems(idsToDelete)
+    } catch (err) {
+      setIsDeleting(false)
+      showToast(t('deleteFailedDatabase'))
+      return
+    }
+
+    // Close lightbox if preview item was deleted
+    if (previewItem && selectedIds.has(previewItem.id)) {
+      handleClosePreview()
+    }
+
+    setIsDeleting(false)
+    setShowDeleteModal(false)
+    if (isManageMode) {
+      handleExitManage()
+    } else {
+      setSelectedIds(new Set())
+      lastSelectedIndexRef.current = null
+    }
+
+    if (failedFilesCount > 0) {
+      showToast(t('deleteFailedFileLocked', { count: String(idsToDelete.length), files: String(failedFilesCount) }))
+    } else if (deletedFiles > 0) {
+      showToast(t('batchDeletedWithFilesToast', { count: String(idsToDelete.length), files: String(deletedFiles) }))
+    } else {
+      showToast(t('batchDeletedToast', { count: String(idsToDelete.length) }))
+    }
+  }
 
   return (
     <div className="dsh-ig-gallery-page">
@@ -593,6 +846,23 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
               <option value="newest">{t('sortNewest')}</option>
               <option value="oldest">{t('sortOldest')}</option>
             </select>
+
+            {/* Batch Delete Mode Toggle */}
+            <button
+              type="button"
+              className={`dsh-ig-studio-btn dsh-ig-studio-btn-danger ${isManageMode ? 'is-active' : ''}`}
+              title={isManageMode ? t('exitManage') : t('manage')}
+              onClick={() => {
+                if (isManageMode) {
+                  handleExitManage()
+                } else {
+                  setIsManageMode(true)
+                }
+              }}
+            >
+              <Trash2 size={13} />
+              <span>{isManageMode ? t('exitManage') : t('manage')}</span>
+            </button>
           </div>
         </div>
       )}
@@ -620,11 +890,17 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
             </div>
           ) : (
             <div className="dsh-ig-gallery-grid">
-              {filteredItems.map((item) => (
+              {filteredItems.map((item, idx) => (
                 <GalleryCard
                   key={item.id}
                   item={item}
+                  index={idx}
+                  isManageMode={isManageMode}
+                  isSelected={selectedIds.has(item.id)}
                   t={t}
+                  onClick={(e, blob) => handleCardClick(item, idx, e, blob)}
+                  onToggleSelect={(e) => handleToggleSelect(item.id, idx, e)}
+                  onRequestDelete={() => requestSingleDelete(item)}
                   onPreview={(blob) => openPreviewItem(item, blob)}
                   onBlobLoaded={(b) => blobCache.set(item.id, b)}
                   onToast={showToast}
@@ -658,6 +934,128 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
       </div>
 
       {toast && <div className="dsh-ig-gallery-page-toast">{toast}</div>}
+
+      {/* 4. Floating Batch Action Bar */}
+      {(isManageMode || selectedIds.size > 0) && (
+        <div className="dsh-ig-batch-bar">
+          <div className="dsh-ig-batch-bar-left">
+            <span className="dsh-ig-batch-counter">
+              {t('selectedCount', { n: String(selectedIds.size) })}
+            </span>
+            <button
+              type="button"
+              className="dsh-ig-batch-btn"
+              onClick={handleSelectAll}
+            >
+              {t('selectAll')}
+            </button>
+            <button
+              type="button"
+              className="dsh-ig-batch-btn"
+              onClick={handleInvertSelect}
+            >
+              {t('invertSelect')}
+            </button>
+            {selectedIds.size > 0 && (
+              <button
+                type="button"
+                className="dsh-ig-batch-btn"
+                onClick={handleClearSelect}
+              >
+                {t('clearSelect')}
+              </button>
+            )}
+          </div>
+
+          <div className="dsh-ig-batch-bar-right">
+            <button
+              type="button"
+              className="dsh-ig-batch-btn dsh-ig-batch-btn-danger"
+              disabled={selectedIds.size === 0}
+              onClick={() => setShowDeleteModal(true)}
+            >
+              <Trash2 size={13} />
+              <span>{t('batchDelete')}{selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}</span>
+            </button>
+
+            <button
+              type="button"
+              className="dsh-ig-batch-btn dsh-ig-batch-btn-exit"
+              onClick={handleExitManage}
+            >
+              {t('exitManage')}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 5. Delete Confirmation Modal (Unified for single & batch) */}
+      {showDeleteModal && (
+        <div
+          className="dsh-ig-modal-backdrop"
+          onClick={() => {
+            if (!isDeleting) {
+              setShowDeleteModal(false)
+              if (!isManageMode) setSelectedIds(new Set())
+            }
+          }}
+        >
+          <div className="dsh-ig-modal-box" onClick={(e) => e.stopPropagation()}>
+            <div className="dsh-ig-modal-header">
+              <div className="dsh-ig-modal-icon-danger">
+                <AlertTriangle size={20} />
+              </div>
+              <div className="dsh-ig-modal-title">
+                {selectedIds.size === 1
+                  ? t('batchDeleteTitleSingle')
+                  : t('batchDeleteTitle', { count: String(selectedIds.size) })}
+              </div>
+            </div>
+
+            <div className="dsh-ig-modal-body">
+              <p className="dsh-ig-modal-desc">
+                {t('batchDeleteDesc')}
+              </p>
+
+              <label className="dsh-ig-modal-checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={deleteWorkspaceFiles}
+                  onChange={(e) => setDeleteWorkspaceFiles(e.target.checked)}
+                  disabled={isDeleting}
+                />
+                <span>{t('deleteWorkspaceFilesOpt')}</span>
+              </label>
+            </div>
+
+            <div className="dsh-ig-modal-footer">
+              <button
+                type="button"
+                className="dsh-ig-modal-btn dsh-ig-modal-btn-cancel"
+                onClick={() => {
+                  setShowDeleteModal(false)
+                  if (!isManageMode) setSelectedIds(new Set())
+                }}
+                disabled={isDeleting}
+              >
+                {t('cancel')}
+              </button>
+              <button
+                type="button"
+                className="dsh-ig-modal-btn dsh-ig-modal-btn-danger"
+                onClick={handleConfirmBatchDelete}
+                disabled={isDeleting}
+              >
+                {isDeleting
+                  ? '...'
+                  : selectedIds.size === 1
+                  ? t('confirmDeleteSingle')
+                  : t('confirmBatchDelete', { count: String(selectedIds.size) })}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 4. Lightbox Preview Modal */}
       {previewItem && (
@@ -792,11 +1190,10 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
                 type="button"
                 className="dsh-ig-lightbox-btn dsh-ig-lightbox-btn-danger"
                 title={t('delete')}
-                onClick={async () => {
-                  if (!window.confirm(t('confirmDelete'))) return
-                  await deleteGalleryItem(previewItem.id)
-                  handleClosePreview()
-                  showToast(t('deleted'))
+                onClick={() => {
+                  if (previewItem) {
+                    requestSingleDelete(previewItem)
+                  }
                 }}
               >
                 <Trash2 size={14} />
@@ -812,13 +1209,31 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
 
 interface GalleryCardProps {
   item: GalleryItem
+  index: number
+  isManageMode: boolean
+  isSelected: boolean
   t: (key: DictKey, params?: Record<string, string>) => string
+  onClick: (e: MouseEvent, blob?: Blob) => void
+  onToggleSelect: (e: MouseEvent) => void
+  onRequestDelete: () => void
   onPreview: (blob: Blob) => void
   onBlobLoaded?: (blob: Blob) => void
   onToast: (msg: string) => void
 }
 
-const GalleryCard: FC<GalleryCardProps> = ({ item, t, onPreview, onBlobLoaded, onToast }) => {
+const GalleryCard: FC<GalleryCardProps> = ({
+  item,
+  index: _index,
+  isManageMode,
+  isSelected,
+  t,
+  onClick,
+  onToggleSelect,
+  onRequestDelete,
+  onPreview: _onPreview,
+  onBlobLoaded,
+  onToast,
+}) => {
   const [url, setUrl] = useState<string>()
   const [blob, setBlob] = useState<Blob>()
   const [loading, setLoading] = useState(true)
@@ -896,13 +1311,21 @@ const GalleryCard: FC<GalleryCardProps> = ({ item, t, onPreview, onBlobLoaded, o
 
   return (
     <div
-      className="dsh-ig-gallery-card"
-      onClick={() => {
-        if (blob) onPreview(blob)
-      }}
+      className={`dsh-ig-gallery-card ${isSelected ? 'is-selected' : ''} ${isManageMode ? 'is-manage-mode' : ''}`}
+      onClick={(e) => onClick(e, blob)}
     >
       {/* Upper media container */}
       <div className="dsh-ig-gallery-card-media">
+        {/* Selection Checkbox (Top Left) */}
+        <button
+          type="button"
+          className={`dsh-ig-card-checkbox ${isSelected ? 'is-checked' : ''}`}
+          title={isSelected ? t('clearSelect') : t('manage')}
+          onClick={onToggleSelect}
+        >
+          {isSelected && <Check size={11} strokeWidth={3} />}
+        </button>
+
         {loading && <div className="dsh-ig-gallery-card-loading">...</div>}
         {error && <div className="dsh-ig-gallery-card-error">⚠️ {error}</div>}
         {url && (
@@ -948,11 +1371,9 @@ const GalleryCard: FC<GalleryCardProps> = ({ item, t, onPreview, onBlobLoaded, o
             type="button"
             className="dsh-ig-tool-btn dsh-ig-tool-btn-danger"
             title={t('delete')}
-            onClick={async (e) => {
+            onClick={(e) => {
               e.stopPropagation()
-              if (!window.confirm(t('confirmDelete'))) return
-              await deleteGalleryItem(item.id)
-              onToast(t('deleted'))
+              onRequestDelete()
             }}
           >
             <Trash2 size={13} />

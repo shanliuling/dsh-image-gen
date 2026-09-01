@@ -1,6 +1,6 @@
 /** Persist one generated image as a file under the session workspace. */
 import { randomUUID } from 'node:crypto'
-import { mkdir, realpath, rename, unlink, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 
@@ -141,4 +141,162 @@ export async function saveImageToWorkspace(options: {
     throw error
   }
   return target
+}
+
+/** Regex pattern strictly matching generated image file names (e.g. image-01234567.png). */
+const GENERATED_IMAGE_NAME_REGEX = /^image-[0-9a-f]{8,}\.(png|jpg|jpeg|webp|gif)$/i
+
+/** Discover all DSH workspace paths recorded in local application storage. */
+export async function getDshWorkspaceRoots(): Promise<string[]> {
+  const roots: string[] = []
+  try {
+    const home = process.env.USERPROFILE || process.env.HOME || ''
+    if (home) {
+      const workspaceJsonPath = join(home, '.dsh', 'storages', 'workspace.json')
+      const content = await readFile(workspaceJsonPath, 'utf8')
+      const parsed = JSON.parse(content)
+      const workspaces = parsed?.tables?.workspaces
+      if (workspaces && typeof workspaces === 'object') {
+        for (const ws of Object.values(workspaces)) {
+          if (ws && typeof ws === 'object' && 'path' in ws && typeof (ws as { path?: unknown }).path === 'string') {
+            const p = (ws as { path: string }).path
+            if (p.trim()) roots.push(p.trim())
+          }
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return roots
+}
+
+/**
+ * Safely delete a generated image file from workspace disk by its path.
+ * Enforces strict safety gates:
+ * 1. Base name must match generated image pattern (`image-<hex>.<ext>`) to avoid touching user files.
+ * 2. Path must be a regular file and NOT a symbolic link.
+ * 3. Real canonical path's basename must also match the pattern.
+ * 4. Real canonical path must reside within an allowed workspace root (or process.cwd()).
+ */
+export async function deleteImageFromWorkspace(
+  filePath: string,
+  allowedWorkspaceRoots?: Iterable<string>,
+): Promise<boolean> {
+  const resolved = resolve(filePath)
+  const base = resolved.split(/[/\\]/).pop() ?? ''
+  if (!GENERATED_IMAGE_NAME_REGEX.test(base)) {
+    return false
+  }
+
+  // Defend against symlink: must NOT be a symbolic link and must be a regular file
+  try {
+    const fileLstat = await lstat(resolved)
+    if (fileLstat.isSymbolicLink() || !fileLstat.isFile()) {
+      return false
+    }
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
+      return true // already gone
+    }
+    throw err
+  }
+
+  try {
+    const realFile = await realpath(resolved)
+    const realBase = realFile.split(/[/\\]/).pop() ?? ''
+    if (!GENERATED_IMAGE_NAME_REGEX.test(realBase)) {
+      return false
+    }
+
+    const rootsToCheck = new Set<string>()
+    if (allowedWorkspaceRoots) {
+      for (const r of allowedWorkspaceRoots) {
+        if (typeof r === 'string' && r.trim()) rootsToCheck.add(resolve(r))
+      }
+    }
+    rootsToCheck.add(resolve(process.cwd()))
+
+    let withinAllowed = false
+    for (const root of rootsToCheck) {
+      try {
+        const realRoot = await realpath(root)
+        if (containsPath(realRoot, realFile)) {
+          withinAllowed = true
+          break
+        }
+      } catch {
+        // ignore unresolvable workspace root
+      }
+    }
+    if (!withinAllowed) {
+      return false
+    }
+
+    await unlink(realFile)
+    return true
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
+      return true // already deleted
+    }
+    throw err
+  }
+}
+
+/**
+ * Safely find and delete a generated image file by its attachment ID within a single workspace root.
+ * Strictly checks sha256:64hex format and avoids scanning unrelated workspaces.
+ * Only used as fallback for historical images where savedTo was not persisted.
+ */
+export async function deleteImageByAttachmentIdFromWorkspace(
+  attachmentId: string,
+  options: {
+    workspaceRoot?: string | undefined
+    folder?: string | undefined
+    allowedWorkspaceRoots?: Iterable<string> | undefined
+  } = {},
+): Promise<boolean> {
+  const match = attachmentId.match(/^sha256:([0-9a-f]{64})$/i)
+  if (!match || !match[1]) {
+    return false
+  }
+  const prefix = match[1].slice(0, 8)
+
+  const rootsToCheck = new Set<string>()
+  if (options.workspaceRoot && options.workspaceRoot.trim()) {
+    rootsToCheck.add(resolve(options.workspaceRoot.trim()))
+  } else if (options.allowedWorkspaceRoots) {
+    for (const r of options.allowedWorkspaceRoots) {
+      if (typeof r === 'string' && r.trim()) rootsToCheck.add(resolve(r))
+    }
+  }
+  rootsToCheck.add(resolve(process.cwd()))
+
+  const candidateDirs = new Set<string>()
+  if (options.folder && options.folder.trim()) {
+    candidateDirs.add(options.folder.trim())
+  }
+  candidateDirs.add('dsh-image-gen')
+  candidateDirs.add('image')
+  candidateDirs.add('images')
+  candidateDirs.add('')
+
+  const candidateExtensions = ['png', 'jpg', 'jpeg', 'webp', 'gif']
+  let deleted = false
+
+  for (const root of rootsToCheck) {
+    for (const dir of candidateDirs) {
+      for (const ext of candidateExtensions) {
+        const targetPath = join(root, dir, `image-${prefix}.${ext}`)
+        try {
+          const ok = await deleteImageFromWorkspace(targetPath, rootsToCheck)
+          if (ok) deleted = true
+        } catch {
+          // ignore not found
+        }
+      }
+    }
+  }
+
+  return deleted
 }

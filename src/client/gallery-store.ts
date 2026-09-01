@@ -18,6 +18,8 @@ export interface GalleryItem {
   output?: string | undefined
   /** Workflow seed reported by the ComfyUI provider. Optional so records written by older versions stay readable; the object store is schemaless, so no IndexedDB version bump is needed. */
   seed?: number | undefined
+  /** Saved file path on workspace disk if savedTo was returned */
+  savedTo?: string | undefined
   /** Whether this item is marked as favorite */
   isFavorite?: boolean | undefined
   /** Custom tags or collection markers */
@@ -136,6 +138,7 @@ export async function saveGalleryItem(
         const existing = getReq.result as GalleryItem | undefined
         const fav = item.isFavorite !== undefined ? item.isFavorite : existing?.isFavorite
         const userTags = item.tags !== undefined ? item.tags : existing?.tags
+        const savedPath = item.savedTo !== undefined ? item.savedTo : existing?.savedTo
         const record: GalleryItem = {
           ...existing,
           ...item,
@@ -143,6 +146,7 @@ export async function saveGalleryItem(
           createdAt: existing?.createdAt ?? item.createdAt ?? Date.now(),
           ...(fav !== undefined ? { isFavorite: fav } : {}),
           ...(userTags !== undefined ? { tags: userTags } : {}),
+          ...(savedPath !== undefined ? { savedTo: savedPath } : {}),
         }
         const putReq = store.put(record)
         putReq.onsuccess = () => resolve()
@@ -241,6 +245,34 @@ export async function deleteGalleryItem(id: string): Promise<void> {
   } catch (err) {
     console.warn('[dsh-image-gen] Failed to delete gallery item from IndexedDB:', err)
   }
+}
+
+/**
+ * Bulk delete multiple gallery records by IDs and record tombstones in a single transaction.
+ */
+export async function bulkDeleteGalleryItems(ids: string[]): Promise<void> {
+  if (ids.length === 0) return
+  const db = await getDB()
+  const tombstones = await loadTombstones(db)
+  const now = Date.now()
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction([STORE_NAME, TOMBSTONE_STORE], 'readwrite')
+    const store = tx.objectStore(STORE_NAME)
+    const tombstoneStore = tx.objectStore(TOMBSTONE_STORE)
+    for (const id of ids) {
+      store.delete(id)
+      tombstoneStore.put({ id, deletedAt: now })
+    }
+    tx.oncomplete = () => {
+      for (const id of ids) {
+        tombstones.add(id)
+      }
+      resolve()
+    }
+    tx.onerror = () => reject(tx.error ?? new Error('IndexedDB transaction failed'))
+    tx.onabort = () => reject(tx.error ?? new Error('IndexedDB transaction aborted'))
+  })
+  notifyListeners()
 }
 
 /**

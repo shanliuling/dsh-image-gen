@@ -2,6 +2,8 @@
 
 /** Browser route used by the generated-image card. */
 export const IMAGE_ROUTE = '/plugins/dsh-image-gen/image'
+/** Browser route used for deleting generated images and workspace files. */
+export const DELETE_ROUTE = '/plugins/dsh-image-gen/delete'
 /** Namespace persisted through DSH Settings. */
 export const IMAGE_GENERATION_NAMESPACE = 'image-generation'
 

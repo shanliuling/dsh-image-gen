@@ -1,8 +1,14 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { saveImageToWorkspace, workspaceImageDir, workspaceImageName } from '../src/workspace-save.js'
+import {
+  deleteImageByAttachmentIdFromWorkspace,
+  deleteImageFromWorkspace,
+  saveImageToWorkspace,
+  workspaceImageDir,
+  workspaceImageName,
+} from '../src/workspace-save.js'
 
 const isWin = process.platform === 'win32'
 const root = isWin ? 'H:\\ws' : '/ws'
@@ -142,5 +148,110 @@ describe('saveImageToWorkspace', () => {
       // Neither the renamed image nor staging leftovers survive the cancel.
       expect(await readdir(base)).toEqual([])
     } finally { await rm(base, { recursive: true, force: true }) }
+  })
+})
+
+describe('deleteImageFromWorkspace', () => {
+  it('deletes an existing generated image file', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'dsh-image-gen-del-'))
+    try {
+      const saved = await saveImageToWorkspace({
+        workspaceRoot: base,
+        folder: 'test-folder',
+        attachmentId: 'sha256:1122334455667788',
+        mediaType: 'image/png',
+        data: new Uint8Array([1, 2, 3]),
+      })
+      expect((await stat(saved)).isFile()).toBe(true)
+
+      const ok = await deleteImageFromWorkspace(saved, [base])
+      expect(ok).toBe(true)
+      await expect(stat(saved)).rejects.toThrow()
+    } finally {
+      await rm(base, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects deleting files that do not conform to generated image name pattern', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'dsh-image-gen-del-'))
+    try {
+      const customFile = join(base, 'important-document.txt')
+      const ok = await deleteImageFromWorkspace(customFile, [base])
+      expect(ok).toBe(false)
+    } finally {
+      await rm(base, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects deleting files outside allowed workspace roots', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'dsh-image-gen-del-'))
+    const outside = await mkdtemp(join(tmpdir(), 'dsh-image-gen-other-'))
+    try {
+      const saved = await saveImageToWorkspace({
+        workspaceRoot: outside,
+        folder: '',
+        attachmentId: 'sha256:aabbccddeeff0011aabbccddeeff0011aabbccddeeff0011aabbccddeeff0011',
+        mediaType: 'image/png',
+        data: new Uint8Array([1]),
+      })
+      const ok = await deleteImageFromWorkspace(saved, [base])
+      expect(ok).toBe(false)
+      expect((await stat(saved)).isFile()).toBe(true)
+    } finally {
+      await rm(base, { recursive: true, force: true })
+      await rm(outside, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects deleting a file if it is a symbolic link', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'dsh-image-gen-sym-'))
+    try {
+      const target = join(base, 'secret.txt')
+      await writeFile(target, 'important')
+      const symlinkPath = join(base, 'image-12345678.png')
+      try {
+        await symlink(target, symlinkPath, 'file')
+      } catch {
+        return // Skip in environments lacking symlink creation permission
+      }
+      const ok = await deleteImageFromWorkspace(symlinkPath, [base])
+      expect(ok).toBe(false)
+      expect(await readFile(target, 'utf8')).toBe('important')
+    } finally {
+      await rm(base, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects short or invalid sha256 attachment ids in fallback deletion', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'dsh-image-gen-del-'))
+    try {
+      expect(await deleteImageByAttachmentIdFromWorkspace('a', { allowedWorkspaceRoots: [base] })).toBe(false)
+      expect(await deleteImageByAttachmentIdFromWorkspace('sha256:123', { allowedWorkspaceRoots: [base] })).toBe(false)
+    } finally {
+      await rm(base, { recursive: true, force: true })
+    }
+  })
+
+  it('finds and deletes a file by attachmentId across candidate directories', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'dsh-image-gen-del-'))
+    try {
+      const saved = await saveImageToWorkspace({
+        workspaceRoot: base,
+        folder: 'dsh-image-gen',
+        attachmentId: 'sha256:12345678abcdef0112345678abcdef0112345678abcdef0112345678abcdef01',
+        mediaType: 'image/png',
+        data: new Uint8Array([9, 8, 7]),
+      })
+      expect((await stat(saved)).isFile()).toBe(true)
+
+      const ok = await deleteImageByAttachmentIdFromWorkspace('sha256:12345678abcdef0112345678abcdef0112345678abcdef0112345678abcdef01', {
+        folder: 'dsh-image-gen',
+        allowedWorkspaceRoots: [base],
+      })
+      expect(ok).toBe(true)
+      await expect(stat(saved)).rejects.toThrow()
+    } finally {
+      await rm(base, { recursive: true, force: true })
+    }
   })
 })
