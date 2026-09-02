@@ -97,6 +97,18 @@ describe('image tool registration', () => {
     expect(tools.map(tool => tool.name)).toEqual(['generate_image', 'edit_image'])
   })
 
+  it('declares the ComfyUI seed in both tool output schemas', () => {
+    const { ctx, tools } = harnessContext()
+    apply(ctx, { provider: 'comfyui', saveToWorkspace: false })
+
+    for (const name of ['generate_image', 'edit_image']) {
+      const schema = toolByName(tools, name).output.schema as {
+        properties?: Record<string, unknown>
+      }
+      expect(schema.properties?.seed).toEqual({ type: 'integer' })
+    }
+  })
+
   it('renders a real image block and exposes the full attachment id for both tools', () => {
     const { ctx, tools } = harnessContext()
     apply(ctx, { provider: 'google', saveToWorkspace: false })
