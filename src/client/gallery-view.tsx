@@ -10,8 +10,6 @@ import {
   Image as ImageIcon,
   SlidersHorizontal,
   Heart,
-  GitCompare,
-  ListTodo,
   Search,
   Copy,
   Download,
@@ -23,22 +21,30 @@ import {
   CheckSquare,
   Check,
   AlertTriangle,
+  Sparkles,
 } from 'lucide-react'
 import {
   getGalleryItems,
   subscribeGallery,
+  saveGalleryItem,
   deleteGalleryItem,
   bulkDeleteGalleryItems,
   toggleFavoriteGalleryItem,
+  isItemInWorkspace,
   type GalleryItem,
 } from './gallery-store.js'
+import { StudioView } from './studio-view.js'
+import { evictAttachmentCache, fetchAttachmentBlob } from './image-cache.js'
+import { copyImageBlob } from './browser-image-utils.js'
+import { conversationRegenerateRequest } from './conversation-regenerate.js'
+import { STUDIO_ROUTE, type StudioWorkspaceInfo, type StudioGenerateResponse } from '../shared.js'
 
 export interface LocaleService {
   getSnapshot(): { active: string }
   subscribe(fn: () => void): () => void
 }
 
-export type TabKey = 'gallery' | 'studio' | 'favorites' | 'compare' | 'tasks'
+export type TabKey = 'gallery' | 'studio' | 'favorites'
 export type SortKey = 'newest' | 'oldest'
 
 const DICT = {
@@ -60,6 +66,8 @@ const DICT = {
     filterAllModels: '全部模型',
     filterAllRatios: '全部比例',
     searchPlaceholder: '搜索 Prompt、标签…',
+    filterCurrentWorkspace: '仅看此工作区',
+    filterCurrentWorkspaceHint: '只展示属于当前工作区的生图记录与物理文件',
     sortNewest: '最新生成',
     sortOldest: '最早生成',
 
@@ -82,6 +90,13 @@ const DICT = {
     download: '下载图片',
     copyImg: '复制图片',
     copyPpt: '复制 Prompt',
+    regenerate: '重新生成',
+    regenerateTitle: '重新生成图片',
+    regenerateHint: '可按需修改 Prompt，基于当前模型和比例在画廊生成一张新图片。',
+    confirmRegenerate: '开始生成',
+    regenerating: '正在重新生成…',
+    regenerateSuccess: '已生成新图片并收录到画廊',
+    regenerateFailed: '重新生成失败',
     delete: '从画廊删除',
     confirmDelete: '确定要从画廊中删除这张图片吗？（不会影响原聊天记录）',
     deleted: '已从画廊删除',
@@ -145,6 +160,8 @@ const DICT = {
     filterAllModels: 'All Models',
     filterAllRatios: 'All Ratios',
     searchPlaceholder: 'Search prompt, tags…',
+    filterCurrentWorkspace: 'Current workspace only',
+    filterCurrentWorkspaceHint: 'Only show images belonging to the active workspace',
     sortNewest: 'Newest first',
     sortOldest: 'Oldest first',
 
@@ -167,6 +184,13 @@ const DICT = {
     download: 'Download',
     copyImg: 'Copy Image',
     copyPpt: 'Copy Prompt',
+    regenerate: 'Regenerate',
+    regenerateTitle: 'Regenerate Image',
+    regenerateHint: 'Edit prompt if needed. A new image will be generated and added to the gallery.',
+    confirmRegenerate: 'Generate',
+    regenerating: 'Regenerating…',
+    regenerateSuccess: 'New image generated and added to gallery',
+    regenerateFailed: 'Regeneration failed',
     delete: 'Delete from gallery',
     confirmDelete: 'Are you sure you want to remove this image from the gallery? (Chat history will not be affected)',
     deleted: 'Deleted from gallery',
@@ -288,17 +312,103 @@ function formatCardMeta(item: GalleryItem): string {
   return '1:1'
 }
 
-export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
+export interface GalleryViewTabProps {
+  locale?: LocaleService
+  sessionId?: string
+  useSession?: (selector: (state: any) => any) => any
+  useSessions?: (selector: (state: any) => any) => any
+  useWorkspaces?: (selector: (state: any) => any) => any
+}
+
+export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
+  const { locale, sessionId, useSessions, useWorkspaces } = props
   const [activeTab, setActiveTab] = useState<TabKey>('gallery')
   const [items, setItems] = useState<GalleryItem[]>([])
   const [search, setSearch] = useState('')
   const [selectedProvider, setSelectedProvider] = useState<string>('all')
   const [selectedRatio, setSelectedRatio] = useState<string>('all')
   const [sortBy, setSortBy] = useState<SortKey>('newest')
+  const [onlyCurrentWorkspace, setOnlyCurrentWorkspace] = useState<boolean>(() => {
+    try {
+      const stored = localStorage.getItem('dsh-ig-only-current-workspace')
+      return stored === null ? true : stored === 'true'
+    } catch {
+      return true
+    }
+  })
+  const [serverWorkspaces, setServerWorkspaces] = useState<StudioWorkspaceInfo[]>([])
+  const [serverActiveRoot, setServerActiveRoot] = useState<string | null>(null)
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('dsh-ig-only-current-workspace', String(onlyCurrentWorkspace))
+    } catch {}
+  }, [onlyCurrentWorkspace])
+
+  useEffect(() => {
+    let mounted = true
+    fetch(STUDIO_ROUTE)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!mounted || !data) return
+        if (Array.isArray(data.workspaces)) setServerWorkspaces(data.workspaces)
+        if (typeof data.workspaceRoot === 'string') setServerActiveRoot(data.workspaceRoot)
+      })
+      .catch(() => {})
+    return () => {
+      mounted = false
+    }
+  }, [])
+
+  const liveWorkspaces = useWorkspaces ? useWorkspaces((s: any) => s?.items) : null
+  const liveSessions = useSessions ? useSessions((s: any) => s) : null
+  const currentSessionId = sessionId || liveSessions?.current
+
+  const activeWorkspace = useMemo(() => {
+    const allWs: Array<{
+      workspaceId?: string
+      path?: string
+      title?: string
+      sessionIds?: readonly string[]
+    }> =
+      Array.isArray(liveWorkspaces) && liveWorkspaces.length > 0
+        ? liveWorkspaces
+        : serverWorkspaces
+
+    if (allWs.length > 0) {
+      if (currentSessionId) {
+        const matched = allWs.find(
+          (ws) => Array.isArray(ws.sessionIds) && ws.sessionIds.includes(currentSessionId),
+        )
+        if (matched) return matched
+      }
+      if (serverActiveRoot) {
+        const normActive = serverActiveRoot.replace(/\\/g, '/').toLowerCase()
+        const matched = allWs.find(
+          (ws) => ws.path && ws.path.replace(/\\/g, '/').toLowerCase() === normActive,
+        )
+        if (matched) return matched
+      }
+      return allWs[0]
+    }
+    if (serverActiveRoot) {
+      return { workspaceId: 'default', path: serverActiveRoot, title: 'Workspace', sessionIds: [] }
+    }
+    return null
+  }, [liveWorkspaces, serverWorkspaces, currentSessionId, serverActiveRoot])
+
   const [previewItem, setPreviewItem] = useState<GalleryItem | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const previewUrlRef = useRef<string | null>(null)
+  previewUrlRef.current = previewUrl
   const [previewBlob, setPreviewBlob] = useState<Blob | null>(null)
   const [toast, setToast] = useState<string | null>(null)
+
+  // In-Gallery Regenerate State
+  const [showRegenerateModal, setShowRegenerateModal] = useState(false)
+  const [regeneratePrompt, setRegeneratePrompt] = useState('')
+  const [isRegenerating, setIsRegenerating] = useState(false)
+  const regenerateControllerRef = useRef<AbortController | null>(null)
 
   // Batch Management & Shift-Selection State
   const [isManageMode, setIsManageMode] = useState(false)
@@ -312,7 +422,7 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
   useEffect(() => {
     setSelectedIds(new Set())
     lastSelectedIndexRef.current = null
-  }, [activeTab, search, selectedProvider, selectedRatio, sortBy])
+  }, [activeTab, search, selectedProvider, selectedRatio, sortBy, onlyCurrentWorkspace])
 
   const [lang, setLang] = useState<'zh' | 'en'>(() => {
     const active = locale?.getSnapshot?.()?.active
@@ -407,6 +517,12 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
             return false
           }
         }
+        // Workspace filter
+        if (onlyCurrentWorkspace && activeWorkspace) {
+          if (!isItemInWorkspace(item, activeWorkspace)) {
+            return false
+          }
+        }
         return true
       })
       .sort((a, b) => {
@@ -415,7 +531,13 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
         }
         return b.createdAt - a.createdAt
       })
-  }, [items, activeTab, selectedProvider, selectedRatio, search, sortBy])
+  }, [items, activeTab, selectedProvider, selectedRatio, search, sortBy, onlyCurrentWorkspace, activeWorkspace])
+
+  // Count of items belonging to the current workspace (before other search/filter criteria)
+  const workspaceItemsCount = useMemo(() => {
+    if (!activeWorkspace) return items.length
+    return items.filter((item) => isItemInWorkspace(item, activeWorkspace)).length
+  }, [items, activeWorkspace])
 
   // Current item index in the active filtered sequence
   const currentPreviewIndex = useMemo(() => {
@@ -432,14 +554,16 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
       abortControllerRef.current.abort()
       abortControllerRef.current = null
     }
-    if (previewUrl) {
-      URL.revokeObjectURL(previewUrl)
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current)
+      previewUrlRef.current = null
     }
     setPreviewItem(item)
 
     if (blob) {
       blobCache.set(item.id, blob)
       const url = URL.createObjectURL(blob)
+      previewUrlRef.current = url
       setPreviewBlob(blob)
       setPreviewUrl(url)
       setPreviewLoading(false)
@@ -449,6 +573,7 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
     const cached = blobCache.get(item.id)
     if (cached) {
       const url = URL.createObjectURL(cached)
+      previewUrlRef.current = url
       setPreviewBlob(cached)
       setPreviewUrl(url)
       setPreviewLoading(false)
@@ -462,20 +587,12 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
     const controller = new AbortController()
     abortControllerRef.current = controller
 
-    void fetch(IMAGE_ROUTE, {
-      method: 'POST',
-      signal: controller.signal,
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ attachment: item.attachment }),
-    })
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        return res.blob()
-      })
+    fetchAttachmentBlob(item.attachment)
       .then((fetchedBlob) => {
         if (controller.signal.aborted) return
         blobCache.set(item.id, fetchedBlob)
         const url = URL.createObjectURL(fetchedBlob)
+        previewUrlRef.current = url
         setPreviewBlob(fetchedBlob)
         setPreviewUrl(url)
         setPreviewLoading(false)
@@ -493,8 +610,15 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
       abortControllerRef.current.abort()
       abortControllerRef.current = null
     }
-    if (previewUrl) {
-      URL.revokeObjectURL(previewUrl)
+    if (regenerateControllerRef.current) {
+      regenerateControllerRef.current.abort()
+      regenerateControllerRef.current = null
+      setIsRegenerating(false)
+    }
+    setShowRegenerateModal(false)
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current)
+      previewUrlRef.current = null
     }
     setPreviewItem(null)
     setPreviewUrl(null)
@@ -516,18 +640,119 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
     }
   }
 
-  // Clean up any remaining preview URL on unmount
+  const handleOpenRegenerate = () => {
+    if (!previewItem || isRegenerating) return
+    setRegeneratePrompt(previewItem.prompt)
+    setShowRegenerateModal(true)
+  }
+
+  const handleCancelRegeneratePrompt = () => {
+    setShowRegenerateModal(false)
+  }
+
+  const handleAbortRegenerating = () => {
+    regenerateControllerRef.current?.abort()
+    regenerateControllerRef.current = null
+    setIsRegenerating(false)
+    showToast(t('cancel'))
+  }
+
+  const handleConfirmRegenerate = async () => {
+    if (!previewItem || isRegenerating || regeneratePrompt.trim().length === 0) return
+    setShowRegenerateModal(false)
+    setIsRegenerating(true)
+
+    const controller = new AbortController()
+    regenerateControllerRef.current = controller
+
+    try {
+      const request = conversationRegenerateRequest(
+        previewItem,
+        regeneratePrompt,
+        previewItem.aspectRatio
+          ? { ratio: previewItem.aspectRatio, quality: previewItem.imageSize || 'standard' }
+          : undefined,
+      )
+      if (activeWorkspace?.path) {
+        request.workspaceRoot = activeWorkspace.path
+      }
+
+      const response = await fetch(STUDIO_ROUTE, {
+        method: 'POST',
+        credentials: 'same-origin',
+        signal: controller.signal,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(request),
+      })
+
+      const payload = (await response.json().catch(() => null)) as
+        | StudioGenerateResponse
+        | { error?: string }
+        | null
+
+      if (!response.ok || payload === null || !('attachment' in payload)) {
+        throw new Error(
+          payload && 'error' in payload && payload.error ? payload.error : t('regenerateFailed'),
+        )
+      }
+
+      const newItem: GalleryItem = {
+        id: String(payload.attachment.attachmentId),
+        attachment: payload.attachment,
+        prompt: payload.prompt,
+        provider: payload.provider,
+        model: payload.model,
+        createdAt: payload.createdAt,
+        aspectRatio: request.ratio,
+        imageSize: request.quality,
+        output: payload.output,
+        ...(payload.savedTo ? { savedTo: payload.savedTo } : {}),
+        ...(activeWorkspace?.path ? { workspacePath: activeWorkspace.path } : {}),
+        ...(activeWorkspace?.workspaceId ? { workspaceId: activeWorkspace.workspaceId } : {}),
+        ...(currentSessionId ? { sessionId: currentSessionId } : {}),
+      }
+
+      await saveGalleryItem(newItem)
+
+      if (activeTab !== 'gallery') {
+        setActiveTab('gallery')
+      }
+      if (search.trim().length > 0) {
+        setSearch('')
+      }
+
+      // Smoothly update preview to the newly created item and load its image blob
+      openPreviewItem(newItem)
+      showToast(t('regenerateSuccess'))
+    } catch (err) {
+      if (controller.signal.aborted) return
+      showToast(err instanceof Error ? err.message : String(err))
+    } finally {
+      setIsRegenerating(false)
+      regenerateControllerRef.current = null
+    }
+  }
+
+  // Clean up only on component unmount
   useEffect(() => {
     return () => {
       if (abortControllerRef.current) abortControllerRef.current.abort()
-      if (previewUrl) URL.revokeObjectURL(previewUrl)
+      if (regenerateControllerRef.current) regenerateControllerRef.current.abort()
+      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current)
     }
-  }, [previewUrl])
+  }, [])
 
   // Keyboard navigation: Esc (close modal or preview), ArrowLeft (prev), ArrowRight (next)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) {
+        return
+      }
+      if (showRegenerateModal) {
+        if (e.key === 'Escape') {
+          e.preventDefault()
+          setShowRegenerateModal(false)
+        }
         return
       }
       if (showDeleteModal) {
@@ -552,7 +777,7 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [showDeleteModal, isDeleting, isManageMode, previewItem, currentPreviewIndex, filteredItems])
+  }, [showRegenerateModal, showDeleteModal, isDeleting, isManageMode, previewItem, currentPreviewIndex, filteredItems])
 
   // Shift-Click Range Selection & Card Click Handler
   const handleCardClick = (item: GalleryItem, index: number, e: MouseEvent, blob?: Blob) => {
@@ -661,6 +886,11 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
     setShowDeleteModal(true)
   }
 
+  const hasWorkspaceFilesToDelete = useMemo(
+    () => items.some(i => selectedIds.has(i.id) && typeof i.savedTo === 'string' && i.savedTo.trim().length > 0),
+    [items, selectedIds]
+  )
+
   // Execute batch deletion (IndexedDB single transaction + optional workspace disk unlink)
   const handleConfirmBatchDelete = async () => {
     if (selectedIds.size === 0 || isDeleting) return
@@ -669,47 +899,52 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
     const idsToDelete = Array.from(selectedIds)
     const itemsToDelete = items.filter((i) => selectedIds.has(i.id))
 
-    // 1. Separate items: if savedTo is known, ONLY use exact path (no broad scan!)
+    // 1. Collect exact workspace file paths
     const pathsToDelete = itemsToDelete
       .map((i) => i.savedTo)
       .filter((p): p is string => typeof p === 'string' && p.trim().length > 0)
 
-    // 2. Only send attachmentId as fallback for legacy items that lack savedTo:
-    const fallbackAttachmentIds = itemsToDelete
-      .filter((i) => !i.savedTo || !i.savedTo.trim())
-      .map((i) => i.id)
-
     let deletedFiles = 0
-    let failedFilesCount = 0
 
-    if (deleteWorkspaceFiles && (pathsToDelete.length > 0 || fallbackAttachmentIds.length > 0)) {
+    if (deleteWorkspaceFiles && pathsToDelete.length > 0) {
       try {
         const res = await fetch(DELETE_ROUTE, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
             paths: pathsToDelete,
-            attachmentIds: fallbackAttachmentIds,
           }),
         })
-        if (res.ok) {
-          const data = (await res.json()) as {
-            deletedCount?: number
-            failedFiles?: { path: string; error: string }[]
-          }
-          deletedFiles = data.deletedCount ?? 0
-          if (Array.isArray(data.failedFiles)) {
-            failedFilesCount = data.failedFiles.length
-          }
+        if (!res.ok) {
+          setIsDeleting(false)
+          showToast(`工作区文件删除失败 (${res.status})`)
+          return
         }
+        const data = (await res.json().catch(() => null)) as {
+          ok?: boolean
+          deletedCount?: number
+          failedFiles?: { path: string; error: string }[]
+        } | null
+        if (!data || data.ok === false || (Array.isArray(data.failedFiles) && data.failedFiles.length > 0)) {
+          setIsDeleting(false)
+          const reason = data?.failedFiles?.[0]?.error || '工作区文件未能删除'
+          showToast(`删除失败：${reason}`)
+          return
+        }
+        deletedFiles = data.deletedCount ?? 0
       } catch (err) {
-        console.warn('[dsh-image-gen] Workspace file deletion failed:', err)
+        setIsDeleting(false)
+        showToast(err instanceof Error ? err.message : '工作区文件删除网络异常')
+        return
       }
     }
 
-    // 3. Perform IndexedDB deletion with real error handling
+    // 2. Perform IndexedDB deletion with real error handling
     try {
       await bulkDeleteGalleryItems(idsToDelete)
+      for (const item of itemsToDelete) {
+        evictAttachmentCache(item.attachment.attachmentId)
+      }
     } catch (err) {
       setIsDeleting(false)
       showToast(t('deleteFailedDatabase'))
@@ -730,9 +965,7 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
       lastSelectedIndexRef.current = null
     }
 
-    if (failedFilesCount > 0) {
-      showToast(t('deleteFailedFileLocked', { count: String(idsToDelete.length), files: String(failedFilesCount) }))
-    } else if (deletedFiles > 0) {
+    if (deletedFiles > 0) {
       showToast(t('batchDeletedWithFilesToast', { count: String(idsToDelete.length), files: String(deletedFiles) }))
     } else {
       showToast(t('batchDeletedToast', { count: String(idsToDelete.length) }))
@@ -740,7 +973,7 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
   }
 
   return (
-    <div className="dsh-ig-gallery-page">
+    <div className="dsh-ig-gallery-page" data-conversation-composer-overlay="">
       {/* 1. Top Navigation Tabs */}
       <header className="dsh-ig-studio-tabs-bar">
         <button
@@ -768,24 +1001,6 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
         >
           <Heart size={15} />
           <span>{t('tabFavorites')}</span>
-        </button>
-
-        <button
-          type="button"
-          className={`dsh-ig-studio-tab-btn ${activeTab === 'compare' ? 'is-active' : ''}`}
-          onClick={() => setActiveTab('compare')}
-        >
-          <GitCompare size={15} />
-          <span>{t('tabCompare')}</span>
-        </button>
-
-        <button
-          type="button"
-          className={`dsh-ig-studio-tab-btn ${activeTab === 'tasks' ? 'is-active' : ''}`}
-          onClick={() => setActiveTab('tasks')}
-        >
-          <ListTodo size={15} />
-          <span>{t('tabTasks')}</span>
         </button>
       </header>
 
@@ -834,6 +1049,20 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
                 onChange={(e) => setSearch(e.target.value)}
               />
             </div>
+
+            {/* Filter: Current Workspace Only */}
+            <label className="dsh-ig-workspace-filter-label" title={t('filterCurrentWorkspaceHint')}>
+              <input
+                type="checkbox"
+                className="dsh-ig-workspace-checkbox"
+                checked={onlyCurrentWorkspace}
+                onChange={(e) => setOnlyCurrentWorkspace(e.target.checked)}
+              />
+              <span className="dsh-ig-workspace-filter-text">{t('filterCurrentWorkspace')}</span>
+              <span className="dsh-ig-workspace-filter-badge">
+                {workspaceItemsCount}/{items.length}
+              </span>
+            </label>
           </div>
 
           <div className="dsh-ig-studio-toolbar-right">
@@ -868,7 +1097,7 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
       )}
 
       {/* 3. Main View Body */}
-      <div className="dsh-ig-gallery-page-body">
+      <div className={`dsh-ig-gallery-page-body ${activeTab === 'studio' ? 'is-workbench' : ''}`}>
         {activeTab === 'gallery' || activeTab === 'favorites' ? (
           items.length === 0 ? (
             <div className="dsh-ig-gallery-empty">
@@ -908,28 +1137,8 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
               ))}
             </div>
           )
-        ) : activeTab === 'studio' ? (
-          <PlaceholderView
-            icon="🎨"
-            title={t('studioTitle')}
-            description={t('studioDesc')}
-            tip={t('studioTip')}
-            badge={t('comingSoonBadge')}
-          />
-        ) : activeTab === 'compare' ? (
-          <PlaceholderView
-            icon="🔀"
-            title={t('compareTitle')}
-            description={t('compareDesc')}
-            badge={t('comingSoonBadge')}
-          />
         ) : (
-          <PlaceholderView
-            icon="📋"
-            title={t('tasksTitle')}
-            description={t('tasksDesc')}
-            badge={t('comingSoonBadge')}
-          />
+          <StudioView locale={locale} workspace={activeWorkspace} />
         )}
       </div>
 
@@ -1017,15 +1226,17 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
                 {t('batchDeleteDesc')}
               </p>
 
-              <label className="dsh-ig-modal-checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={deleteWorkspaceFiles}
-                  onChange={(e) => setDeleteWorkspaceFiles(e.target.checked)}
-                  disabled={isDeleting}
-                />
-                <span>{t('deleteWorkspaceFilesOpt')}</span>
-              </label>
+              {hasWorkspaceFilesToDelete && (
+                <label className="dsh-ig-modal-checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={deleteWorkspaceFiles}
+                    onChange={(e) => setDeleteWorkspaceFiles(e.target.checked)}
+                    disabled={isDeleting}
+                  />
+                  <span>{t('deleteWorkspaceFilesOpt')}</span>
+                </label>
+              )}
             </div>
 
             <div className="dsh-ig-modal-footer">
@@ -1051,6 +1262,61 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
                   : selectedIds.size === 1
                   ? t('confirmDeleteSingle')
                   : t('confirmBatchDelete', { count: String(selectedIds.size) })}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 6. Regenerate Prompt Modal */}
+      {showRegenerateModal && previewItem && (
+        <div
+          className="dsh-ig-modal-backdrop"
+          onClick={handleCancelRegeneratePrompt}
+        >
+          <div className="dsh-ig-modal-box dsh-ig-regenerate-modal-box" onClick={(e) => e.stopPropagation()}>
+            <div className="dsh-ig-modal-header">
+              <div className="dsh-ig-regenerate-modal-icon">
+                <Sparkles size={18} />
+              </div>
+              <div className="dsh-ig-regenerate-modal-title-wrap">
+                <div className="dsh-ig-modal-title">{t('regenerateTitle')}</div>
+                <div className="dsh-ig-regenerate-modal-meta">
+                  <span className="dsh-ig-tag">{previewItem.provider}</span>
+                  {previewItem.model && <span className="dsh-ig-tag dsh-ig-tag-model">{previewItem.model}</span>}
+                  <span className="dsh-ig-tag">{formatCardMeta(previewItem)}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="dsh-ig-modal-body">
+              <p className="dsh-ig-modal-desc">{t('regenerateHint')}</p>
+              <textarea
+                className="dsh-ig-regenerate-modal-textarea"
+                value={regeneratePrompt}
+                onChange={(e) => setRegeneratePrompt(e.target.value)}
+                placeholder={t('prompt')}
+                rows={4}
+                autoFocus
+              />
+            </div>
+
+            <div className="dsh-ig-modal-footer">
+              <button
+                type="button"
+                className="dsh-ig-modal-btn dsh-ig-modal-btn-cancel"
+                onClick={handleCancelRegeneratePrompt}
+              >
+                {t('cancel')}
+              </button>
+              <button
+                type="button"
+                className="dsh-ig-modal-btn dsh-ig-modal-btn-primary"
+                onClick={handleConfirmRegenerate}
+                disabled={regeneratePrompt.trim().length === 0}
+              >
+                <Sparkles size={14} />
+                <span>{t('confirmRegenerate')}</span>
               </button>
             </div>
           </div>
@@ -1185,6 +1451,31 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
                 <Download size={14} />
                 <span>{t('download')}</span>
               </button>
+
+              <button
+                type="button"
+                className="dsh-ig-lightbox-btn dsh-ig-lightbox-btn-regenerate"
+                title={t('regenerate')}
+                disabled={isRegenerating}
+                onClick={handleOpenRegenerate}
+              >
+                <Sparkles size={14} />
+                <span>{t('regenerate')}</span>
+              </button>
+
+              {isRegenerating && (
+                <div className="dsh-ig-lightbox-generating-indicator">
+                  <div className="dsh-ig-lightbox-spinner-sm" />
+                  <span>{t('regenerating')}</span>
+                  <button
+                    type="button"
+                    className="dsh-ig-lightbox-abort-btn"
+                    onClick={handleAbortRegenerating}
+                  >
+                    {t('cancel')}
+                  </button>
+                </div>
+              )}
 
               <button
                 type="button"
@@ -1450,33 +1741,4 @@ const PlaceholderView: FC<PlaceholderViewProps> = ({
   )
 }
 
-export async function copyImageBlob(blob: Blob): Promise<boolean> {
-  try {
-    if (blob.type === 'image/png') {
-      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
-      return true
-    }
-    const img = new Image()
-    const url = URL.createObjectURL(blob)
-    await new Promise((resolve, reject) => {
-      img.onload = resolve
-      img.onerror = reject
-      img.src = url
-    })
-    const canvas = document.createElement('canvas')
-    canvas.width = img.naturalWidth
-    canvas.height = img.naturalHeight
-    const ctx = canvas.getContext('2d')
-    if (!ctx) throw new Error('Canvas unavailable')
-    ctx.drawImage(img, 0, 0)
-    URL.revokeObjectURL(url)
-    const pngBlob = await new Promise<Blob | null>((res) => {
-      canvas.toBlob(res, 'image/png')
-    })
-    if (!pngBlob) throw new Error('Blob conversion failed')
-    await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })])
-    return true
-  } catch (_err) {
-    return false
-  }
-}
+export { copyImageBlob } from './browser-image-utils.js'

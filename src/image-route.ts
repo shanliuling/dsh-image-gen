@@ -15,7 +15,6 @@ export interface ImageRouteDeps {
 /** Dependencies required by the delete route. */
 export interface DeleteRouteDeps {
   deleteWorkspaceImage(filePath: string): Promise<boolean>
-  deleteWorkspaceImageByAttachmentId(attachmentId: string): Promise<boolean>
 }
 
 /** Serve one verified durable image reference to a same-origin browser request. */
@@ -67,14 +66,11 @@ export async function serveDelete(req: IncomingMessage, res: ServerResponse, dep
   const rawPaths = typeof body === 'object' && body !== null && 'paths' in body && Array.isArray((body as Record<string, unknown>).paths)
     ? (body as { paths: unknown[] }).paths
     : []
-  const rawAttachmentIds = typeof body === 'object' && body !== null && 'attachmentIds' in body && Array.isArray((body as Record<string, unknown>).attachmentIds)
-    ? (body as { attachmentIds: unknown[] }).attachmentIds
-    : []
 
   const deletedFiles: string[] = []
   const failedFiles: { path: string; error: string }[] = []
 
-  // 1. Delete by direct paths if provided
+  // Delete by direct paths
   for (const p of rawPaths) {
     if (typeof p === 'string' && p.trim()) {
       try {
@@ -86,20 +82,6 @@ export async function serveDelete(req: IncomingMessage, res: ServerResponse, dep
         }
       } catch (err) {
         failedFiles.push({ path: p, error: err instanceof Error ? err.message : String(err) })
-      }
-    }
-  }
-
-  // 2. Delete by attachment ID (handles historical records where savedTo was not persisted)
-  for (const id of rawAttachmentIds) {
-    if (typeof id === 'string' && id.trim()) {
-      try {
-        const ok = await deps.deleteWorkspaceImageByAttachmentId(id)
-        if (ok) {
-          deletedFiles.push(id)
-        }
-      } catch (err) {
-        failedFiles.push({ path: id, error: err instanceof Error ? err.message : String(err) })
       }
     }
   }

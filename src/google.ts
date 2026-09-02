@@ -35,17 +35,31 @@ export function editGoogleImage(input: GoogleRequestBase & {
   prompt: string
   sourceImages: Array<{ data: Uint8Array; mediaType: ImageMediaType }>
 }): Promise<GeneratedImage> {
+  const interactionInput = input.sourceImages.length === 1
+    ? [
+        {
+          type: 'image',
+          mime_type: input.sourceImages[0]!.mediaType,
+          data: Buffer.from(input.sourceImages[0]!.data).toString('base64'),
+        },
+        { type: 'text', text: input.prompt },
+      ]
+    : [
+        ...input.sourceImages.flatMap((sourceImage, index) => [
+          { type: 'text', text: `图 ${index + 1} (Image ${index + 1}):` },
+          {
+            type: 'image',
+            mime_type: sourceImage.mediaType,
+            data: Buffer.from(sourceImage.data).toString('base64'),
+          },
+        ]),
+        { type: 'text', text: input.prompt },
+      ]
+
   return requestGoogleImage({
     ...input,
     operation: 'editing',
-    interactionInput: [
-      { type: 'text', text: input.prompt },
-      ...input.sourceImages.map(sourceImage => ({
-        type: 'image',
-        mime_type: sourceImage.mediaType,
-        data: Buffer.from(sourceImage.data).toString('base64'),
-      })),
-    ],
+    interactionInput,
   })
 }
 

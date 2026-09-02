@@ -1,7 +1,8 @@
 /** Persist one generated image as a file under the session workspace. */
 import { randomUUID } from 'node:crypto'
 import { lstat, mkdir, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises'
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import type { StudioWorkspaceInfo } from './shared.js'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 
 /** File extension for each supported image media type. */
@@ -171,6 +172,40 @@ export async function getDshWorkspaceRoots(): Promise<string[]> {
   return roots
 }
 
+/** Discover detailed workspace records from DSH workspace.json storage. */
+export async function getDshWorkspacesFull(): Promise<StudioWorkspaceInfo[]> {
+  const list: StudioWorkspaceInfo[] = []
+  try {
+    const home = process.env.USERPROFILE || process.env.HOME || ''
+    if (home) {
+      const workspaceJsonPath = join(home, '.dsh', 'storages', 'workspace.json')
+      const content = await readFile(workspaceJsonPath, 'utf8')
+      const parsed = JSON.parse(content)
+      const workspaces = parsed?.tables?.workspaces
+      if (workspaces && typeof workspaces === 'object') {
+        for (const [id, ws] of Object.entries(workspaces)) {
+          const raw = ws as Record<string, unknown> | null | undefined
+          if (raw && typeof raw.path === 'string') {
+            const p = raw.path.trim()
+            if (!p) continue
+            const title = typeof raw.title === 'string' && raw.title.trim()
+              ? raw.title.trim()
+              : basename(p)
+            const rawSessions = raw.sessionIds
+            const sessionIds = Array.isArray(rawSessions)
+              ? rawSessions.filter((s): s is string => typeof s === 'string')
+              : []
+            list.push({ workspaceId: id, path: p, title, sessionIds })
+          }
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return list
+}
+
 /**
  * Safely delete a generated image file from workspace disk by its path.
  * Enforces strict safety gates:
@@ -289,8 +324,11 @@ export async function deleteImageByAttachmentIdFromWorkspace(
       for (const ext of candidateExtensions) {
         const targetPath = join(root, dir, `image-${prefix}.${ext}`)
         try {
-          const ok = await deleteImageFromWorkspace(targetPath, rootsToCheck)
-          if (ok) deleted = true
+          const fileLstat = await lstat(targetPath)
+          if (fileLstat.isFile() && !fileLstat.isSymbolicLink()) {
+            const ok = await deleteImageFromWorkspace(targetPath, rootsToCheck)
+            if (ok) deleted = true
+          }
         } catch {
           // ignore not found
         }

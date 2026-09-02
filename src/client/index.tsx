@@ -1,4 +1,4 @@
-import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react'
+import { useEffect, useState, useRef, type ChangeEvent, type FormEvent } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { SettingsScope, ToolCallBlock } from '@deepseek-ai/dsh-client-runtime/client'
@@ -8,27 +8,40 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import type {} from '@deepseek-ai/dsh-client-ui-tool/client'
 import {
+  CLOUD_IMAGE_PROVIDERS,
   DEFAULT_BASE_URLS,
   DEFAULT_COMFYUI_TIMEOUT_MS,
   DEFAULT_MODELS,
   IMAGE_GENERATION_NAMESPACE,
   IMAGE_ROUTE,
   MAX_COMFYUI_WORKFLOW_BYTES,
+  STUDIO_ROUTE,
   activeComfyUIWorkflow,
   resolveComfyUIWorkflows,
   uniqueComfyUIWorkflowName,
   type ComfyUIWorkflowEntry,
   type ImageProvider,
+  type StudioGenerateResponse,
 } from '../shared.js'
 import { validateComfyUIWorkflowJson } from '../comfyui-workflow.js'
 import { saveGalleryItem } from './gallery-store.js'
 import { GalleryViewTab, copyImageBlob, type LocaleService } from './gallery-view.js'
+import { fetchAttachmentBlob } from './image-cache.js'
 import { imageRef } from './image-ref.js'
+import { STUDIO_STYLE } from './studio-style.js'
 import {
   IMAGE_RESULT_NODE_KIND,
   createImageResultDefinition,
   type ImageResultPresentation,
 } from './image-result-node.js'
+import {
+  appendConversationImageRevision,
+  loadConversationImageRevisionChain,
+  selectConversationImageRevision,
+  type ConversationImageRevision,
+  type ConversationImageRevisionChain,
+} from './conversation-image-revisions.js'
+import { conversationRegenerateRequest } from './conversation-regenerate.js'
 
 type Provider = ImageProvider
 interface ImageSettings {
@@ -144,6 +157,17 @@ const DICT = {
     openNewTab: '新标签页打开',
     copiedImage: '已复制图片',
     copyFailed: '复制失败',
+    regenerate: '重新生成',
+    regenerateTitle: '重新生成图片',
+    regenerateHint: '如有需要可微调提示词。生成的新图片将替代当前展示，原图依然可在版本中查看。',
+    prompt: '提示词',
+    cancel: '取消',
+    confirmRegenerate: '确认生成',
+    regenerating: '重新生成中…',
+    regenerateFailed: '重新生成失败',
+    versionPrevious: '上一版本',
+    versionNext: '下一版本',
+    versionLabel: '图片版本 {current}/{total}',
   },
   en: {
     title: 'Image Generation',
@@ -201,6 +225,17 @@ const DICT = {
     openNewTab: 'Open in new tab',
     copiedImage: 'Image copied',
     copyFailed: 'Copy failed',
+    regenerate: 'Regenerate',
+    regenerateTitle: 'Regenerate image',
+    regenerateHint: 'Edit the prompt if needed. The new image replaces this view while the original remains available.',
+    prompt: 'Prompt',
+    cancel: 'Cancel',
+    confirmRegenerate: 'Regenerate',
+    regenerating: 'Regenerating…',
+    regenerateFailed: 'Regeneration failed',
+    versionPrevious: 'Previous version',
+    versionNext: 'Next version',
+    versionLabel: 'Image version {current}/{total}',
   },
 } as const
 
@@ -249,14 +284,39 @@ const STYLE = `
 .dsh-ig-result{display:grid;gap:10px;max-width:520px}
 .dsh-ig-promoted-results{display:grid;gap:16px}
 .dsh-ig-result-title{font-size:14px;font-weight:600}
-.dsh-ig-container{position:relative;display:inline-block;width:fit-content;max-width:100%;justify-self:start;border-radius:12px;overflow:hidden;line-height:0}
-.dsh-ig-container:hover .dsh-ig-toolbar{opacity:1;pointer-events:auto}
-.dsh-ig-toolbar{position:absolute;top:8px;left:8px;display:flex;align-items:center;gap:5px;padding:3px 5px;border-radius:8px;background:rgba(0,0,0,0.65);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);opacity:0;pointer-events:none;transition:opacity .18s ease;z-index:10;line-height:1}
+.dsh-ig-container{position:relative;display:inline-block;width:fit-content;max-width:100%;justify-self:start;border-radius:12px;overflow:hidden;line-height:0;isolation:isolate}
+.dsh-ig-container:hover .dsh-ig-toolbar,.dsh-ig-container:focus-within .dsh-ig-toolbar{opacity:1;pointer-events:auto}
+.dsh-ig-toolbar{position:absolute;top:8px;left:8px;display:flex;align-items:center;gap:5px;padding:3px 5px;border-radius:8px;background:rgba(0,0,0,0.65);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);opacity:0;pointer-events:none;transition:opacity .18s ease;z-index:2;line-height:1}
 .dsh-ig-tool-btn{appearance:none;border:0;background:transparent;color:#fff;padding:5px;border-radius:6px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:background .15s,color .15s}
 .dsh-ig-tool-btn:hover{background:rgba(255,255,255,0.25)}
 .dsh-ig-tool-btn-danger:hover{background:rgba(239,68,68,0.75)!important;color:#fff!important}
-.dsh-ig-toast{position:absolute;top:100%;left:0;margin-top:5px;padding:3px 8px;border-radius:6px;background:rgba(0,0,0,0.85);color:#fff;font-size:11px;white-space:nowrap;pointer-events:none;z-index:20}
+.dsh-ig-toast{position:absolute;top:100%;left:0;margin-top:5px;padding:3px 8px;border-radius:6px;background:rgba(0,0,0,0.85);color:#fff;font-size:11px;white-space:nowrap;pointer-events:none;z-index:4}
 .dsh-ig-image{display:block;max-width:100%;max-height:520px;border-radius:12px;background:#f2f3f5;cursor:pointer}
+.dsh-ig-version-nav{position:absolute;right:8px;bottom:8px;display:flex;align-items:center;gap:2px;padding:3px;border-radius:999px;background:rgba(15,23,42,.72);color:#fff;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);font-size:11px;line-height:1;z-index:2}
+.dsh-ig-version-nav button{appearance:none;border:0;background:transparent;color:inherit;width:25px;height:25px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;font-size:17px;line-height:1}
+.dsh-ig-version-nav button:hover:not(:disabled){background:rgba(255,255,255,.2)}
+.dsh-ig-version-nav button:disabled{opacity:.3;cursor:default}
+.dsh-ig-version-count{min-width:34px;text-align:center;font-variant-numeric:tabular-nums}
+.dsh-ig-regenerate-overlay{position:absolute;inset:0;background:rgba(15,23,42,0.52);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:#fff;z-index:3;animation:dsh-ig-fade .18s ease-out;line-height:1.4;border-radius:12px}
+.dsh-ig-regenerate-spinner{width:28px;height:28px;border:3px solid rgba(255,255,255,0.25);border-top-color:#fff;border-radius:50%;animation:dsh-ig-spin .8s linear infinite}
+.dsh-ig-regenerate-overlay-text{font-size:12.5px;font-weight:550;color:#fff;letter-spacing:0.2px;text-shadow:0 1px 2px rgba(0,0,0,0.4)}
+.dsh-ig-regenerate-overlay-cancel{appearance:none;border:1px solid rgba(255,255,255,0.4);border-radius:6px;background:rgba(255,255,255,0.15);color:#fff;padding:3px 12px;font-size:11.5px;cursor:pointer;transition:background .15s}
+.dsh-ig-regenerate-overlay-cancel:hover{background:rgba(255,255,255,0.3)}
+@keyframes dsh-ig-spin{to{transform:rotate(360deg)}}
+.dsh-ig-regenerate-backdrop{position:fixed;inset:0;z-index:100000;display:flex;align-items:center;justify-content:center;padding:18px;background:rgba(11,17,29,.6);backdrop-filter:blur(5px);-webkit-backdrop-filter:blur(5px);animation:dsh-ig-fade .15s ease-out}
+.dsh-ig-regenerate-dialog{width:min(520px,100%);border:1px solid var(--dsw-alias-border-l2,#dfe3ea);border-radius:14px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#172033);box-shadow:0 24px 72px rgba(11,17,29,.28);padding:20px;box-sizing:border-box;line-height:1.4}
+.dsh-ig-regenerate-dialog h3{margin:0;font-size:16px;font-weight:650}
+.dsh-ig-regenerate-dialog p{margin:7px 0 16px;color:var(--dsw-alias-label-tertiary,#737d8f);font-size:12.5px;line-height:1.55}
+.dsh-ig-regenerate-dialog label{display:grid;gap:7px;font-size:12.5px;font-weight:600}
+.dsh-ig-regenerate-dialog textarea{box-sizing:border-box;width:100%;min-height:132px;resize:vertical;border:1px solid var(--dsw-alias-border-l2,#d7dce5);border-radius:9px;padding:11px 12px;background:var(--dsw-alias-bg-layer-2,#fff);color:inherit;font:inherit;font-size:13px;line-height:1.55;outline:none}
+.dsh-ig-regenerate-dialog textarea:focus{border-color:var(--dsw-alias-brand-primary,#4c78ff);box-shadow:0 0 0 3px rgba(76,120,255,.12)}
+.dsh-ig-regenerate-error{margin-top:10px!important;color:var(--dsw-alias-label-error,#d33)!important}
+.dsh-ig-regenerate-actions{display:flex;justify-content:flex-end;gap:9px;margin-top:16px}
+.dsh-ig-regenerate-actions button{height:35px;padding:0 14px;border-radius:7px;font:inherit;font-size:13px;font-weight:550;cursor:pointer}
+.dsh-ig-regenerate-cancel{border:1px solid var(--dsw-alias-border-l2,#d7dce5);background:transparent;color:inherit}
+.dsh-ig-regenerate-confirm{border:1px solid var(--dsw-alias-brand-primary,#3569ed);background:var(--dsw-alias-brand-primary,#3569ed);color:#fff}
+.dsh-ig-regenerate-actions button:disabled{opacity:.5;cursor:default}
+@media(hover:none){.dsh-ig-container .dsh-ig-toolbar{opacity:1;pointer-events:auto}}
 @keyframes dsh-ig-fade{from{opacity:0}to{opacity:1}}
 .dsh-ig-error{color:var(--dsw-alias-label-error,#d33);font-size:13px}
 .dsh-ig-loading{color:var(--dsw-alias-label-tertiary,#7b818b);font-size:13px}
@@ -387,7 +447,7 @@ const STYLE = `
 .dsh-ig-batch-btn-exit:hover{background:rgba(255,255,255,0.1);color:#fff}
 
 /* Batch Delete Confirmation Modal */
-.dsh-ig-modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.65);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);z-index:99995;display:flex;align-items:center;justify-content:center;padding:16px;animation:dsh-ig-fade .15s ease-out}
+.dsh-ig-modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.65);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);z-index:100005;display:flex;align-items:center;justify-content:center;padding:16px;animation:dsh-ig-fade .15s ease-out}
 .dsh-ig-modal-box{width:100%;max-width:440px;background:var(--dsw-alias-bg-layer-1,#1c1e24);border:1px solid var(--dsw-alias-border-subtle,rgba(255,255,255,0.12));border-radius:12px;padding:22px;box-sizing:border-box;box-shadow:0 20px 50px rgba(0,0,0,0.45);color:var(--dsw-alias-label-primary,#fff);animation:dsh-ig-scale-up .15s ease-out}
 @keyframes dsh-ig-scale-up{from{transform:scale(0.95);opacity:0}to{transform:scale(1);opacity:1}}
 .dsh-ig-modal-header{display:flex;align-items:flex-start;gap:12px;margin-bottom:12px}
@@ -403,9 +463,26 @@ const STYLE = `
 .dsh-ig-modal-btn-cancel:hover{background:var(--dsw-alias-bg-layer-3,rgba(255,255,255,0.08))}
 .dsh-ig-modal-btn-danger{background:#dc2626;border:1px solid #dc2626;color:#fff}
 .dsh-ig-modal-btn-danger:hover{background:#b91c1c;border-color:#b91c1c}
+.dsh-ig-modal-btn-primary{background:linear-gradient(135deg,#3b82f6,#2563eb);border:1px solid #2563eb;color:#fff;display:inline-flex;align-items:center;gap:6px}
+.dsh-ig-modal-btn-primary:hover:not(:disabled){background:linear-gradient(135deg,#2563eb,#1d4ed8)}
+.dsh-ig-modal-btn-primary:disabled{opacity:0.5;cursor:not-allowed}
+.dsh-ig-regenerate-modal-box{max-width:520px}
+.dsh-ig-regenerate-modal-icon{width:36px;height:36px;border-radius:50%;background:rgba(59,130,246,0.15);color:#3b82f6;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.dsh-ig-regenerate-modal-title-wrap{display:flex;flex-direction:column;gap:4px}
+.dsh-ig-regenerate-modal-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.dsh-ig-regenerate-modal-textarea{width:100%;box-sizing:border-box;background:var(--dsw-alias-bg-layer-2,rgba(0,0,0,0.25));border:1px solid var(--dsw-alias-border-subtle,rgba(255,255,255,0.15));border-radius:8px;padding:10px 12px;font-size:13px;line-height:1.5;color:var(--dsw-alias-label-primary,#fff);resize:vertical;font-family:inherit;outline:none;transition:border-color .15s,box-shadow .15s}
+.dsh-ig-regenerate-modal-textarea:focus{border-color:#3b82f6;box-shadow:0 0 0 2px rgba(59,130,246,0.2)}
+.dsh-ig-lightbox-btn-regenerate:hover{color:#60a5fa!important;border-color:rgba(96,165,250,0.5)!important;background:rgba(96,165,250,0.12)!important}
+.dsh-ig-lightbox-generating-indicator{display:inline-flex;align-items:center;gap:8px;padding:4px 12px;background:rgba(37,99,235,0.2);border:1px solid rgba(59,130,246,0.5);border-radius:20px;font-size:12px;color:#93c5fd;animation:dsh-ig-fade .15s ease-out}
+.dsh-ig-lightbox-spinner-sm{width:12px;height:12px;border:2px solid rgba(147,197,253,0.3);border-top-color:#93c5fd;border-radius:50%;animation:dsh-ig-spin .8s linear infinite;flex-shrink:0}
+.dsh-ig-lightbox-abort-btn{appearance:none;background:transparent;border:0;color:#fca5a5;font-size:11.5px;cursor:pointer;padding:0 4px;margin-left:4px;text-decoration:underline;text-underline-offset:2px}
+.dsh-ig-lightbox-abort-btn:hover{color:#ef4444}
 
-/* Hide floating chat composer when gallery page is active */
+/* Hide floating chat composer and width handles when gallery page is active */
 [data-conversation-scroll]:has(.dsh-ig-gallery-page) [data-composer-seat]{display:none!important}
+:has(> [data-conversation-scroll]:has(.dsh-ig-gallery-page)) > [class*="widthHandle"],
+:has(.dsh-ig-gallery-page) [class*="widthHandle"],
+.root:has(.dsh-ig-gallery-page) [class*="widthHandle"]{display:none!important}
 `
 
 
@@ -426,7 +503,7 @@ export function apply(ctx: Context): void {
   ctx.effect(() => {
     const style = document.createElement('style')
     style.dataset.plugin = 'dsh-image-gen'
-    style.textContent = STYLE
+    style.textContent = `${STYLE}\n${STUDIO_STYLE}`
     document.head.appendChild(style)
     return () => {
       style.remove()
@@ -811,14 +888,14 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
 export function GeneratedImageCard(props: ImageCardProps) {
   const result = imageResultFromBlock(props.block)
   if (props.promoted && result !== undefined) return <PromotedResultNotice locale={props.locale} />
-  return <ImageResultCard result={result} locale={props.locale} />
+  return <ImageResultCard result={result} locale={props.locale} sessionId={(props as any).sessionId} />
 }
 
 /** Render modern image artifacts as final conversation output instead of Tool process content. */
 export function PromotedImageResultNode(props: ImageResultNodeProps) {
   return <div className="dsh-ig-promoted-results">
     {props.node.data.results.map(result =>
-      <ImageResultCard key={result.attachment.attachmentId} result={result} locale={props.locale} />)}
+      <ImageResultCard key={result.attachment.attachmentId} result={result} locale={props.locale} sessionId={(props as any).sessionId} />)}
   </div>
 }
 
@@ -830,19 +907,39 @@ function PromotedResultNotice({ locale }: { locale?: LocaleService | undefined }
 function ImageResultCard({
   result,
   locale,
+  sessionId,
 }: {
   result?: ImageResultPresentation | undefined
   locale?: LocaleService | undefined
+  sessionId?: string | undefined
 }) {
   const attachment = result?.attachment
+  const originId = attachment?.attachmentId
+  const [revisionChain, setRevisionChain] = useState<ConversationImageRevisionChain>(() =>
+    loadConversationImageRevisionChain(String(originId ?? ''))
+  )
+  const selectedRevision = revisionChain.revisions[revisionChain.currentIndex - 1]
+  const activeAttachment = selectedRevision?.attachment ?? attachment
+  const activeResult = selectedRevision !== undefined ? {
+    prompt: selectedRevision.prompt,
+    provider: selectedRevision.provider,
+    model: selectedRevision.model,
+    output: selectedRevision.output,
+    createdAt: selectedRevision.createdAt,
+  } : result
   const savedTo = result?.savedTo
   const [url, setUrl] = useState<string>()
   const [blob, setBlob] = useState<Blob>()
   const [error, setError] = useState<string>()
   const [previewOpen, setPreviewOpen] = useState(false)
   const [toast, setToast] = useState<string>()
+  const [regenerateOpen, setRegenerateOpen] = useState(false)
+  const [regeneratePrompt, setRegeneratePrompt] = useState('')
+  const [regenerateError, setRegenerateError] = useState<string>()
+  const [isRegenerating, setIsRegenerating] = useState(false)
+  const regenerateControllerRef = useRef<AbortController>()
+  const regenerateTextareaRef = useRef<HTMLTextAreaElement>(null)
   const lang = usePluginLanguage(locale)
-
 
   const t = (keyName: DictKey, params?: Record<string, string>): string => {
     const dict = lang === 'en' ? DICT.en : DICT.zh
@@ -868,8 +965,36 @@ function ImageResultCard({
       output: result.output,
       ...(result.savedTo ? { savedTo: result.savedTo } : {}),
       ...(result.seed !== undefined ? { seed: result.seed } : {}),
+      ...(sessionId ? { sessionId } : {}),
     })
   }, [result?.attachment.attachmentId])
+
+  useEffect(() => {
+    if (!originId) return
+    regenerateControllerRef.current?.abort()
+    regenerateControllerRef.current = undefined
+    setIsRegenerating(false)
+    setRegenerateOpen(false)
+    setRevisionChain(loadConversationImageRevisionChain(String(originId)))
+  }, [originId])
+
+  useEffect(() => () => { regenerateControllerRef.current?.abort() }, [])
+
+  useEffect(() => {
+    if (!regenerateOpen || isRegenerating) return
+    const frame = requestAnimationFrame(() => {
+      regenerateTextareaRef.current?.focus()
+      regenerateTextareaRef.current?.select()
+    })
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setRegenerateOpen(false)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      cancelAnimationFrame(frame)
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [regenerateOpen, isRegenerating])
 
   useEffect(() => {
     if (!previewOpen) return
@@ -880,30 +1005,38 @@ function ImageResultCard({
     return () => { window.removeEventListener('keydown', onKeyDown) }
   }, [previewOpen])
 
+  const currentUrlRef = useRef<string | undefined>()
+
   useEffect(() => {
-    if (attachment === undefined) return
-    const controller = new AbortController()
-    let objectUrl: string | undefined
-    void fetch(IMAGE_ROUTE, {
-      method: 'POST',
-      signal: controller.signal,
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ attachment }),
-    }).then(async response => {
-      if (!response.ok) throw new Error(t('loadFailed', { status: String(response.status) }))
-      const resBlob = await response.blob()
-      if (controller.signal.aborted) return
+    return () => {
+      if (currentUrlRef.current !== undefined) {
+        URL.revokeObjectURL(currentUrlRef.current)
+        currentUrlRef.current = undefined
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    if (activeAttachment === undefined) return
+    let canceled = false
+    void fetchAttachmentBlob(activeAttachment).then(resBlob => {
+      if (canceled) return
       setBlob(resBlob)
-      objectUrl = URL.createObjectURL(resBlob)
-      setUrl(objectUrl)
+      setError(undefined)
+      const nextUrl = URL.createObjectURL(resBlob)
+      if (currentUrlRef.current !== undefined) {
+        URL.revokeObjectURL(currentUrlRef.current)
+      }
+      currentUrlRef.current = nextUrl
+      setUrl(nextUrl)
     }).catch(cause => {
-      if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : String(cause))
+      if (canceled) return
+      setError(cause instanceof Error ? cause.message : String(cause))
     })
     return () => {
-      controller.abort()
-      if (objectUrl !== undefined) URL.revokeObjectURL(objectUrl)
+      canceled = true
     }
-  }, [attachment?.attachmentId, lang])
+  }, [activeAttachment?.attachmentId])
 
   const copy = async (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -918,7 +1051,7 @@ function ImageResultCard({
     if (!url) return
     const a = document.createElement('a')
     a.href = url
-    a.download = attachment?.name || `dsh-image-${Date.now()}.png`
+    a.download = activeAttachment?.name || `dsh-image-${Date.now()}.png`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -930,6 +1063,100 @@ function ImageResultCard({
     window.open(url, '_blank', 'noopener,noreferrer')
   }
 
+  const openRegenerate = (event: React.MouseEvent) => {
+    event.stopPropagation()
+    if (activeResult === undefined || isRegenerating) return
+    setRegeneratePrompt(activeResult.prompt)
+    setRegenerateError(undefined)
+    setRegenerateOpen(true)
+  }
+
+  const cancelRegenerate = () => {
+    regenerateControllerRef.current?.abort()
+    regenerateControllerRef.current = undefined
+    setIsRegenerating(false)
+    setRegenerateOpen(false)
+    setRegenerateError(undefined)
+  }
+
+  const regenerate = async () => {
+    if (activeResult === undefined || !originId || isRegenerating || regeneratePrompt.trim().length === 0) return
+    setIsRegenerating(true)
+    setRegenerateError(undefined)
+    // Non-blocking: close dialog immediately so user can continue chatting/scrolling!
+    setRegenerateOpen(false)
+    const controller = new AbortController()
+    regenerateControllerRef.current = controller
+    try {
+      const request = conversationRegenerateRequest(
+        activeResult,
+        regeneratePrompt,
+        selectedRevision === undefined ? undefined : { ratio: selectedRevision.ratio, quality: selectedRevision.quality },
+      )
+      const response = await fetch(STUDIO_ROUTE, {
+        method: 'POST',
+        credentials: 'same-origin',
+        signal: controller.signal,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(request),
+      })
+      const payload = await response.json().catch(() => null) as StudioGenerateResponse | { error?: string } | null
+      if (!response.ok || payload === null || !('attachment' in payload)) {
+        throw new Error(payload && 'error' in payload && payload.error ? payload.error : t('regenerateFailed'))
+      }
+      const revision: ConversationImageRevision = {
+        attachment: payload.attachment,
+        prompt: payload.prompt,
+        provider: payload.provider,
+        model: payload.model,
+        output: payload.output,
+        createdAt: payload.createdAt,
+        ratio: request.ratio,
+        quality: request.quality,
+      }
+      await saveGalleryItem({
+        id: String(revision.attachment.attachmentId),
+        attachment: revision.attachment,
+        prompt: revision.prompt,
+        provider: revision.provider,
+        model: revision.model,
+        createdAt: revision.createdAt,
+        aspectRatio: revision.ratio,
+        imageSize: revision.quality,
+        output: revision.output,
+        ...(savedTo ? { savedTo } : {}),
+        ...(sessionId ? { sessionId } : {}),
+      })
+      const next = appendConversationImageRevision(String(originId), revision)
+      setRevisionChain(next)
+      setToast(t('regenerate'))
+      setTimeout(() => { setToast(undefined) }, 2000)
+    } catch (cause) {
+      if (!controller.signal.aborted) {
+        const errMsg = cause instanceof Error ? cause.message : String(cause)
+        setError(errMsg)
+        setToast(errMsg)
+        setTimeout(() => { setToast(undefined) }, 3500)
+      }
+    } finally {
+      if (regenerateControllerRef.current === controller) {
+        regenerateControllerRef.current = undefined
+        setIsRegenerating(false)
+      }
+    }
+  }
+
+  const selectVersion = (index: number) => {
+    if (!originId || isRegenerating) return
+    setRevisionChain(selectConversationImageRevision(String(originId), index))
+  }
+
+  const canRegenerate = activeResult !== undefined
+    && (CLOUD_IMAGE_PROVIDERS as readonly string[]).includes(activeResult.provider)
+    && activeResult.model.trim().length > 0
+  const versionTotal = revisionChain.revisions.length + 1
+  const versionCurrent = revisionChain.currentIndex + 1
+
   if (attachment === undefined) return <div className="dsh-ig-loading">{t('generating')}</div>
   return <section className="dsh-ig-result" aria-label={t('generatedTitle')}>
     <div className="dsh-ig-result-title">{t('generatedTitle')}</div>
@@ -940,10 +1167,22 @@ function ImageResultCard({
       <img
         className="dsh-ig-image"
         src={url}
-        alt={attachment.name ?? 'Generated image'}
-        onClick={() => { setPreviewOpen(true) }}
+        alt={activeAttachment?.name ?? 'Generated image'}
+        onClick={() => { if (!isRegenerating) setPreviewOpen(true) }}
       />
+      {isRegenerating ? (
+        <div className="dsh-ig-regenerate-overlay">
+          <div className="dsh-ig-regenerate-spinner" />
+          <span className="dsh-ig-regenerate-overlay-text">{t('regenerating')}</span>
+          <button type="button" className="dsh-ig-regenerate-overlay-cancel" onClick={cancelRegenerate}>
+            {t('cancel')}
+          </button>
+        </div>
+      ) : null}
       <div className="dsh-ig-toolbar">
+        {canRegenerate ? <button type="button" className="dsh-ig-tool-btn" disabled={isRegenerating} title={isRegenerating ? t('regenerating') : t('regenerate')} onClick={openRegenerate}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5"/><path d="M4 13a8.1 8.1 0 0 0 15.5 2M20 20v-5h-5"/></svg>
+        </button> : null}
         <button type="button" className="dsh-ig-tool-btn" title={t('copyImg')} onClick={(e) => { void copy(e) }}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
         </button>
@@ -955,6 +1194,11 @@ function ImageResultCard({
         </button>
         {toast ? <div className="dsh-ig-toast">{toast}</div> : null}
       </div>
+      {versionTotal > 1 ? <div className="dsh-ig-version-nav" aria-label={t('versionLabel', { current: String(versionCurrent), total: String(versionTotal) })}>
+        <button type="button" title={t('versionPrevious')} disabled={revisionChain.currentIndex === 0 || isRegenerating} onClick={(event) => { event.stopPropagation(); selectVersion(revisionChain.currentIndex - 1) }}>‹</button>
+        <span className="dsh-ig-version-count">{versionCurrent}/{versionTotal}</span>
+        <button type="button" title={t('versionNext')} disabled={revisionChain.currentIndex >= revisionChain.revisions.length || isRegenerating} onClick={(event) => { event.stopPropagation(); selectVersion(revisionChain.currentIndex + 1) }}>›</button>
+      </div> : null}
     </div> : null}
 
     {previewOpen && url !== undefined ? <div className="dsh-ig-lightbox-backdrop" onClick={() => { setPreviewOpen(false) }}>
@@ -962,8 +1206,39 @@ function ImageResultCard({
         <img
           className="dsh-ig-lightbox-img"
           src={url}
-          alt={attachment.name ?? 'Generated image preview'}
+          alt={activeAttachment?.name ?? 'Generated image preview'}
         />
+      </div>
+    </div> : null}
+    {regenerateOpen && activeResult !== undefined ? <div className="dsh-ig-regenerate-backdrop" onMouseDown={(event) => {
+      if (event.target === event.currentTarget && !isRegenerating) setRegenerateOpen(false)
+    }}>
+      <div className="dsh-ig-regenerate-dialog" role="dialog" aria-modal="true" aria-labelledby={`dsh-ig-regenerate-${String(originId)}`}>
+        <h3 id={`dsh-ig-regenerate-${String(originId)}`}>{t('regenerateTitle')}</h3>
+        <p>{t('regenerateHint')}</p>
+        <label>
+          <span>{t('prompt')}</span>
+          <textarea
+            ref={regenerateTextareaRef}
+            value={regeneratePrompt}
+            maxLength={2000}
+            disabled={isRegenerating}
+            onChange={(event) => setRegeneratePrompt(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+                event.preventDefault()
+                void regenerate()
+              }
+            }}
+          />
+        </label>
+        {regenerateError ? <p className="dsh-ig-regenerate-error" role="alert">{regenerateError}</p> : null}
+        <div className="dsh-ig-regenerate-actions">
+          <button type="button" className="dsh-ig-regenerate-cancel" onClick={cancelRegenerate}>{t('cancel')}</button>
+          <button type="button" className="dsh-ig-regenerate-confirm" disabled={isRegenerating || regeneratePrompt.trim().length === 0} onClick={() => { void regenerate() }}>
+            {t('confirmRegenerate')}
+          </button>
+        </div>
       </div>
     </div> : null}
   </section>
