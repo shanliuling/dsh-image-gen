@@ -207,6 +207,35 @@ export async function getDshWorkspacesFull(): Promise<StudioWorkspaceInfo[]> {
 }
 
 /**
+ * Verify whether a candidate path lives within an allowed DSH workspace root.
+ * Resolves symlinks via `realpath` to prevent symlink traversal attacks.
+ * @returns the canonical realpath of the candidate root.
+ * @throws when candidateRoot does not exist or falls outside the allowed roots.
+ */
+export async function assertWorkspaceAllowed(
+  candidateRoot: string,
+  allowedRoots: Iterable<string>,
+): Promise<string> {
+  const realCandidate = await realpath(resolve(candidateRoot))
+  const rootsToCheck = new Set<string>()
+  for (const r of allowedRoots) {
+    if (typeof r === 'string' && r.trim()) {
+      try {
+        rootsToCheck.add(await realpath(resolve(r)))
+      } catch {
+        // ignore unresolvable workspace root
+      }
+    }
+  }
+  for (const allowed of rootsToCheck) {
+    if (containsPath(allowed, realCandidate)) {
+      return realCandidate
+    }
+  }
+  throw new Error(`Directory '${candidateRoot}' is not within an allowed DSH workspace`)
+}
+
+/**
  * Safely delete a generated image file from workspace disk by its path.
  * Enforces strict safety gates:
  * 1. Base name must match generated image pattern (`image-<hex>.<ext>`) to avoid touching user files.

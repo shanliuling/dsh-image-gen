@@ -18,13 +18,13 @@ import { editDashScopeImage, generateDashScopeImage } from './dashscope.js'
 import { editGoogleImage, generateGoogleImage } from './google.js'
 import { editOpenAICompatibleImage, generateOpenAICompatibleImage } from './openai-compatible.js'
 import { editSeedreamImage } from './seedream.js'
-import { saveImageToWorkspace } from './workspace-save.js'
 import {
   CLOUD_IMAGE_PROVIDERS,
   type CloudImageProvider,
   type StudioConfigResponse,
   type StudioGenerateRequest,
   type StudioGenerateResponse,
+  type StudioGeneratedItem,
   type StudioOption,
   type StudioProviderProfile,
   type StudioReference,
@@ -95,70 +95,139 @@ export async function generateFromStudio(
     ? await Promise.all(rawRefs.map(ref => readStudioReference(ctx, ref, signal)))
     : []
   const startedAt = Date.now()
-  let generated: { data: Uint8Array; mediaType: ImageMediaType }
-  let output: string
+  const count = input.count ?? 1
 
-  if (active.provider === 'google') {
-    const aspectRatio = input.ratio as AspectRatio
-    const imageSize = input.quality as ImageSize
-    generated = input.mode === 'edit'
-      ? await editGoogleImage({ apiKey: credential.value, endpoint: active.endpoint, model: active.model, prompt: input.prompt, sourceImages, aspectRatio, imageSize, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal })
-      : await generateGoogleImage({ apiKey: credential.value, endpoint: active.endpoint, model: active.model, prompt: input.prompt, aspectRatio, imageSize, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal })
-    output = `${aspectRatio}, ${imageSize}`
-  } else if (active.provider === 'openai') {
-    const size = openAISize(input.ratio)
-    generated = input.mode === 'edit'
-      ? await editOpenAICompatibleImage({ apiKey: credential.value, baseURL: active.baseURL, model: active.model, prompt: input.prompt, sourceImages, size, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal })
-      : await generateOpenAICompatibleImage({ provider: 'openai', apiKey: credential.value, baseURL: active.baseURL, model: active.model, prompt: input.prompt, size, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal })
-    output = size
-  } else if (active.provider === 'seedream') {
-    const size = input.quality
-    generated = input.mode === 'edit'
-      ? await editSeedreamImage({ apiKey: credential.value, baseURL: active.baseURL, model: active.model, prompt: input.prompt, sourceImages, size, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal })
-      : await generateOpenAICompatibleImage({ provider: 'seedream', apiKey: credential.value, baseURL: active.baseURL, model: active.model, prompt: input.prompt, size, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal })
-    output = size
-  } else {
-    if (input.mode === 'edit' && sourceImages.length > 3) {
-      throw new Error('DashScope (通义万相) 图生图目前最多支持 3 张参考图，请精简后重试')
+  const generateSingle = async (index: number): Promise<StudioGeneratedItem> => {
+    let generated: { data: Uint8Array; mediaType: ImageMediaType }
+    let output: string
+
+    if (active.provider === 'google') {
+      const aspectRatio = input.ratio as AspectRatio
+      const imageSize = input.quality as ImageSize
+      generated = input.mode === 'edit'
+        ? await editGoogleImage({ apiKey: credential.value, endpoint: active.endpoint, model: active.model, prompt: input.prompt, sourceImages, aspectRatio, imageSize, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal })
+        : await generateGoogleImage({ apiKey: credential.value, endpoint: active.endpoint, model: active.model, prompt: input.prompt, aspectRatio, imageSize, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal })
+      output = `${aspectRatio}, ${imageSize}`
+    } else if (active.provider === 'openai') {
+      const size = openAISize(input.ratio)
+      generated = input.mode === 'edit'
+        ? await editOpenAICompatibleImage({ apiKey: credential.value, baseURL: active.baseURL, model: active.model, prompt: input.prompt, sourceImages, size, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal })
+        : await generateOpenAICompatibleImage({ provider: 'openai', apiKey: credential.value, baseURL: active.baseURL, model: active.model, prompt: input.prompt, size, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal })
+      output = size
+    } else if (active.provider === 'seedream') {
+      const size = input.quality
+      generated = input.mode === 'edit'
+        ? await editSeedreamImage({ apiKey: credential.value, baseURL: active.baseURL, model: active.model, prompt: input.prompt, sourceImages, size, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal })
+        : await generateOpenAICompatibleImage({ provider: 'seedream', apiKey: credential.value, baseURL: active.baseURL, model: active.model, prompt: input.prompt, size, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal })
+      output = size
+    } else {
+      if (input.mode === 'edit' && sourceImages.length > 3) {
+        throw new Error('DashScope (通义万相) 图生图目前最多支持 3 张参考图，请精简后重试')
+      }
+      const size = dashScopeSize(input.ratio)
+      generated = input.mode === 'edit'
+        ? await editDashScopeImage({ apiKey: credential.value, endpoint: active.endpoint, model: active.model, prompt: input.prompt, sourceImages, size, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal })
+        : await generateDashScopeImage({ apiKey: credential.value, endpoint: active.endpoint, model: active.model, prompt: input.prompt, size, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal })
+      output = size
     }
-    const size = dashScopeSize(input.ratio)
-    generated = input.mode === 'edit'
-      ? await editDashScopeImage({ apiKey: credential.value, endpoint: active.endpoint, model: active.model, prompt: input.prompt, sourceImages, size, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal })
-      : await generateDashScopeImage({ apiKey: credential.value, endpoint: active.endpoint, model: active.model, prompt: input.prompt, size, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal })
-    output = size
+
+    if (!ctx.attachments.imageLimits.mediaTypes.includes(generated.mediaType)) {
+      throw new Error(`当前 DSH 不支持保存 ${generated.mediaType} 图片`)
+    }
+    const attachment = await ctx.attachments.saveImage({
+      data: generated.data,
+      mediaType: generated.mediaType,
+      name: count > 1 ? `studio-image-${index + 1}` : 'studio-image',
+    })
+    // Studio generation is temporary on canvas; workspace file persistence occurs when user collects to gallery.
+    return {
+      attachment,
+      output,
+    }
   }
 
-  if (!ctx.attachments.imageLimits.mediaTypes.includes(generated.mediaType)) {
-    throw new Error(`当前 DSH 不支持保存 ${generated.mediaType} 图片`)
+  if (count === 1) {
+    const single = await generateSingle(0)
+    return {
+      attachment: single.attachment,
+      output: single.output,
+      provider: input.provider,
+      model: input.model,
+      prompt: input.prompt,
+      createdAt: Date.now(),
+      elapsedMs: Date.now() - startedAt,
+      requestedCount: 1,
+      failedCount: 0,
+      items: [single],
+      ...(single.savedTo ? { savedTo: single.savedTo } : {}),
+    }
   }
-  const attachment = await ctx.attachments.saveImage({ data: generated.data, mediaType: generated.mediaType, name: 'studio-image' })
-  let savedTo: string | undefined
-  const targetRoot = input.workspaceRoot || fallbackWorkspaceRoot
-  if (config.saveToWorkspace !== false && targetRoot) {
-    try {
-      savedTo = await saveImageToWorkspace({
-        workspaceRoot: targetRoot,
-        folder: config.workspaceFolder,
-        attachmentId: attachment.attachmentId,
-        mediaType: generated.mediaType,
-        data: generated.data,
-        signal,
+
+  const tasks = Array.from({ length: count }, (_, i) => () => generateSingle(i))
+  const poolResults = await runPool(tasks, 2)
+  const successes: StudioGeneratedItem[] = []
+  const errors: Array<{ index: number; message: string }> = []
+
+  for (let i = 0; i < poolResults.length; i++) {
+    const r = poolResults[i]!
+    if (r.status === 'fulfilled') {
+      successes.push(r.value)
+    } else {
+      errors.push({
+        index: i,
+        message: r.reason instanceof Error ? r.reason.message : String(r.reason),
       })
-    } catch (saveError) {
-      ctx.logger.warn(`dsh-image-gen: studio failed to save image to workspace: ${saveError instanceof Error ? saveError.message : String(saveError)}`)
     }
   }
 
+  if (successes.length === 0) {
+    const firstReason = poolResults[0] && poolResults[0].status === 'rejected' ? poolResults[0].reason : new Error('批量生图全部失败')
+    throw firstReason instanceof Error ? firstReason : new Error(String(firstReason))
+  }
+
+  const first = successes[0]!
   return {
-    attachment,
+    attachment: first.attachment,
+    output: first.output,
     provider: input.provider,
     model: input.model,
     prompt: input.prompt,
-    output,
     createdAt: Date.now(),
     elapsedMs: Date.now() - startedAt,
-    ...(savedTo ? { savedTo } : {}),
+    requestedCount: count,
+    failedCount: errors.length,
+    items: successes,
+    ...(errors.length > 0 ? { errors } : {}),
+    ...(first.savedTo ? { savedTo: first.savedTo } : {}),
   }
+}
+
+export async function runPool<T>(
+  tasks: Array<() => Promise<T>>,
+  concurrency = 2,
+): Promise<PromiseSettledResult<T>[]> {
+  const results = new Array<PromiseSettledResult<T>>(tasks.length)
+  let nextIndex = 0
+
+  async function worker(): Promise<void> {
+    while (nextIndex < tasks.length) {
+      const currentIndex = nextIndex++
+      const task = tasks[currentIndex]!
+      try {
+        const val = await task()
+        results[currentIndex] = { status: 'fulfilled', value: val }
+      } catch (err) {
+        results[currentIndex] = { status: 'rejected', reason: err }
+      }
+    }
+  }
+
+  const workers = Array.from(
+    { length: Math.min(concurrency, tasks.length) },
+    () => worker(),
+  )
+  await Promise.all(workers)
+  return results
 }
 
 export function studioProfile(config: Config, provider: CloudImageProvider, configured: boolean): StudioProviderProfile {

@@ -7,6 +7,8 @@ export const IMAGE_ROUTE = '/plugins/dsh-image-gen/image'
 export const DELETE_ROUTE = '/plugins/dsh-image-gen/delete'
 /** Same-origin route used by the browser image workbench. */
 export const STUDIO_ROUTE = '/plugins/dsh-image-gen/studio'
+/** Browser route used for saving generated images to workspace on demand. */
+export const SAVE_WORKSPACE_ROUTE = '/plugins/dsh-image-gen/save-workspace'
 /** Namespace persisted through DSH Settings. */
 export const IMAGE_GENERATION_NAMESPACE = 'image-generation'
 
@@ -77,19 +79,28 @@ export interface StudioGenerateRequest {
   quality: string
   reference?: StudioReference
   references?: StudioReference[]
+  count?: number | undefined
   workspaceRoot?: string | undefined
 }
 
-/** One completed workbench request. */
-export interface StudioGenerateResponse {
+/** One individual generated image item in a workbench batch. */
+export interface StudioGeneratedItem {
   attachment: ImageAttachmentRef
+  output: string
+  savedTo?: string | undefined
+}
+
+/** One completed workbench request. */
+export interface StudioGenerateResponse extends StudioGeneratedItem {
   provider: CloudImageProvider
   model: string
   prompt: string
-  output: string
   createdAt: number
   elapsedMs: number
-  savedTo?: string | undefined
+  items?: StudioGeneratedItem[] | undefined
+  requestedCount?: number | undefined
+  failedCount?: number | undefined
+  errors?: Array<{ index: number; message: string }> | undefined
 }
 
 /** Default endpoints and base URLs. */

@@ -9,17 +9,17 @@ import { Config, resolveProvider, selectComfyUIWorkflow, type AspectRatio, type 
 import { editComfyUIImage, generateComfyUIImage } from './comfyui.js'
 import { editDashScopeImage, generateDashScopeImage } from './dashscope.js'
 import { editGoogleImage, generateGoogleImage } from './google.js'
-import { IMAGE_ROUTE, DELETE_ROUTE, imageAttachmentFromMeta, serveImage, serveDelete } from './image-route.js'
+import { IMAGE_ROUTE, DELETE_ROUTE, SAVE_WORKSPACE_ROUTE, imageAttachmentFromMeta, serveImage, serveDelete, serveSaveWorkspace } from './image-route.js'
 import { editOpenAICompatibleImage, generateOpenAICompatibleImage } from './openai-compatible.js'
 import { resolveReferenceImages } from './reference-image.js'
 import { editSeedreamImage } from './seedream.js'
 import { IMAGE_GENERATION_NAMESPACE, STUDIO_ROUTE, mergeComfyUIPrompt } from './shared.js'
 import { generateFromStudio, describeStudio } from './studio.js'
 import { serveStudio } from './studio-route.js'
-import { deleteImageFromWorkspace, getDshWorkspacesFull, saveImageToWorkspace } from './workspace-save.js'
+import { deleteImageFromWorkspace, getDshWorkspaceRoots, getDshWorkspacesFull, saveImageToWorkspace } from './workspace-save.js'
 
 export { Config } from './config.js'
-export { IMAGE_ROUTE, DELETE_ROUTE, imageAttachmentFromMeta } from './image-route.js'
+export { IMAGE_ROUTE, DELETE_ROUTE, SAVE_WORKSPACE_ROUTE, imageAttachmentFromMeta } from './image-route.js'
 export { STUDIO_ROUTE } from './shared.js'
 
 export const name = 'dsh-image-gen'
@@ -53,6 +53,25 @@ export function apply(ctx: Context, config: Config = {}): void {
       deleteWorkspaceImage: filePath => deleteImageFromWorkspace(filePath, knownWorkspaceRoots),
     }),
   }), 'dsh-image-gen: delete route')
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact', path: SAVE_WORKSPACE_ROUTE,
+    handler: (req, res) => serveSaveWorkspace(req, res, {
+      readImage: ref => ctx.attachments.readImage(ref),
+      saveToWorkspace: options => saveImageToWorkspace({
+        workspaceRoot: options.workspaceRoot,
+        folder: current().workspaceFolder,
+        attachmentId: options.attachmentId,
+        mediaType: options.mediaType,
+        data: options.data,
+      }),
+      getActiveWorkspaceRoot: () => Array.from(knownWorkspaceRoots)[0] || process.cwd(),
+      getAllowedWorkspaceRoots: async () => {
+        const discovered = await getDshWorkspaceRoots().catch(() => [])
+        return new Set([...knownWorkspaceRoots, ...discovered, process.cwd()])
+      },
+      isSaveEnabled: () => current().saveToWorkspace !== false,
+    }),
+  }), 'dsh-image-gen: save workspace route')
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact', path: STUDIO_ROUTE,
     handler: (req, res) => serveStudio(req, res, {

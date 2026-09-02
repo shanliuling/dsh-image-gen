@@ -358,3 +358,46 @@ describe('workspace scoping and isolation for gallery items', () => {
     expect(isItemInWorkspace(item, {})).toBe(true)
   })
 })
+
+describe('assertWorkspaceAllowed security gate', () => {
+  it('allows directories that match or reside within allowed workspace roots', async () => {
+    const { assertWorkspaceAllowed } = await import('../src/workspace-save.js')
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-allowed-'))
+    try {
+      const sub = join(dir, 'nested')
+      await mkdir(sub)
+      const matchedRoot = await assertWorkspaceAllowed(dir, [dir])
+      expect(matchedRoot.toLowerCase()).toBe(dir.toLowerCase())
+      const matchedSub = await assertWorkspaceAllowed(sub, [dir])
+      expect(matchedSub.toLowerCase()).toBe(sub.toLowerCase())
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {})
+    }
+  })
+
+  it('rejects candidate paths outside the allowed workspace roots', async () => {
+    const { assertWorkspaceAllowed } = await import('../src/workspace-save.js')
+    const dirAllowed = await mkdtemp(join(tmpdir(), 'dsh-allowed-'))
+    const dirForbidden = await mkdtemp(join(tmpdir(), 'dsh-forbidden-'))
+    try {
+      await expect(assertWorkspaceAllowed(dirForbidden, [dirAllowed])).rejects.toThrow(
+        /not within an allowed DSH workspace/,
+      )
+    } finally {
+      await rm(dirAllowed, { recursive: true, force: true }).catch(() => {})
+      await rm(dirForbidden, { recursive: true, force: true }).catch(() => {})
+    }
+  })
+
+  it('rejects candidate paths that attempt parent directory traversal', async () => {
+    const { assertWorkspaceAllowed } = await import('../src/workspace-save.js')
+    const dirAllowed = await mkdtemp(join(tmpdir(), 'dsh-allowed-'))
+    try {
+      const traversalPath = join(dirAllowed, '..', 'arbitrary')
+      await expect(assertWorkspaceAllowed(traversalPath, [dirAllowed])).rejects.toThrow()
+    } finally {
+      await rm(dirAllowed, { recursive: true, force: true }).catch(() => {})
+    }
+  })
+})
+

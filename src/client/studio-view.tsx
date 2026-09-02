@@ -2,7 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, ty
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import {
   AlertTriangle,
+  BookmarkPlus,
+  Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Clipboard,
   Copy,
   Download,
@@ -23,10 +27,12 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react'
-import { DELETE_ROUTE, STUDIO_ROUTE, type StudioConfigResponse, type StudioGenerateResponse, type StudioProviderProfile, type StudioReference } from '../shared.js'
+import { DELETE_ROUTE, SAVE_WORKSPACE_ROUTE, STUDIO_ROUTE, type StudioConfigResponse, type StudioGenerateResponse, type StudioGeneratedItem, type StudioProviderProfile, type StudioReference } from '../shared.js'
 import { deleteGalleryItem, getGalleryItems, saveGalleryItem, subscribeGallery, toggleFavoriteGalleryItem, type GalleryItem } from './gallery-store.js'
 import { evictAttachmentCache, fetchAttachmentBlob } from './image-cache.js'
 import { copyImageBlob, downloadBlobUrl, formatRelativeTime } from './browser-image-utils.js'
+
+const PAGE_SIZE = 12
 
 export interface LocaleService {
   subscribe(cb: () => void): () => void
@@ -45,10 +51,13 @@ export interface StudioReferenceItem {
 
 const COPY = {
   zh: {
-    title: '云端图像工作台', configured: 'API 已配置', unconfigured: '未配置', recent: '最近生成', empty: '还没有生成记录',
-    generate: '文生图', edit: '图生图', details: '图片详情', reference: '参考图', optional: '可选', upload: '点击上传或拖拽图片到此处',
+    title: '云端生图工作台', configured: 'API 已配置', unconfigured: '未配置', recent: '最近生成', empty: '暂无生成历史',
+    generate: '文生图', edit: '图生图', details: '图片详情', reference: '参考图', optional: '选填', upload: '点击或拖拽图片到此处',
     uploadHint: '支持 JPG / PNG / WebP / GIF，最大 10MB（最多 5 张）', prompt: '提示词 Prompt', clear: '清空', promptPlaceholder: '描述主体、构图、风格、光线与需要出现的文字…（支持 Ctrl+Enter 快捷生成）',
     provider: 'Provider', model: 'Model', ratio: '比例', quality: '清晰度', start: '开始生成', generating: '正在生成…', cancelGenerate: '取消生成',
+    count: '生成数量', countUnit: '{n} 张', partialSuccess: '已生成 {success} 张图片，{failed} 张失败', generatingCount: '正在生成（共 {count} 张）…',
+    batchResult: '本次生成（共 {count} 张）',
+    saveToGallery: '收藏进画廊', savedToGallery: '已收藏进画廊', inGallery: '已在画廊',
     retry: '重新加载', configLoadFailed: '工作台配置加载失败，请检查服务后重试。',
     noProvider: '请先在设置中配置至少一个云端图像 Provider 的 API Key。', selectConfigured: '该 Provider 尚未配置，请先到设置中配置 API Key。',
     needPrompt: '请输入提示词', needReference: '请先添加至少一张参考图', result: '本次结果', continueEdit: '继续编辑（垫图）', regenerate: '再次生成',
@@ -69,6 +78,9 @@ const COPY = {
     generate: 'Text to image', edit: 'Image to image', details: 'Image details', reference: 'Reference image', optional: 'optional', upload: 'Click or drop images here',
     uploadHint: 'JPG / PNG / WebP / GIF, up to 10MB (max 5)', prompt: 'Prompt', clear: 'Clear', promptPlaceholder: 'Describe the subject, composition, style, lighting, and exact text… (Ctrl+Enter to generate)',
     provider: 'Provider', model: 'Model', ratio: 'Aspect ratio', quality: 'Quality', start: 'Generate', generating: 'Generating…', cancelGenerate: 'Cancel',
+    count: 'Number of images', countUnit: '{n}', partialSuccess: 'Generated {success} images, {failed} failed', generatingCount: 'Generating ({count} images)…',
+    batchResult: 'Generated {count} images',
+    saveToGallery: 'Save to Gallery', savedToGallery: 'Saved to Gallery', inGallery: 'In Gallery',
     retry: 'Retry', configLoadFailed: 'Failed to load studio configuration.',
     noProvider: 'Configure an API key for at least one cloud image provider in Settings.', selectConfigured: 'This provider is not configured. Add its API key in Settings first.',
     needPrompt: 'Enter a prompt', needReference: 'Add at least one reference image first', result: 'Current result', continueEdit: 'Continue editing', regenerate: 'Generate again',
@@ -115,6 +127,8 @@ export const StudioView: FC<{
   const [quality, setQuality] = useState('1K')
   const [prompt, setPrompt] = useState('')
   const [references, setReferences] = useState<StudioReferenceItem[]>([])
+  const [count, setCount] = useState(1)
+  const [currentBatch, setCurrentBatch] = useState<GalleryItem[] | null>(null)
   const [isGenerating, setIsGenerating] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -217,7 +231,7 @@ export const StudioView: FC<{
     if (!canvasEl) return
 
     const onWheel = (e: WheelEvent) => {
-      if (selected === null || !image.url) return
+      if (selected === null && (!currentBatch || currentBatch.length === 0)) return
       e.preventDefault()
       const delta = e.deltaY < 0 ? 15 : -15
       setFit(false)
@@ -226,7 +240,7 @@ export const StudioView: FC<{
 
     canvasEl.addEventListener('wheel', onWheel, { passive: false })
     return () => canvasEl.removeEventListener('wheel', onWheel)
-  }, [selected, image.url])
+  }, [selected, currentBatch])
 
   // Global mousemove and mouseup to handle canvas panning smoothly
   useEffect(() => {
@@ -294,12 +308,14 @@ export const StudioView: FC<{
   }
 
   const selectItem = (item: GalleryItem) => {
+    setCurrentBatch(null)
     setSelected(item)
     setPanelTab('details')
     resetFit()
   }
 
   const startNew = () => {
+    setCurrentBatch(null)
     setSelected(null)
     setPanelTab('generate')
     resetFit()
@@ -307,7 +323,7 @@ export const StudioView: FC<{
 
   const handleCanvasMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.button !== 0 && e.button !== 1) return
-    if (selected === null || !image.url) return
+    if (selected === null && (!currentBatch || currentBatch.length === 0)) return
     setIsDragging(true)
     hasDraggedRef.current = false
     dragStartRef.current = {
@@ -319,9 +335,7 @@ export const StudioView: FC<{
   }
 
   const handleImageClick = () => {
-    if (!hasDraggedRef.current) {
-      setLightboxOpen(true)
-    }
+    // Canvas click is for selection, not preview
   }
 
   const addReferenceFiles = (fileList: FileList | File[] | null | undefined) => {
@@ -463,6 +477,7 @@ export const StudioView: FC<{
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           mode, provider, model, prompt: prompt.trim(), ratio, quality,
+          ...(count > 1 ? { count } : {}),
           ...(workspace?.path ? { workspaceRoot: workspace.path } : {}),
           ...(referencesPayload === undefined ? {} : {
             references: referencesPayload,
@@ -471,17 +486,43 @@ export const StudioView: FC<{
       })
       const payload = await response.json() as StudioGenerateResponse | { error?: string }
       if (!response.ok || !('attachment' in payload)) throw new Error('error' in payload && payload.error ? payload.error : t('generationFailed'))
-      const item: GalleryItem = {
-        id: String(payload.attachment.attachmentId), attachment: payload.attachment, prompt: payload.prompt,
-        provider: payload.provider, model: payload.model, createdAt: payload.createdAt, aspectRatio: ratio, imageSize: quality, output: payload.output,
-        ...(payload.savedTo ? { savedTo: payload.savedTo } : {}),
+
+      const generatedList: StudioGeneratedItem[] = Array.isArray(payload.items) && payload.items.length > 0
+        ? payload.items
+        : [{
+            attachment: payload.attachment,
+            output: payload.output,
+            ...(payload.savedTo ? { savedTo: payload.savedTo } : {}),
+          }]
+
+      const galleryEntries: GalleryItem[] = generatedList.map((gen, idx) => ({
+        id: String(gen.attachment.attachmentId || `${payload.createdAt}-${idx}`),
+        attachment: gen.attachment,
+        prompt: payload.prompt,
+        provider: payload.provider,
+        model: payload.model,
+        createdAt: payload.createdAt + idx,
+        aspectRatio: ratio,
+        imageSize: quality,
+        output: gen.output,
+        ...(gen.savedTo ? { savedTo: gen.savedTo } : {}),
         ...(workspace?.path ? { workspacePath: workspace.path } : {}),
         ...(workspace?.workspaceId ? { workspaceId: workspace.workspaceId } : {}),
+      }))
+
+      if (galleryEntries.length > 1) {
+        setCurrentBatch(galleryEntries)
+        setSelected(galleryEntries[0]!)
+      } else if (galleryEntries.length === 1) {
+        setCurrentBatch(null)
+        setSelected(galleryEntries[0]!)
       }
-      await saveGalleryItem(item)
-      setSelected(item)
       setPanelTab('details')
       resetFit()
+
+      if (payload.failedCount && payload.failedCount > 0) {
+        flash(t('partialSuccess', { success: String(generatedList.length), failed: String(payload.failedCount) }))
+      }
     } catch (submitError) {
       if (controller.signal.aborted) {
         return
@@ -493,6 +534,53 @@ export const StudioView: FC<{
         setIsGenerating(false)
       }
     }
+  }
+
+  const isSelectedInGallery = useMemo(() => {
+    if (selected === null) return false
+    return items.some(item => item.id === selected.id)
+  }, [items, selected])
+
+  const handleSaveToGallery = async () => {
+    if (selected === null || isSelectedInGallery) return
+    let savedTo = selected.savedTo
+    const targetRoot = workspace?.path || config?.workspaceRoot
+
+    if (!savedTo) {
+      try {
+        const res = await fetch(SAVE_WORKSPACE_ROUTE, {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            attachment: selected.attachment,
+            ...(targetRoot ? { workspaceRoot: targetRoot } : {}),
+          }),
+        })
+        if (res.ok) {
+          const data = await res.json() as { ok: boolean; savedTo?: string }
+          if (data.savedTo) {
+            savedTo = data.savedTo
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to save to workspace:', e)
+      }
+    }
+
+    const updatedItem: GalleryItem = {
+      ...selected,
+      ...(savedTo ? { savedTo } : {}),
+      ...(targetRoot ? { workspacePath: targetRoot } : {}),
+      ...(workspace?.workspaceId ? { workspaceId: workspace.workspaceId } : {}),
+    }
+
+    await saveGalleryItem(updatedItem)
+    setSelected(updatedItem)
+    if (currentBatch) {
+      setCurrentBatch(prev => prev ? prev.map(i => i.id === updatedItem.id ? updatedItem : i) : prev)
+    }
+    flash(t('savedToGallery'))
   }
 
   const handleConfirmDelete = async () => {
@@ -517,8 +605,25 @@ export const StudioView: FC<{
           throw new Error(reason)
         }
       }
-      await deleteGalleryItem(idToDelete)
+      if (isSelectedInGallery) {
+        await deleteGalleryItem(idToDelete)
+      }
       evictAttachmentCache(attachmentId)
+      if (currentBatch) {
+        const remaining = currentBatch.filter(i => i.id !== idToDelete)
+        if (remaining.length > 1) {
+          setCurrentBatch(remaining)
+          setSelected(remaining[0]!)
+        } else if (remaining.length === 1) {
+          setCurrentBatch(null)
+          setSelected(remaining[0]!)
+        } else {
+          setCurrentBatch(null)
+          setSelected(null)
+        }
+      } else {
+        setSelected(null)
+      }
       flash(t('deletedToast'))
     } catch (delError) {
       setError(messageOf(delError))
@@ -539,10 +644,40 @@ export const StudioView: FC<{
   const toggleFavorite = async () => {
     if (selected === null) return
     const targetId = selected.id
-    const nextFav = await toggleFavoriteGalleryItem(targetId)
-    setSelected(curr => (curr !== null && curr.id === targetId ? { ...curr, isFavorite: nextFav } : curr))
-    flash(nextFav ? t('favoriteAdded') : t('favoriteRemoved'))
+    if (isSelectedInGallery) {
+      const nextFav = await toggleFavoriteGalleryItem(targetId)
+      setSelected(curr => (curr !== null && curr.id === targetId ? { ...curr, isFavorite: nextFav } : curr))
+      if (currentBatch) {
+        setCurrentBatch(prev => prev ? prev.map(i => i.id === targetId ? { ...i, isFavorite: nextFav } : i) : null)
+      }
+      flash(nextFav ? t('favoriteAdded') : t('favoriteRemoved'))
+    } else {
+      const nextFav = !selected.isFavorite
+      setSelected(curr => (curr !== null && curr.id === targetId ? { ...curr, isFavorite: nextFav } : curr))
+      if (currentBatch) {
+        setCurrentBatch(prev => prev ? prev.map(i => i.id === targetId ? { ...i, isFavorite: nextFav } : i) : null)
+      }
+      flash(nextFav ? t('favoriteAdded') : t('favoriteRemoved'))
+    }
   }
+
+  const stepLightbox = (delta: number) => {
+    if (!currentBatch || currentBatch.length <= 1 || selected === null) return
+    const currIdx = currentBatch.findIndex(i => i.id === selected.id)
+    if (currIdx === -1) return
+    const nextIdx = (currIdx + delta + currentBatch.length) % currentBatch.length
+    setSelected(currentBatch[nextIdx]!)
+  }
+
+  useEffect(() => {
+    if (!lightboxOpen || !currentBatch || currentBatch.length <= 1) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowLeft') stepLightbox(-1)
+      else if (e.key === 'ArrowRight') stepLightbox(1)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [lightboxOpen, currentBatch, selected])
 
   const flash = (message: string) => {
     setNotice(message)
@@ -640,30 +775,81 @@ export const StudioView: FC<{
             onMouseDown={handleCanvasMouseDown}
             onDoubleClick={resetFit}
           >
-            {isGenerating ? <div className="dsh-ig-generating-state"><div className="dsh-ig-generation-orbit"><Sparkles size={28} /></div><strong>{t('generating')}</strong><span>{activeProfile?.label} · {model}</span></div>
-              : selected === null ? <div className="dsh-ig-canvas-empty"><ImagePlus size={36} /><span>{t('selectHistory')}</span></div>
-                : image.loading ? <div className="dsh-ig-canvas-empty"><LoaderCircle className="dsh-ig-spin" size={28} /><span>{t('loading')}</span></div>
-                  : image.url !== null ? (
-                    <img
-                      src={image.url}
-                      alt={selected.prompt}
-                      draggable={false}
-                      onClick={handleImageClick}
-                      style={{
-                        transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom / 100})`,
-                        transformOrigin: 'center center',
-                        transition: isDragging ? 'none' : 'transform 0.08s ease-out',
-                      }}
-                    />
-                  ) : <div className="dsh-ig-canvas-empty"><ImagePlus size={32} /><span>{t('imageLoadFailed')}</span></div>}
+            {isGenerating ? (
+              <div className="dsh-ig-generating-state">
+                <div className="dsh-ig-generation-orbit"><Sparkles size={28} /></div>
+                <strong>{count > 1 ? t('generatingCount', { count: String(count) }) : t('generating')}</strong>
+                <span>{activeProfile?.label} · {model}</span>
+              </div>
+            ) : currentBatch && currentBatch.length > 1 ? (
+              <div
+                className="dsh-ig-canvas-cluster"
+                data-count={currentBatch.length}
+                style={{
+                  transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom / 100})`,
+                  transformOrigin: 'center center',
+                  transition: isDragging ? 'none' : 'transform 0.08s ease-out',
+                }}
+              >
+                {currentBatch.map((batchItem, index) => (
+                  <BatchCanvasItem
+                    key={batchItem.id}
+                    item={batchItem}
+                    index={index}
+                    isSelected={selected?.id === batchItem.id}
+                    onSelect={() => {
+                      if (!hasDraggedRef.current) {
+                        setSelected(batchItem)
+                      }
+                    }}
+                  />
+                ))}
+              </div>
+            ) : selected === null ? (
+              <div className="dsh-ig-canvas-empty"><ImagePlus size={36} /><span>{t('selectHistory')}</span></div>
+            ) : image.loading ? (
+              <div className="dsh-ig-canvas-empty"><LoaderCircle className="dsh-ig-spin" size={28} /><span>{t('loading')}</span></div>
+            ) : image.url !== null ? (
+              <img
+                src={image.url}
+                alt={selected.prompt}
+                draggable={false}
+                onClick={handleImageClick}
+                style={{
+                  transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom / 100})`,
+                  transformOrigin: 'center center',
+                  transition: isDragging ? 'none' : 'transform 0.08s ease-out',
+                }}
+              />
+            ) : (
+              <div className="dsh-ig-canvas-empty"><ImagePlus size={32} /><span>{t('imageLoadFailed')}</span></div>
+            )}
           </div>
           {selected !== null && <>
             <div className="dsh-ig-result-strip"><span>{t('result')}</span><div><button type="button" onClick={() => void continueEdit()}><PencilLine size={15} />{t('continueEdit')}</button><button type="button" onClick={() => { setMode('generate'); setPanelTab('generate'); setPrompt(selected.prompt) }}><RefreshCw size={15} />{t('regenerate')}</button></div></div>
             <div className="dsh-ig-result-actions">
               <p>{selected.prompt}</p>
               <div>
-                <button type="button" onClick={() => void toggleFavorite()} title={selected.isFavorite ? t('favorited') : t('favorite')}>
-                  <Heart size={15} fill={selected.isFavorite ? '#ef4444' : 'none'} color={selected.isFavorite ? '#ef4444' : 'currentColor'} />
+                <button
+                  type="button"
+                  className={`dsh-ig-save-gallery-btn ${isSelectedInGallery ? 'is-saved' : ''}`}
+                  onClick={() => void handleSaveToGallery()}
+                  title={isSelectedInGallery ? t('inGallery') : t('saveToGallery')}
+                  disabled={isSelectedInGallery}
+                >
+                  {isSelectedInGallery ? <Check size={15} /> : <BookmarkPlus size={15} />}
+                  <span>{isSelectedInGallery ? t('inGallery') : t('saveToGallery')}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void toggleFavorite()}
+                  title={selected.isFavorite ? t('favorited') : t('favorite')}
+                >
+                  <Heart
+                    size={15}
+                    fill={selected.isFavorite ? '#ef4444' : 'none'}
+                    color={selected.isFavorite ? '#ef4444' : 'currentColor'}
+                  />
                   <span>{selected.isFavorite ? t('favorited') : t('favorite')}</span>
                 </button>
                 <button type="button" onClick={() => void copySelected()}><Clipboard size={15} /><span>{t('copy')}</span></button>
@@ -779,6 +965,21 @@ export const StudioView: FC<{
             ) : <>
               <div className="dsh-ig-field-grid"><FieldSelect label={t('provider')} value={provider} onChange={changeProvider} options={config.providers.map(item => ({ value: item.provider, label: `${item.label}${item.configured ? '' : ` · ${t('unconfigured')}`}` }))} /><FieldSelect label={t('model')} value={model} onChange={setModel} options={activeProfile === undefined ? [] : [{ value: activeProfile.model, label: activeProfile.model }]} /></div>
               <div className="dsh-ig-field-grid"><FieldSelect label={t('ratio')} value={ratio} onChange={setRatio} options={activeProfile?.ratioOptions ?? []} /><FieldSelect label={t('quality')} value={quality} onChange={setQuality} options={activeProfile?.qualityOptions ?? []} /></div>
+              <div className="dsh-ig-field">
+                <label>{t('count')}</label>
+                <div className="dsh-ig-count-row">
+                  {[1, 2, 3, 4].map(option => (
+                    <button
+                      key={option}
+                      type="button"
+                      className={`dsh-ig-count-pill ${count === option ? 'is-active' : ''}`}
+                      onClick={() => setCount(option)}
+                    >
+                      {t('countUnit', { n: String(option) })}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </>}
             {configuredCount === 0 && config !== null && <div className="dsh-ig-inline-note">{t('noProvider')}</div>}
             {error !== null && <div className="dsh-ig-form-error">{error}</div>}
@@ -790,7 +991,7 @@ export const StudioView: FC<{
             ) : (
               <button type="button" className="dsh-ig-generate-button" disabled={config === null} onClick={() => void submit()}>
                 <Sparkles size={17} />
-                <span>{t('start')}</span>
+                <span>{t('start')}{count > 1 ? ` (${count})` : ''}</span>
               </button>
             )}
           </div>}
@@ -804,6 +1005,11 @@ export const StudioView: FC<{
             <div className="dsh-ig-lightbox-meta">
               <span className="dsh-ig-tag">{selected.provider}</span>
               <span className="dsh-ig-tag dsh-ig-tag-model">{selected.model}</span>
+              {currentBatch && currentBatch.length > 1 && (
+                <span className="dsh-ig-tag">
+                  {currentBatch.findIndex(i => i.id === selected.id) + 1} / {currentBatch.length}
+                </span>
+              )}
               {selected.attachment.width && selected.attachment.height ? (
                 <span className="dsh-ig-tag">{selected.attachment.width} × {selected.attachment.height}</span>
               ) : null}
@@ -817,6 +1023,33 @@ export const StudioView: FC<{
               <X size={18} />
             </button>
           </div>
+
+          {currentBatch && currentBatch.length > 1 && (
+            <>
+              <button
+                type="button"
+                className="dsh-ig-lightbox-nav is-prev"
+                onClick={e => {
+                  e.stopPropagation()
+                  stepLightbox(-1)
+                }}
+                title="上一张"
+              >
+                <ChevronLeft size={24} />
+              </button>
+              <button
+                type="button"
+                className="dsh-ig-lightbox-nav is-next"
+                onClick={e => {
+                  e.stopPropagation()
+                  stepLightbox(1)
+                }}
+                title="下一张"
+              >
+                <ChevronRight size={24} />
+              </button>
+            </>
+          )}
 
           <div className="dsh-ig-lightbox-img-wrap" onClick={e => e.stopPropagation()}>
             {image.url !== null ? (
@@ -876,6 +1109,17 @@ export const StudioView: FC<{
 
               <button
                 type="button"
+                className={`dsh-ig-lightbox-btn ${isSelectedInGallery ? 'is-saved' : ''}`}
+                title={isSelectedInGallery ? t('inGallery') : t('saveToGallery')}
+                onClick={() => void handleSaveToGallery()}
+                disabled={isSelectedInGallery}
+              >
+                {isSelectedInGallery ? <Check size={14} /> : <BookmarkPlus size={14} />}
+                <span>{isSelectedInGallery ? t('inGallery') : t('saveToGallery')}</span>
+              </button>
+
+              <button
+                type="button"
                 className="dsh-ig-lightbox-btn"
                 title={selected.isFavorite ? t('favorited') : t('favorite')}
                 onClick={() => void toggleFavorite()}
@@ -918,6 +1162,34 @@ export const StudioView: FC<{
       {/* Unified Floating Toast */}
       {notice !== null && <div className="dsh-ig-workbench-toast">{notice}</div>}
     </section>
+  )
+}
+
+const BatchCanvasItem: FC<{
+  item: GalleryItem
+  index: number
+  isSelected: boolean
+  onSelect(): void
+}> = ({ item, index, isSelected, onSelect }) => {
+  const image = useAttachmentImage(item.attachment, true)
+  return (
+    <div
+      className={`dsh-ig-canvas-item ${isSelected ? 'is-selected' : ''}`}
+      onClick={onSelect}
+    >
+      <span className="dsh-ig-canvas-badge">#{index + 1}</span>
+      {image.url !== null ? (
+        <img src={image.url} alt={item.prompt} draggable={false} />
+      ) : image.loading ? (
+        <div className="dsh-ig-canvas-item-loading">
+          <LoaderCircle className="dsh-ig-spin" size={24} />
+        </div>
+      ) : (
+        <div className="dsh-ig-canvas-item-loading">
+          <ImagePlus size={24} />
+        </div>
+      )}
+    </div>
   )
 }
 

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { DEFAULT_GOOGLE_MODEL, DEFAULT_OPENAI_MODEL, DEFAULT_SEEDREAM_MODEL, DEFAULT_DASHSCOPE_MODEL } from '../src/config.js'
-import { studioProfile } from '../src/studio.js'
+import { generateFromStudio, runPool, studioProfile } from '../src/studio.js'
 import { parseStudioGenerateRequest, serveStudio } from '../src/studio-route.js'
 import {
   fetchAttachmentBlob,
@@ -102,6 +102,78 @@ describe('image workbench request validation', () => {
       workspaceRoot: 'D:\\z\\standalone',
     })
     expect(result.workspaceRoot).toBe('D:\\z\\standalone')
+  })
+
+  it('validates image generation count (1 to 4)', () => {
+    expect(parseStudioGenerateRequest({ ...base, count: 1 })).toMatchObject({ count: 1 })
+    expect(parseStudioGenerateRequest({ ...base, count: 4 })).toMatchObject({ count: 4 })
+    expect(parseStudioGenerateRequest({ ...base })).not.toHaveProperty('count')
+
+    expect(() => parseStudioGenerateRequest({ ...base, count: 0 })).toThrow('生成数量仅支持 1 到 4 张')
+    expect(() => parseStudioGenerateRequest({ ...base, count: 5 })).toThrow('生成数量仅支持 1 到 4 张')
+    expect(() => parseStudioGenerateRequest({ ...base, count: -1 })).toThrow('生成数量仅支持 1 到 4 张')
+    expect(() => parseStudioGenerateRequest({ ...base, count: 2.5 })).toThrow('生成数量仅支持 1 到 4 张')
+    expect(() => parseStudioGenerateRequest({ ...base, count: '2' as never })).toThrow('生成数量仅支持 1 到 4 张')
+  })
+})
+
+describe('multi-image worker pool', () => {
+  it('strictly limits concurrency to 2 and preserves task order', async () => {
+    let active = 0
+    let peak = 0
+    const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
+    const tasks = [
+      async () => {
+        active++
+        peak = Math.max(peak, active)
+        await delay(30)
+        active--
+        return 'task1'
+      },
+      async () => {
+        active++
+        peak = Math.max(peak, active)
+        await delay(10)
+        active--
+        return 'task2'
+      },
+      async () => {
+        active++
+        peak = Math.max(peak, active)
+        await delay(20)
+        active--
+        return 'task3'
+      },
+      async () => {
+        active++
+        peak = Math.max(peak, active)
+        await delay(10)
+        active--
+        return 'task4'
+      },
+    ]
+
+    const results = await runPool(tasks, 2)
+    expect(peak).toBeLessThanOrEqual(2)
+    expect(results).toEqual([
+      { status: 'fulfilled', value: 'task1' },
+      { status: 'fulfilled', value: 'task2' },
+      { status: 'fulfilled', value: 'task3' },
+      { status: 'fulfilled', value: 'task4' },
+    ])
+  })
+
+  it('captures rejections without aborting other concurrent tasks', async () => {
+    const tasks = [
+      async () => 'ok1',
+      async () => { throw new Error('fail2') },
+      async () => 'ok3',
+    ]
+    const results = await runPool(tasks, 2)
+    expect(results[0]).toEqual({ status: 'fulfilled', value: 'ok1' })
+    expect(results[1]).toMatchObject({ status: 'rejected' })
+    expect(results[2]).toEqual({ status: 'fulfilled', value: 'ok3' })
   })
 })
 
@@ -385,5 +457,170 @@ describe('browser-image-utils', () => {
     expect(removed).toBe(true)
 
     vi.unstubAllGlobals()
+  })
+})
+
+describe('generateFromStudio multi-image execution', () => {
+  let originalFetch: typeof globalThis.fetch
+
+  beforeEach(() => {
+    originalFetch = globalThis.fetch
+  })
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch
+  })
+
+  it('generates multiple images with count = 3 and concurrency 2', async () => {
+    let callCount = 0
+    let activeCalls = 0
+    let peakConcurrency = 0
+
+    globalThis.fetch = vi.fn().mockImplementation(async () => {
+      callCount++
+      activeCalls++
+      peakConcurrency = Math.max(peakConcurrency, activeCalls)
+      await new Promise(resolve => setTimeout(resolve, 20))
+      activeCalls--
+      return new Response(JSON.stringify({
+        output_image: {
+          data: Buffer.from('fake-image-bytes').toString('base64'),
+          mime_type: 'image/jpeg',
+        },
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+
+    const ctx = {
+      credentials: {
+        resolve: vi.fn().mockResolvedValue({ value: 'fake-key' }),
+      },
+      attachments: {
+        imageLimits: {
+          maxImageBytes: 10 * 1024 * 1024,
+          mediaTypes: ['image/jpeg', 'image/png'],
+        },
+        saveImage: vi.fn().mockImplementation(async ({ mediaType }) => ({
+          attachmentId: `att-${callCount}`,
+          mediaType,
+          bytes: 100,
+        })),
+      },
+      logger: { warn: vi.fn() },
+    } as any
+
+    const controller = new AbortController()
+    const result = await generateFromStudio(
+      ctx,
+      {},
+      {
+        mode: 'generate',
+        provider: 'google',
+        model: DEFAULT_GOOGLE_MODEL,
+        prompt: 'test prompt',
+        ratio: '1:1',
+        quality: '1K',
+        count: 3,
+      },
+      controller.signal,
+    )
+
+    expect(callCount).toBe(3)
+    expect(peakConcurrency).toBeLessThanOrEqual(2)
+    expect(result.requestedCount).toBe(3)
+    expect(result.failedCount).toBe(0)
+    expect(result.items).toHaveLength(3)
+    expect(result.attachment).toBeDefined()
+    expect(result.attachment).toEqual(result.items![0].attachment)
+  })
+
+  it('supports partial success when 1 out of 2 requests fails', async () => {
+    let callCount = 0
+    globalThis.fetch = vi.fn().mockImplementation(async () => {
+      callCount++
+      if (callCount === 2) {
+        return new Response('Rate limit reached', { status: 429 })
+      }
+      return new Response(JSON.stringify({
+        output_image: {
+          data: Buffer.from('fake-image-bytes').toString('base64'),
+          mime_type: 'image/jpeg',
+        },
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+
+    const ctx = {
+      credentials: {
+        resolve: vi.fn().mockResolvedValue({ value: 'fake-key' }),
+      },
+      attachments: {
+        imageLimits: {
+          maxImageBytes: 10 * 1024 * 1024,
+          mediaTypes: ['image/jpeg', 'image/png'],
+        },
+        saveImage: vi.fn().mockImplementation(async ({ mediaType }) => ({
+          attachmentId: `att-${callCount}`,
+          mediaType,
+          bytes: 100,
+        })),
+      },
+      logger: { warn: vi.fn() },
+    } as any
+
+    const controller = new AbortController()
+    const result = await generateFromStudio(
+      ctx,
+      {},
+      {
+        mode: 'generate',
+        provider: 'google',
+        model: DEFAULT_GOOGLE_MODEL,
+        prompt: 'test prompt',
+        ratio: '1:1',
+        quality: '1K',
+        count: 2,
+      },
+      controller.signal,
+    )
+
+    expect(result.requestedCount).toBe(2)
+    expect(result.failedCount).toBe(1)
+    expect(result.items).toHaveLength(1)
+    expect(result.errors).toHaveLength(1)
+    expect(result.errors![0].index).toBe(1)
+    expect(result.attachment).toBeDefined()
+  })
+
+  it('throws error when all requests in batch fail', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(new Response('Upstream error', { status: 500 }))
+
+    const ctx = {
+      credentials: {
+        resolve: vi.fn().mockResolvedValue({ value: 'fake-key' }),
+      },
+      attachments: {
+        imageLimits: {
+          maxImageBytes: 10 * 1024 * 1024,
+          mediaTypes: ['image/jpeg'],
+        },
+        saveImage: vi.fn(),
+      },
+      logger: { warn: vi.fn() },
+    } as any
+
+    const controller = new AbortController()
+    await expect(generateFromStudio(
+      ctx,
+      {},
+      {
+        mode: 'generate',
+        provider: 'google',
+        model: DEFAULT_GOOGLE_MODEL,
+        prompt: 'test prompt',
+        ratio: '1:1',
+        quality: '1K',
+        count: 2,
+      },
+      controller.signal,
+    )).rejects.toThrow()
   })
 })

@@ -89,6 +89,13 @@ export function parseStudioGenerateRequest(value: unknown): StudioGenerateReques
   const workspaceRoot = typeof input.workspaceRoot === 'string' && input.workspaceRoot.trim().length > 0
     ? input.workspaceRoot.trim()
     : undefined
+  let count: number | undefined
+  if (input.count !== undefined) {
+    if (typeof input.count !== 'number' || !Number.isInteger(input.count) || input.count < 1 || input.count > 4) {
+      throw new Error('生成数量仅支持 1 到 4 张')
+    }
+    count = input.count
+  }
   return {
     mode: input.mode,
     provider: input.provider,
@@ -96,6 +103,7 @@ export function parseStudioGenerateRequest(value: unknown): StudioGenerateReques
     prompt,
     ratio,
     quality,
+    ...(count !== undefined ? { count } : {}),
     ...(references.length > 0 ? { references, reference: references[0] } : {}),
     ...(workspaceRoot !== undefined ? { workspaceRoot } : {}),
   }
