@@ -24,6 +24,12 @@ export interface GalleryItem {
   isFavorite?: boolean | undefined
   /** Custom tags or collection markers */
   tags?: string[] | undefined
+  /** Workspace filesystem path where the image was generated/saved */
+  workspacePath?: string | undefined
+  /** Workspace ID if known */
+  workspaceId?: string | undefined
+  /** Conversation session ID where the image was generated */
+  sessionId?: string | undefined
 }
 
 const DB_NAME = 'dsh_image_gen_db'
@@ -293,4 +299,56 @@ export async function clearGallery(): Promise<void> {
   } catch (err) {
     console.warn('[dsh-image-gen] Failed to clear gallery in IndexedDB:', err)
   }
+}
+
+/**
+ * Standardize path format across Windows and POSIX (lowercase, forward slashes, no trailing slash).
+ */
+export function normalizeWorkspacePath(rawPath: string): string {
+  return rawPath.replace(/\\/g, '/').toLowerCase().replace(/\/+$/, '')
+}
+
+/**
+ * Determine if a gallery item belongs to the given workspace context.
+ * Compares workspaceId, sessionId membership, workspacePath, and savedTo file path prefix.
+ */
+export function isItemInWorkspace(
+  item: GalleryItem,
+  workspace?: {
+    workspaceId?: string | undefined
+    path?: string | undefined
+    sessionIds?: readonly string[] | undefined
+  } | null,
+): boolean {
+  if (!workspace || (!workspace.workspaceId && !workspace.path && (!workspace.sessionIds || workspace.sessionIds.length === 0))) {
+    return true
+  }
+
+  // 1. Direct workspaceId match
+  if (item.workspaceId && workspace.workspaceId && item.workspaceId === workspace.workspaceId) {
+    return true
+  }
+
+  // 2. SessionId membership match
+  if (item.sessionId && Array.isArray(workspace.sessionIds) && workspace.sessionIds.includes(item.sessionId)) {
+    return true
+  }
+
+  // 3. Direct workspacePath match
+  if (item.workspacePath && workspace.path) {
+    if (normalizeWorkspacePath(item.workspacePath) === normalizeWorkspacePath(workspace.path)) {
+      return true
+    }
+  }
+
+  // 4. savedTo disk file prefix match (for historical items or files written to the workspace)
+  if (item.savedTo && workspace.path) {
+    const normSaved = normalizeWorkspacePath(item.savedTo)
+    const normWs = normalizeWorkspacePath(workspace.path)
+    if (normSaved === normWs || normSaved.startsWith(normWs + '/')) {
+      return true
+    }
+  }
+
+  return false
 }

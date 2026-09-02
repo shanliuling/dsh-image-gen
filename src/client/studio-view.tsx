@@ -88,7 +88,17 @@ const COPY = {
 
 type CopyKey = keyof typeof COPY.zh
 
-export const StudioView: FC<{ locale?: LocaleService | undefined }> = ({ locale }) => {
+export interface StudioWorkspaceProps {
+  workspaceId?: string | undefined
+  path?: string | undefined
+  title?: string | undefined
+  sessionIds?: readonly string[] | undefined
+}
+
+export const StudioView: FC<{
+  locale?: LocaleService | undefined
+  workspace?: StudioWorkspaceProps | null | undefined
+}> = ({ locale, workspace }) => {
   const [lang, setLang] = useState<'zh' | 'en'>(() => locale?.getSnapshot?.().active?.startsWith('en') ? 'en' : 'zh')
   const [config, setConfig] = useState<StudioConfigResponse | null>(null)
   const [configLoading, setConfigLoading] = useState(true)
@@ -453,6 +463,7 @@ export const StudioView: FC<{ locale?: LocaleService | undefined }> = ({ locale 
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           mode, provider, model, prompt: prompt.trim(), ratio, quality,
+          ...(workspace?.path ? { workspaceRoot: workspace.path } : {}),
           ...(referencesPayload === undefined ? {} : {
             references: referencesPayload,
           }),
@@ -463,6 +474,9 @@ export const StudioView: FC<{ locale?: LocaleService | undefined }> = ({ locale 
       const item: GalleryItem = {
         id: String(payload.attachment.attachmentId), attachment: payload.attachment, prompt: payload.prompt,
         provider: payload.provider, model: payload.model, createdAt: payload.createdAt, aspectRatio: ratio, imageSize: quality, output: payload.output,
+        ...(payload.savedTo ? { savedTo: payload.savedTo } : {}),
+        ...(workspace?.path ? { workspacePath: workspace.path } : {}),
+        ...(workspace?.workspaceId ? { workspaceId: workspace.workspaceId } : {}),
       }
       await saveGalleryItem(item)
       setSelected(item)

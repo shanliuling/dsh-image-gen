@@ -86,6 +86,9 @@ export function parseStudioGenerateRequest(value: unknown): StudioGenerateReques
   const references = rawReferences.map(parseReference)
   if (input.mode === 'edit' && references.length === 0) throw new Error('图生图需要至少一张参考图')
   if (references.length > 5) throw new Error('最多支持上传 5 张参考图')
+  const workspaceRoot = typeof input.workspaceRoot === 'string' && input.workspaceRoot.trim().length > 0
+    ? input.workspaceRoot.trim()
+    : undefined
   return {
     mode: input.mode,
     provider: input.provider,
@@ -94,6 +97,7 @@ export function parseStudioGenerateRequest(value: unknown): StudioGenerateReques
     ratio,
     quality,
     ...(references.length > 0 ? { references, reference: references[0] } : {}),
+    ...(workspaceRoot !== undefined ? { workspaceRoot } : {}),
   }
 }
 

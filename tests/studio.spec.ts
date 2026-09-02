@@ -12,6 +12,12 @@ import {
   MAX_CACHE_COUNT,
 } from '../src/client/image-cache.js'
 import { formatRelativeTime, downloadBlobUrl } from '../src/client/browser-image-utils.js'
+import { conversationRegenerateRequest } from '../src/client/conversation-regenerate.js'
+import {
+  appendConversationImageRevision,
+  loadConversationImageRevisionChain,
+  selectConversationImageRevision,
+} from '../src/client/conversation-image-revisions.js'
 
 describe('image workbench provider capabilities', () => {
   it('exposes only parameters implemented by each cloud adapter', () => {
@@ -88,6 +94,84 @@ describe('image workbench request validation', () => {
   it('rejects ComfyUI and oversized prompts at the browser boundary', () => {
     expect(() => parseStudioGenerateRequest({ ...base, provider: 'comfyui' as never })).toThrow('Provider')
     expect(() => parseStudioGenerateRequest({ ...base, prompt: 'x'.repeat(2_001) })).toThrow('2000')
+  })
+
+  it('preserves valid workspaceRoot when provided', () => {
+    const result = parseStudioGenerateRequest({
+      ...base,
+      workspaceRoot: 'D:\\z\\standalone',
+    })
+    expect(result.workspaceRoot).toBe('D:\\z\\standalone')
+  })
+})
+
+describe('conversation and gallery image regeneration', () => {
+  it('reuses provider output settings while allowing the prompt to change', () => {
+    expect(conversationRegenerateRequest({
+      provider: 'google', model: DEFAULT_GOOGLE_MODEL, output: '2:3, 2K',
+    }, '  softer evening light  ')).toEqual({
+      mode: 'generate', provider: 'google', model: DEFAULT_GOOGLE_MODEL,
+      prompt: 'softer evening light', ratio: '2:3', quality: '2K',
+    })
+    expect(conversationRegenerateRequest({
+      provider: 'openai', model: DEFAULT_OPENAI_MODEL, output: '1536x1024',
+    }, 'another version')).toMatchObject({ ratio: '3:2', quality: 'standard' })
+    expect(conversationRegenerateRequest({
+      provider: 'dashscope', model: DEFAULT_DASHSCOPE_MODEL, output: '928*1664',
+    }, 'another version')).toMatchObject({ ratio: '9:16', quality: 'standard' })
+  })
+
+  it('supports gallery items with undefined output and explicit ratio/quality', () => {
+    const request = conversationRegenerateRequest(
+      { provider: 'google', model: DEFAULT_GOOGLE_MODEL },
+      'new prompt',
+      { ratio: '16:9', quality: '4K' },
+    )
+    expect(request).toEqual({
+      mode: 'generate',
+      provider: 'google',
+      model: DEFAULT_GOOGLE_MODEL,
+      prompt: 'new prompt',
+      ratio: '16:9',
+      quality: '4K',
+    })
+  })
+
+  it('rejects providers not supported by the API workbench', () => {
+    expect(() => conversationRegenerateRequest({
+      provider: 'comfyui', model: 'workflow', output: 'API workflow',
+    }, 'another version')).toThrow('Provider')
+  })
+
+  it('persists revisions and the selected in-place version', () => {
+    const values = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => { values.set(key, value) },
+    })
+    const originId = 'sha256:origin'
+    const revision = {
+      attachment: {
+        attachmentId: 'sha256:revision' as any,
+        mediaType: 'image/png' as const,
+        bytes: 8,
+        width: 32,
+        height: 32,
+      },
+      prompt: 'a revised image',
+      provider: 'google' as const,
+      model: DEFAULT_GOOGLE_MODEL,
+      output: '1:1, 1K',
+      createdAt: 123,
+      ratio: '1:1',
+      quality: '1K',
+    }
+
+    expect(appendConversationImageRevision(originId, revision)).toMatchObject({ currentIndex: 1 })
+    expect(loadConversationImageRevisionChain(originId).revisions).toEqual([revision])
+    expect(selectConversationImageRevision(originId, 0).currentIndex).toBe(0)
+    expect(loadConversationImageRevisionChain(originId).currentIndex).toBe(0)
+    vi.unstubAllGlobals()
   })
 })
 

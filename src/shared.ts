@@ -37,10 +37,20 @@ export interface StudioProviderProfile {
   defaultQuality: string
 }
 
+/** Lightweight workspace description exposed to the client for scoping. */
+export interface StudioWorkspaceInfo {
+  workspaceId: string
+  path: string
+  title: string
+  sessionIds: string[]
+}
+
 /** Read model and capability state for the workbench without exposing secrets. */
 export interface StudioConfigResponse {
   providers: StudioProviderProfile[]
   activeProvider: CloudImageProvider
+  workspaceRoot?: string | undefined
+  workspaces?: StudioWorkspaceInfo[] | undefined
 }
 
 /** A browser-uploaded reference image used for one editing request. */
@@ -67,6 +77,7 @@ export interface StudioGenerateRequest {
   quality: string
   reference?: StudioReference
   references?: StudioReference[]
+  workspaceRoot?: string | undefined
 }
 
 /** One completed workbench request. */
@@ -78,6 +89,7 @@ export interface StudioGenerateResponse {
   output: string
   createdAt: number
   elapsedMs: number
+  savedTo?: string | undefined
 }
 
 /** Default endpoints and base URLs. */

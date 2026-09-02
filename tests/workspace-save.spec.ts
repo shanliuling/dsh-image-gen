@@ -268,3 +268,93 @@ describe('deleteImageFromWorkspace', () => {
     }
   })
 })
+
+describe('workspace scoping and isolation for gallery items', () => {
+  const dummyAttachment = {
+    attachmentId: 'sha256:12345678abcdef01',
+    mediaType: 'image/png' as const,
+    bytes: 100,
+    width: 512,
+    height: 512,
+  }
+
+  it('matches item by exact workspaceId', async () => {
+    const { isItemInWorkspace } = await import('../src/client/gallery-store.js')
+    const item = {
+      id: 'item-1',
+      attachment: dummyAttachment,
+      prompt: 'test',
+      provider: 'google' as const,
+      model: 'imagen',
+      createdAt: Date.now(),
+      workspaceId: 'ws-standalone',
+    }
+    expect(isItemInWorkspace(item, { workspaceId: 'ws-standalone' })).toBe(true)
+    expect(isItemInWorkspace(item, { workspaceId: 'ws-skills-sync' })).toBe(false)
+  })
+
+  it('matches item by sessionId in workspace sessionIds list', async () => {
+    const { isItemInWorkspace } = await import('../src/client/gallery-store.js')
+    const item = {
+      id: 'item-2',
+      attachment: dummyAttachment,
+      prompt: 'test',
+      provider: 'google' as const,
+      model: 'imagen',
+      createdAt: Date.now(),
+      sessionId: 'sess-abc',
+    }
+    expect(isItemInWorkspace(item, { sessionIds: ['sess-1', 'sess-abc', 'sess-2'] })).toBe(true)
+    expect(isItemInWorkspace(item, { sessionIds: ['sess-other'] })).toBe(false)
+  })
+
+  it('matches item by workspacePath with path normalization', async () => {
+    const { isItemInWorkspace, normalizeWorkspacePath } = await import('../src/client/gallery-store.js')
+    expect(normalizeWorkspacePath('D:\\z\\standalone\\')).toBe('d:/z/standalone')
+    expect(normalizeWorkspacePath('d:/z/standalone')).toBe('d:/z/standalone')
+
+    const item = {
+      id: 'item-3',
+      attachment: dummyAttachment,
+      prompt: 'test',
+      provider: 'google' as const,
+      model: 'imagen',
+      createdAt: Date.now(),
+      workspacePath: 'D:\\z\\standalone',
+    }
+    expect(isItemInWorkspace(item, { path: 'd:/z/standalone' })).toBe(true)
+    expect(isItemInWorkspace(item, { path: 'd:/z/standalone/' })).toBe(true)
+    expect(isItemInWorkspace(item, { path: 'D:\\z\\skills-sync' })).toBe(false)
+  })
+
+  it('matches item by savedTo file path inside workspace directory', async () => {
+    const { isItemInWorkspace } = await import('../src/client/gallery-store.js')
+    const item = {
+      id: 'item-4',
+      attachment: dummyAttachment,
+      prompt: 'test',
+      provider: 'google' as const,
+      model: 'imagen',
+      createdAt: Date.now(),
+      savedTo: 'D:\\z\\standalone\\dsh-image-gen\\image-123.png',
+    }
+    expect(isItemInWorkspace(item, { path: 'd:/z/standalone' })).toBe(true)
+    expect(isItemInWorkspace(item, { path: 'D:\\z\\other-project' })).toBe(false)
+  })
+
+  it('returns true when no workspace filter context is provided', async () => {
+    const { isItemInWorkspace } = await import('../src/client/gallery-store.js')
+    const item = {
+      id: 'item-5',
+      attachment: dummyAttachment,
+      prompt: 'test',
+      provider: 'google' as const,
+      model: 'imagen',
+      createdAt: Date.now(),
+      workspaceId: 'ws-123',
+    }
+    expect(isItemInWorkspace(item, null)).toBe(true)
+    expect(isItemInWorkspace(item, undefined)).toBe(true)
+    expect(isItemInWorkspace(item, {})).toBe(true)
+  })
+})

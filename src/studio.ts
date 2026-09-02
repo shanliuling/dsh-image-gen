@@ -18,6 +18,7 @@ import { editDashScopeImage, generateDashScopeImage } from './dashscope.js'
 import { editGoogleImage, generateGoogleImage } from './google.js'
 import { editOpenAICompatibleImage, generateOpenAICompatibleImage } from './openai-compatible.js'
 import { editSeedreamImage } from './seedream.js'
+import { saveImageToWorkspace } from './workspace-save.js'
 import {
   CLOUD_IMAGE_PROVIDERS,
   type CloudImageProvider,
@@ -75,6 +76,7 @@ export async function generateFromStudio(
   config: Config,
   input: StudioGenerateRequest,
   signal: AbortSignal,
+  fallbackWorkspaceRoot?: string | undefined,
 ): Promise<StudioGenerateResponse> {
   const profile = studioProfile(config, input.provider, true)
   assertAllowed(profile, input)
@@ -130,6 +132,23 @@ export async function generateFromStudio(
     throw new Error(`当前 DSH 不支持保存 ${generated.mediaType} 图片`)
   }
   const attachment = await ctx.attachments.saveImage({ data: generated.data, mediaType: generated.mediaType, name: 'studio-image' })
+  let savedTo: string | undefined
+  const targetRoot = input.workspaceRoot || fallbackWorkspaceRoot
+  if (config.saveToWorkspace !== false && targetRoot) {
+    try {
+      savedTo = await saveImageToWorkspace({
+        workspaceRoot: targetRoot,
+        folder: config.workspaceFolder,
+        attachmentId: attachment.attachmentId,
+        mediaType: generated.mediaType,
+        data: generated.data,
+        signal,
+      })
+    } catch (saveError) {
+      ctx.logger.warn(`dsh-image-gen: studio failed to save image to workspace: ${saveError instanceof Error ? saveError.message : String(saveError)}`)
+    }
+  }
+
   return {
     attachment,
     provider: input.provider,
@@ -138,6 +157,7 @@ export async function generateFromStudio(
     output,
     createdAt: Date.now(),
     elapsedMs: Date.now() - startedAt,
+    ...(savedTo ? { savedTo } : {}),
   }
 }
 
