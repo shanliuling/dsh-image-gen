@@ -289,8 +289,11 @@ export async function deleteImageByAttachmentIdFromWorkspace(
       for (const ext of candidateExtensions) {
         const targetPath = join(root, dir, `image-${prefix}.${ext}`)
         try {
-          const ok = await deleteImageFromWorkspace(targetPath, rootsToCheck)
-          if (ok) deleted = true
+          const fileLstat = await lstat(targetPath)
+          if (fileLstat.isFile() && !fileLstat.isSymbolicLink()) {
+            const ok = await deleteImageFromWorkspace(targetPath, rootsToCheck)
+            if (ok) deleted = true
+          }
         } catch {
           // ignore not found
         }

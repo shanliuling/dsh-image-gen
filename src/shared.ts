@@ -1,15 +1,84 @@
 /** Values shared by the Host and browser Bundle faces. */
+import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 
 /** Browser route used by the generated-image card. */
 export const IMAGE_ROUTE = '/plugins/dsh-image-gen/image'
 /** Browser route used for deleting generated images and workspace files. */
 export const DELETE_ROUTE = '/plugins/dsh-image-gen/delete'
+/** Same-origin route used by the browser image workbench. */
+export const STUDIO_ROUTE = '/plugins/dsh-image-gen/studio'
 /** Namespace persisted through DSH Settings. */
 export const IMAGE_GENERATION_NAMESPACE = 'image-generation'
 
 /** Supported providers. */
 export const IMAGE_PROVIDERS = ['google', 'openai', 'seedream', 'dashscope', 'comfyui'] as const
 export type ImageProvider = typeof IMAGE_PROVIDERS[number]
+
+/** Providers supported by the first browser workbench release. */
+export const CLOUD_IMAGE_PROVIDERS = ['google', 'openai', 'seedream', 'dashscope'] as const
+export type CloudImageProvider = typeof CLOUD_IMAGE_PROVIDERS[number]
+
+/** One selectable output option exposed by a provider profile. */
+export interface StudioOption {
+  value: string
+  label: string
+}
+
+/** Browser-safe provider description. Credentials and endpoints never cross this boundary. */
+export interface StudioProviderProfile {
+  provider: CloudImageProvider
+  label: string
+  model: string
+  configured: boolean
+  supportsEditing: boolean
+  ratioOptions: StudioOption[]
+  qualityOptions: StudioOption[]
+  defaultRatio: string
+  defaultQuality: string
+}
+
+/** Read model and capability state for the workbench without exposing secrets. */
+export interface StudioConfigResponse {
+  providers: StudioProviderProfile[]
+  activeProvider: CloudImageProvider
+}
+
+/** A browser-uploaded reference image used for one editing request. */
+export interface StudioEncodedReference {
+  mediaType: ImageMediaType
+  data: string
+  name?: string
+}
+
+/** A durable image reference selected from the existing gallery. */
+export interface StudioAttachmentReference {
+  attachment: ImageAttachmentRef
+}
+
+export type StudioReference = StudioEncodedReference | StudioAttachmentReference
+
+/** One browser workbench generation or editing request. */
+export interface StudioGenerateRequest {
+  mode: 'generate' | 'edit'
+  provider: CloudImageProvider
+  model: string
+  prompt: string
+  ratio: string
+  quality: string
+  reference?: StudioReference
+  references?: StudioReference[]
+}
+
+/** One completed workbench request. */
+export interface StudioGenerateResponse {
+  attachment: ImageAttachmentRef
+  provider: CloudImageProvider
+  model: string
+  prompt: string
+  output: string
+  createdAt: number
+  elapsedMs: number
+}
 
 /** Default endpoints and base URLs. */
 export const DEFAULT_GOOGLE_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/interactions'

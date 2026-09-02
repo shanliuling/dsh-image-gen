@@ -228,23 +228,21 @@ export async function toggleFavoriteGalleryItem(id: string): Promise<boolean> {
  * Delete a single gallery record by ID and record a tombstone.
  */
 export async function deleteGalleryItem(id: string): Promise<void> {
-  try {
-    const db = await getDB()
-    const tombstones = await loadTombstones(db)
-    tombstones.add(id)
-    await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction([STORE_NAME, TOMBSTONE_STORE], 'readwrite')
-      const store = tx.objectStore(STORE_NAME)
-      const tombstoneStore = tx.objectStore(TOMBSTONE_STORE)
-      store.delete(id)
-      tombstoneStore.put({ id, deletedAt: Date.now() })
-      tx.oncomplete = () => resolve()
-      tx.onerror = () => reject(tx.error)
-    })
-    notifyListeners()
-  } catch (err) {
-    console.warn('[dsh-image-gen] Failed to delete gallery item from IndexedDB:', err)
-  }
+  const db = await getDB()
+  const tombstones = await loadTombstones(db)
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction([STORE_NAME, TOMBSTONE_STORE], 'readwrite')
+    const store = tx.objectStore(STORE_NAME)
+    const tombstoneStore = tx.objectStore(TOMBSTONE_STORE)
+    store.delete(id)
+    tombstoneStore.put({ id, deletedAt: Date.now() })
+    tx.oncomplete = () => {
+      tombstones.add(id)
+      resolve()
+    }
+    tx.onerror = () => reject(tx.error)
+  })
+  notifyListeners()
 }
 
 /**

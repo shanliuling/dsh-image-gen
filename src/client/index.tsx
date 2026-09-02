@@ -24,6 +24,7 @@ import { validateComfyUIWorkflowJson } from '../comfyui-workflow.js'
 import { saveGalleryItem } from './gallery-store.js'
 import { GalleryViewTab, copyImageBlob, type LocaleService } from './gallery-view.js'
 import { imageRef } from './image-ref.js'
+import { STUDIO_STYLE } from './studio-style.js'
 import {
   IMAGE_RESULT_NODE_KIND,
   createImageResultDefinition,
@@ -426,7 +427,7 @@ export function apply(ctx: Context): void {
   ctx.effect(() => {
     const style = document.createElement('style')
     style.dataset.plugin = 'dsh-image-gen'
-    style.textContent = STYLE
+    style.textContent = `${STYLE}\n${STUDIO_STYLE}`
     document.head.appendChild(style)
     return () => {
       style.remove()

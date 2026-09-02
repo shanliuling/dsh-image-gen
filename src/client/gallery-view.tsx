@@ -10,8 +10,6 @@ import {
   Image as ImageIcon,
   SlidersHorizontal,
   Heart,
-  GitCompare,
-  ListTodo,
   Search,
   Copy,
   Download,
@@ -32,13 +30,16 @@ import {
   toggleFavoriteGalleryItem,
   type GalleryItem,
 } from './gallery-store.js'
+import { StudioView } from './studio-view.js'
+import { evictAttachmentCache } from './image-cache.js'
+import { copyImageBlob } from './browser-image-utils.js'
 
 export interface LocaleService {
   getSnapshot(): { active: string }
   subscribe(fn: () => void): () => void
 }
 
-export type TabKey = 'gallery' | 'studio' | 'favorites' | 'compare' | 'tasks'
+export type TabKey = 'gallery' | 'studio' | 'favorites'
 export type SortKey = 'newest' | 'oldest'
 
 const DICT = {
@@ -661,6 +662,11 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
     setShowDeleteModal(true)
   }
 
+  const hasWorkspaceFilesToDelete = useMemo(
+    () => items.some(i => selectedIds.has(i.id) && typeof i.savedTo === 'string' && i.savedTo.trim().length > 0),
+    [items, selectedIds]
+  )
+
   // Execute batch deletion (IndexedDB single transaction + optional workspace disk unlink)
   const handleConfirmBatchDelete = async () => {
     if (selectedIds.size === 0 || isDeleting) return
@@ -669,47 +675,52 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
     const idsToDelete = Array.from(selectedIds)
     const itemsToDelete = items.filter((i) => selectedIds.has(i.id))
 
-    // 1. Separate items: if savedTo is known, ONLY use exact path (no broad scan!)
+    // 1. Collect exact workspace file paths
     const pathsToDelete = itemsToDelete
       .map((i) => i.savedTo)
       .filter((p): p is string => typeof p === 'string' && p.trim().length > 0)
 
-    // 2. Only send attachmentId as fallback for legacy items that lack savedTo:
-    const fallbackAttachmentIds = itemsToDelete
-      .filter((i) => !i.savedTo || !i.savedTo.trim())
-      .map((i) => i.id)
-
     let deletedFiles = 0
-    let failedFilesCount = 0
 
-    if (deleteWorkspaceFiles && (pathsToDelete.length > 0 || fallbackAttachmentIds.length > 0)) {
+    if (deleteWorkspaceFiles && pathsToDelete.length > 0) {
       try {
         const res = await fetch(DELETE_ROUTE, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
             paths: pathsToDelete,
-            attachmentIds: fallbackAttachmentIds,
           }),
         })
-        if (res.ok) {
-          const data = (await res.json()) as {
-            deletedCount?: number
-            failedFiles?: { path: string; error: string }[]
-          }
-          deletedFiles = data.deletedCount ?? 0
-          if (Array.isArray(data.failedFiles)) {
-            failedFilesCount = data.failedFiles.length
-          }
+        if (!res.ok) {
+          setIsDeleting(false)
+          showToast(`工作区文件删除失败 (${res.status})`)
+          return
         }
+        const data = (await res.json().catch(() => null)) as {
+          ok?: boolean
+          deletedCount?: number
+          failedFiles?: { path: string; error: string }[]
+        } | null
+        if (!data || data.ok === false || (Array.isArray(data.failedFiles) && data.failedFiles.length > 0)) {
+          setIsDeleting(false)
+          const reason = data?.failedFiles?.[0]?.error || '工作区文件未能删除'
+          showToast(`删除失败：${reason}`)
+          return
+        }
+        deletedFiles = data.deletedCount ?? 0
       } catch (err) {
-        console.warn('[dsh-image-gen] Workspace file deletion failed:', err)
+        setIsDeleting(false)
+        showToast(err instanceof Error ? err.message : '工作区文件删除网络异常')
+        return
       }
     }
 
-    // 3. Perform IndexedDB deletion with real error handling
+    // 2. Perform IndexedDB deletion with real error handling
     try {
       await bulkDeleteGalleryItems(idsToDelete)
+      for (const item of itemsToDelete) {
+        evictAttachmentCache(item.attachment.attachmentId)
+      }
     } catch (err) {
       setIsDeleting(false)
       showToast(t('deleteFailedDatabase'))
@@ -730,9 +741,7 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
       lastSelectedIndexRef.current = null
     }
 
-    if (failedFilesCount > 0) {
-      showToast(t('deleteFailedFileLocked', { count: String(idsToDelete.length), files: String(failedFilesCount) }))
-    } else if (deletedFiles > 0) {
+    if (deletedFiles > 0) {
       showToast(t('batchDeletedWithFilesToast', { count: String(idsToDelete.length), files: String(deletedFiles) }))
     } else {
       showToast(t('batchDeletedToast', { count: String(idsToDelete.length) }))
@@ -768,24 +777,6 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
         >
           <Heart size={15} />
           <span>{t('tabFavorites')}</span>
-        </button>
-
-        <button
-          type="button"
-          className={`dsh-ig-studio-tab-btn ${activeTab === 'compare' ? 'is-active' : ''}`}
-          onClick={() => setActiveTab('compare')}
-        >
-          <GitCompare size={15} />
-          <span>{t('tabCompare')}</span>
-        </button>
-
-        <button
-          type="button"
-          className={`dsh-ig-studio-tab-btn ${activeTab === 'tasks' ? 'is-active' : ''}`}
-          onClick={() => setActiveTab('tasks')}
-        >
-          <ListTodo size={15} />
-          <span>{t('tabTasks')}</span>
         </button>
       </header>
 
@@ -868,7 +859,7 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
       )}
 
       {/* 3. Main View Body */}
-      <div className="dsh-ig-gallery-page-body">
+      <div className={`dsh-ig-gallery-page-body ${activeTab === 'studio' ? 'is-workbench' : ''}`}>
         {activeTab === 'gallery' || activeTab === 'favorites' ? (
           items.length === 0 ? (
             <div className="dsh-ig-gallery-empty">
@@ -908,28 +899,8 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
               ))}
             </div>
           )
-        ) : activeTab === 'studio' ? (
-          <PlaceholderView
-            icon="🎨"
-            title={t('studioTitle')}
-            description={t('studioDesc')}
-            tip={t('studioTip')}
-            badge={t('comingSoonBadge')}
-          />
-        ) : activeTab === 'compare' ? (
-          <PlaceholderView
-            icon="🔀"
-            title={t('compareTitle')}
-            description={t('compareDesc')}
-            badge={t('comingSoonBadge')}
-          />
         ) : (
-          <PlaceholderView
-            icon="📋"
-            title={t('tasksTitle')}
-            description={t('tasksDesc')}
-            badge={t('comingSoonBadge')}
-          />
+          <StudioView locale={locale} />
         )}
       </div>
 
@@ -1017,15 +988,17 @@ export const GalleryViewTab: FC<{ locale?: LocaleService }> = ({ locale }) => {
                 {t('batchDeleteDesc')}
               </p>
 
-              <label className="dsh-ig-modal-checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={deleteWorkspaceFiles}
-                  onChange={(e) => setDeleteWorkspaceFiles(e.target.checked)}
-                  disabled={isDeleting}
-                />
-                <span>{t('deleteWorkspaceFilesOpt')}</span>
-              </label>
+              {hasWorkspaceFilesToDelete && (
+                <label className="dsh-ig-modal-checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={deleteWorkspaceFiles}
+                    onChange={(e) => setDeleteWorkspaceFiles(e.target.checked)}
+                    disabled={isDeleting}
+                  />
+                  <span>{t('deleteWorkspaceFilesOpt')}</span>
+                </label>
+              )}
             </div>
 
             <div className="dsh-ig-modal-footer">
@@ -1450,33 +1423,4 @@ const PlaceholderView: FC<PlaceholderViewProps> = ({
   )
 }
 
-export async function copyImageBlob(blob: Blob): Promise<boolean> {
-  try {
-    if (blob.type === 'image/png') {
-      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
-      return true
-    }
-    const img = new Image()
-    const url = URL.createObjectURL(blob)
-    await new Promise((resolve, reject) => {
-      img.onload = resolve
-      img.onerror = reject
-      img.src = url
-    })
-    const canvas = document.createElement('canvas')
-    canvas.width = img.naturalWidth
-    canvas.height = img.naturalHeight
-    const ctx = canvas.getContext('2d')
-    if (!ctx) throw new Error('Canvas unavailable')
-    ctx.drawImage(img, 0, 0)
-    URL.revokeObjectURL(url)
-    const pngBlob = await new Promise<Blob | null>((res) => {
-      canvas.toBlob(res, 'image/png')
-    })
-    if (!pngBlob) throw new Error('Blob conversion failed')
-    await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })])
-    return true
-  } catch (_err) {
-    return false
-  }
-}
+export { copyImageBlob } from './browser-image-utils.js'

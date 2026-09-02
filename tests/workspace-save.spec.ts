@@ -254,4 +254,17 @@ describe('deleteImageFromWorkspace', () => {
       await rm(base, { recursive: true, force: true })
     }
   })
+
+  it('returns false when no matching file exists on disk in fallback deletion', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'dsh-image-gen-del-'))
+    try {
+      const ok = await deleteImageByAttachmentIdFromWorkspace('sha256:00000000abcdef0112345678abcdef0112345678abcdef0112345678abcdef01', {
+        folder: 'dsh-image-gen',
+        allowedWorkspaceRoots: [base],
+      })
+      expect(ok).toBe(false)
+    } finally {
+      await rm(base, { recursive: true, force: true })
+    }
+  })
 })
