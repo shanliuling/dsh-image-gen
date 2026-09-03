@@ -16,10 +16,13 @@ interface CachedImage {
 
 const pending = new Map<string, Promise<Blob>>()
 
+let cacheEpoch = 0
+
 export function fetchInspirationImage(sourceId: string, caseId: string): Promise<Blob> {
   const key = `${sourceId}:${caseId}`
   const existing = pending.get(key)
   if (existing !== undefined) return existing
+  const requestEpoch = cacheEpoch
   const task = getCached(key).then(async cached => {
     if (cached !== undefined) return cached
     const response = await fetch(`${INSPIRATION_ROUTE}/image/${encodeURIComponent(sourceId)}/${encodeURIComponent(caseId)}`, {
@@ -31,7 +34,9 @@ export function fetchInspirationImage(sourceId: string, caseId: string): Promise
     if (blob.size < 64 || !['image/jpeg', 'image/png', 'image/webp'].includes(blob.type)) {
       throw new Error('灵感图片格式不受支持')
     }
-    void putCached(key, blob)
+    if (requestEpoch === cacheEpoch) {
+      void putCached(key, blob)
+    }
     return blob
   }).finally(() => pending.delete(key))
   pending.set(key, task)
@@ -152,6 +157,7 @@ async function trimCache(db: IDBDatabase): Promise<void> {
 }
 
 export async function clearInspirationImageCache(): Promise<void> {
+  cacheEpoch += 1
   pending.clear()
   const db = await openDatabase()
   if (db === undefined) return

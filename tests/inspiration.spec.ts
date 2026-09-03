@@ -1,5 +1,5 @@
 import { createServer, type Server } from 'node:http'
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -173,6 +173,40 @@ describe('inspiration HTTP route', () => {
 
     const filesAfter = readdirSync(cacheDir).filter(name => /\.(jpg|png|webp)$/i.test(name))
     expect(filesAfter).toHaveLength(0)
+  })
+
+  it('does not write in-flight images to disk cache if /cache/clear was called before completion', async () => {
+    let resolveSlowFetch: ((res: Response) => void) | undefined
+    const dummyImage = new Uint8Array(128).fill(42)
+    const upstream = vi.fn<typeof fetch>(async () => new Promise<Response>(resolve => {
+      resolveSlowFetch = () => resolve(new Response(dummyImage, {
+        status: 200,
+        headers: { 'content-type': 'image/jpeg', 'content-length': '128' },
+      }))
+    }))
+    const url = await start(upstream)
+    const item = BUNDLED_INSPIRATION_CATALOG.sources[0]!.cases[0]!
+
+    // Start slow in-flight fetch
+    const slowReq = fetch(`${url}/image/awesome-gpt-image-2/${item.id}`, { headers: { origin: url } })
+    await new Promise(r => setTimeout(r, 20))
+
+    // User triggers clear cache while request is in flight
+    await fetch(`${url}/cache/clear`, { method: 'POST', headers: { origin: url } })
+
+    // Now resolve the slow in-flight request
+    resolveSlowFetch!(new Response(dummyImage, {
+      status: 200,
+      headers: { 'content-type': 'image/jpeg', 'content-length': '128' },
+    }))
+    const res = await slowReq
+    expect(res.status).toBe(200)
+    await drainCacheWrites()
+
+    // The disk cache should NOT contain the image because epoch changed
+    const cacheDir = join(tmpHome!, '.dsh', 'cache', 'dsh-image-gen', 'inspiration')
+    const files = existsSync(cacheDir) ? readdirSync(cacheDir).filter(name => /\.(jpg|png|webp)$/i.test(name)) : []
+    expect(files).toHaveLength(0)
   })
 })
 

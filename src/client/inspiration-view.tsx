@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FC } from 'react'
-import { Check, Clipboard, ExternalLink, ImageIcon, LoaderCircle, Maximize2, Search, Sparkles, Star, Trash2, X } from 'lucide-react'
+import { AlertTriangle, Check, Clipboard, ExternalLink, ImageIcon, LoaderCircle, Maximize2, Search, Sparkles, Star, Trash2, X } from 'lucide-react'
 import { INSPIRATION_ROUTE } from '../shared.js'
 import type { InspirationCase, InspirationCatalog, InspirationSource } from '../inspiration.js'
 import { clearInspirationImageCache, evictInspirationImage, fetchInspirationImage } from './inspiration-image-cache.js'
@@ -99,7 +99,7 @@ const COPY = {
     allCategories: '全部分类', allStyles: '全部风格', allScenes: '全部场景',
     search: '搜索案例、Prompt、风格…', results: '找到 {count} 个案例', noResults: '没有匹配的素材，换个关键词或筛选条件试试。',
     selectHint: '选择一张素材，查看完整 Prompt 并带回工作台。', prompt: '完整 Prompt', copy: '复制 Prompt', copied: '已复制', use: '使用这个 Prompt', source: '查看原来源',
-    loading: '正在读取素材库…', loadFailed: '素材库读取失败，请稍后重试。', imageFailed: '图片暂时无法读取', featured: '精选', updated: '素材已更新（{count} 条）', updateFailed: '更新失败，仍在使用当前内置素材。',
+    loading: '正在读取素材库…', loadFailed: '素材库读取失败，请稍后重试。', copyFailed: '复制失败', retry: '重新加载', imageFailed: '图片暂时无法读取', featured: '精选', updated: '素材已更新（{count} 条）', updateFailed: '更新失败，仍在使用当前内置素材。',
     allLoaded: '已展示全部 {count} 个案例', onlyFavorites: '仅看收藏', noFavorites: '暂无收藏的灵感案例，浏览时点击星标即可收藏。',
     favorite: '收藏', favorited: '已收藏', zoomHint: '点击放大查看', close: '关闭',
   },
@@ -110,7 +110,7 @@ const COPY = {
     allCategories: 'All categories', allStyles: 'All styles', allScenes: 'All scenes',
     search: 'Search examples, prompts, styles…', results: '{count} examples', noResults: 'No matching examples. Try another keyword or filter.',
     selectHint: 'Choose an example to read its full prompt and use it in Studio.', prompt: 'Full prompt', copy: 'Copy prompt', copied: 'Copied', use: 'Use this prompt', source: 'View source',
-    loading: 'Loading inspiration…', loadFailed: 'Could not load the inspiration library.', imageFailed: 'Image is temporarily unavailable', featured: 'Featured', updated: 'Updated ({count} examples)', updateFailed: 'Update failed. The current bundled library is still available.',
+    loading: 'Loading inspiration…', loadFailed: 'Could not load the inspiration library.', copyFailed: 'Failed to copy', retry: 'Retry', imageFailed: 'Image is temporarily unavailable', featured: 'Featured', updated: 'Updated ({count} examples)', updateFailed: 'Update failed. The current bundled library is still available.',
     allLoaded: 'All {count} examples displayed', onlyFavorites: 'Favorites only', noFavorites: 'No favorited examples yet. Click the star icon on any card to save.',
     favorite: 'Favorite', favorited: 'Favorited', zoomHint: 'Click to zoom in', close: 'Close',
   },
@@ -121,6 +121,7 @@ type CopyKey = keyof typeof COPY.zh
 export const InspirationView: FC<{ locale?: LocaleService | undefined; onUsePrompt(prompt: string): void }> = ({ locale, onUsePrompt }) => {
   const [language, setLanguage] = useState<Language>(() => locale?.getSnapshot?.().active?.startsWith('en') ? 'en' : 'zh')
   const [catalog, setCatalog] = useState<InspirationCatalog | null>(null)
+  const [catalogError, setCatalogError] = useState(false)
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('')
   const [style, setStyle] = useState('')
@@ -180,17 +181,32 @@ export const InspirationView: FC<{ locale?: LocaleService | undefined; onUseProm
     return payload
   }
 
+  const retryCatalog = async () => {
+    setCatalogError(false)
+    try {
+      const data = await loadCatalog('GET')
+      setCatalog(data)
+      setSelected(previous => previous === null ? data.sources[0]?.cases.find(item => item.featured) ?? data.sources[0]?.cases[0] ?? null : previous)
+    } catch {
+      setCatalogError(true)
+      showToast(t('loadFailed'), true)
+    }
+  }
+
   useEffect(() => {
     let mounted = true
+    setCatalogError(false)
     void Promise.allSettled([loadCatalog(), loadCachedInspirationCatalog()]).then(([server, cache]) => {
       if (!mounted) return
       const cached = cache.status === 'fulfilled' ? cache.value : undefined
       const bundled = server.status === 'fulfilled' ? server.value : undefined
       const next = resolveActiveCatalog(bundled, cached)
       if (next === undefined) {
+        setCatalogError(true)
         showToast(t('loadFailed'), true)
         return
       }
+      setCatalogError(false)
       setCatalog(next)
       setSelected(previous => previous === null ? next.sources[0]?.cases.find(item => item.featured) ?? next.sources[0]?.cases[0] ?? null : previous)
     })
@@ -287,7 +303,7 @@ export const InspirationView: FC<{ locale?: LocaleService | undefined; onUseProm
       showToast(t('copied'))
       window.setTimeout(() => setCopied(false), 1_800)
     } catch {
-      showToast(t('loadFailed'), true)
+      showToast(t('copyFailed'), true)
     }
   }
 
@@ -317,7 +333,17 @@ export const InspirationView: FC<{ locale?: LocaleService | undefined; onUseProm
         </button>
       </div>
     </header>
-    {source === null ? <div className="dsh-ig-inspiration-empty"><LoaderCircle className="dsh-ig-spin" size={23} /><span>{t('loading')}</span></div> : <>
+    {catalogError ? (
+      <div className="dsh-ig-inspiration-empty is-catalog-error">
+        <AlertTriangle size={28} />
+        <p>{t('loadFailed')}</p>
+        <button type="button" className="dsh-ig-inspiration-retry-btn" onClick={() => void retryCatalog()}>
+          {t('retry')}
+        </button>
+      </div>
+    ) : source === null ? (
+      <div className="dsh-ig-inspiration-empty"><LoaderCircle className="dsh-ig-spin" size={23} /><span>{t('loading')}</span></div>
+    ) : <>
       <div className="dsh-ig-inspiration-toolbar">
         <label className="dsh-ig-inspiration-search"><Search size={15} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder={t('search')} /></label>
         <button
@@ -362,6 +388,7 @@ export const InspirationView: FC<{ locale?: LocaleService | undefined; onUseProm
                     isFavorited={favorites.has(item.id)}
                     language={language}
                     featuredLabel={t('featured')}
+                    retryLabel={t('retry')}
                     onSelect={() => { setSelected(item); setCopied(false) }}
                     onToggleFavorite={() => toggleFavorite(item.id)}
                   />
@@ -385,7 +412,7 @@ export const InspirationView: FC<{ locale?: LocaleService | undefined; onUseProm
                 onClick={() => setLightboxCase({ sourceId: source.id, caseId: selected.id, title: selected.title, alt: selected.imageAlt })}
                 title={t('zoomHint')}
               >
-                <InspirationImage sourceId={source.id} caseId={selected.id} alt={selected.imageAlt} />
+                <InspirationImage sourceId={source.id} caseId={selected.id} alt={selected.imageAlt} retryLabel={t('retry')} />
                 <span className="dsh-ig-inspiration-inspector-zoom-hint">
                   <Maximize2 size={11} />
                   {t('zoomHint')}
@@ -430,7 +457,7 @@ export const InspirationView: FC<{ locale?: LocaleService | undefined; onUseProm
             <X size={18} />
           </button>
           <div className="dsh-ig-inspiration-lightbox-img-wrap">
-            <InspirationImage sourceId={lightboxCase.sourceId} caseId={lightboxCase.caseId} alt={lightboxCase.alt} />
+            <InspirationImage sourceId={lightboxCase.sourceId} caseId={lightboxCase.caseId} alt={lightboxCase.alt} retryLabel={t('retry')} />
           </div>
           <div className="dsh-ig-inspiration-lightbox-caption">{lightboxCase.title}</div>
         </div>
@@ -483,9 +510,10 @@ const InspirationCard: FC<{
   isFavorited: boolean
   language: Language
   featuredLabel: string
+  retryLabel?: string | undefined
   onSelect(): void
   onToggleFavorite(): void
-}> = ({ item, sourceId, selected, isFavorited, language, featuredLabel, onSelect, onToggleFavorite }) => (
+}> = ({ item, sourceId, selected, isFavorited, language, featuredLabel, retryLabel, onSelect, onToggleFavorite }) => (
   <button type="button" className={`dsh-ig-inspiration-card ${selected ? 'is-selected' : ''}`} onClick={onSelect}>
     <div className="dsh-ig-inspiration-visual">
       {item.featured && <span className="dsh-ig-inspiration-featured"><Sparkles size={10} />{featuredLabel}</span>}
@@ -500,7 +528,7 @@ const InspirationCard: FC<{
       >
         <Star size={13} className={isFavorited ? 'fill-star' : ''} />
       </button>
-      <InspirationImage sourceId={sourceId} caseId={item.id} alt={item.imageAlt} />
+      <InspirationImage sourceId={sourceId} caseId={item.id} alt={item.imageAlt} retryLabel={retryLabel} />
     </div>
     <div className="dsh-ig-inspiration-card-copy">
       <strong>{item.title}</strong>
@@ -509,7 +537,7 @@ const InspirationCard: FC<{
   </button>
 )
 
-const InspirationImage: FC<{ sourceId: string; caseId: string; alt: string }> = ({ sourceId, caseId, alt }) => {
+const InspirationImage: FC<{ sourceId: string; caseId: string; alt: string; retryLabel?: string | undefined }> = ({ sourceId, caseId, alt, retryLabel = 'Retry' }) => {
   const [node, setNode] = useState<HTMLDivElement | null>(null)
   const [visible, setVisible] = useState(false)
   const [url, setUrl] = useState<string | null>(null)
@@ -527,9 +555,17 @@ const InspirationImage: FC<{ sourceId: string; caseId: string; alt: string }> = 
     if (!visible) return
     let active = true
     setFailed(false)
+    if (urlRef.current !== null) {
+      URL.revokeObjectURL(urlRef.current)
+      urlRef.current = null
+    }
+    setUrl(null)
     void fetchInspirationImage(sourceId, caseId).then(blob => {
       if (!active) return
       const next = URL.createObjectURL(blob)
+      if (urlRef.current !== null) {
+        URL.revokeObjectURL(urlRef.current)
+      }
       urlRef.current = next
       setUrl(next)
     }).catch(() => { if (active) setFailed(true) })
@@ -568,18 +604,25 @@ const InspirationImage: FC<{ sourceId: string; caseId: string; alt: string }> = 
               onClick={e => {
                 e.stopPropagation()
                 setFailed(false)
+                if (urlRef.current !== null) {
+                  URL.revokeObjectURL(urlRef.current)
+                  urlRef.current = null
+                }
                 setUrl(null)
                 void evictInspirationImage(sourceId, caseId)
                   .then(() => fetchInspirationImage(sourceId, caseId))
                   .then(blob => {
                     const next = URL.createObjectURL(blob)
+                    if (urlRef.current !== null) {
+                      URL.revokeObjectURL(urlRef.current)
+                    }
                     urlRef.current = next
                     setUrl(next)
                   })
                   .catch(() => setFailed(true))
               }}
             >
-              点击重试
+              {retryLabel}
             </button>
           ) : (
             <LoaderCircle className="dsh-ig-spin" size={18} />

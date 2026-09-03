@@ -30,6 +30,8 @@ export interface InspirationRouteDeps {
  * The browser can request only catalog metadata or a `(sourceId, caseId)` pair.
  * It cannot provide a URL, filename, host or image path to proxy.
  */
+let diskCacheEpoch = 0
+
 export function createInspirationRoute(deps: InspirationRouteDeps = {}) {
   const request = deps.fetch ?? fetch
   let activeCatalog = BUNDLED_INSPIRATION_CATALOG
@@ -50,6 +52,7 @@ export function createInspirationRoute(deps: InspirationRouteDeps = {}) {
       }
     }
     if (req.method === 'POST' && url.pathname === '/cache/clear') {
+      diskCacheEpoch += 1
       await clearDiskCache()
       return json(res, 200, { ok: true })
     }
@@ -70,6 +73,7 @@ export function createInspirationRoute(deps: InspirationRouteDeps = {}) {
     }
     if (item === undefined) return jsonError(res, 404, 'case-not-found')
     const cacheKey = `${sourceId}_${caseId}`
+    const requestEpoch = diskCacheEpoch
     // 1. 先查磁盘缓存——命中则零网络开销直接返回 (纯异步非阻塞)
     const cached = await readImageCache(cacheKey)
     if (cached !== undefined) {
@@ -99,8 +103,10 @@ export function createInspirationRoute(deps: InspirationRouteDeps = {}) {
         // 流式限长读取：边读边算，超 12MB 立刻拔网线，防御 chunked 内存尖峰
         const body = await readLimitedStream(upstream, MAX_IMAGE_BYTES)
         if (body === null || body.byteLength === 0) continue
-        // 3. 拉取成功，异步写入磁盘缓存（串行排队 + 防崩溃吞错）
-        writeImageCache(cacheKey, type, body)
+        // 3. 拉取成功，异步写入磁盘缓存（串行排队 + 防崩溃吞错 + 代次校验）
+        if (requestEpoch === diskCacheEpoch) {
+          writeImageCache(cacheKey, type, body)
+        }
         res.writeHead(200, {
           'content-type': type,
           'content-length': String(body.byteLength),
