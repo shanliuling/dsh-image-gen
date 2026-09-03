@@ -95,6 +95,7 @@ const COPY = {
   zh: {
     kicker: 'Prompt inspiration', title: '灵感素材', subtitle: '从公开案例中找构图、质感和文字处理，再带回工作台继续调整。',
     refresh: '检查更新', refreshing: '正在更新…', clearCache: '清理缓存', clearingCache: '正在清理…', cacheCleared: '已清空本地图片缓存', cacheClearFailed: '清理缓存失败', clearCacheRestart: '后端未就绪，请重启 DSH 后生效',
+    clearModalTitle: '清理本地图片缓存？', clearModalDesc: '将删除本地保存的灵感素材图片以释放磁盘空间。案例列表、Prompt 和您的收藏夹不会受到任何影响，后续浏览时会自动重新拉取。', cancel: '取消', confirmClear: '确认清理',
     allCategories: '全部分类', allStyles: '全部风格', allScenes: '全部场景',
     search: '搜索案例、Prompt、风格…', results: '找到 {count} 个案例', noResults: '没有匹配的素材，换个关键词或筛选条件试试。',
     selectHint: '选择一张素材，查看完整 Prompt 并带回工作台。', prompt: '完整 Prompt', copy: '复制 Prompt', copied: '已复制', use: '使用这个 Prompt', source: '查看原来源',
@@ -105,6 +106,7 @@ const COPY = {
   en: {
     kicker: 'Prompt inspiration', title: 'Inspiration', subtitle: 'Explore public examples, then bring a prompt back to Studio to make it your own.',
     refresh: 'Check updates', refreshing: 'Updating…', clearCache: 'Clear cache', clearingCache: 'Clearing…', cacheCleared: 'Local image cache cleared', cacheClearFailed: 'Failed to clear cache', clearCacheRestart: 'Backend not ready, please restart DSH',
+    clearModalTitle: 'Clear local image cache?', clearModalDesc: 'This will delete locally cached inspiration images to free up disk space. The catalog, prompts, and your bookmarks will remain intact. Images will be re-fetched on demand.', cancel: 'Cancel', confirmClear: 'Clear Cache',
     allCategories: 'All categories', allStyles: 'All styles', allScenes: 'All scenes',
     search: 'Search examples, prompts, styles…', results: '{count} examples', noResults: 'No matching examples. Try another keyword or filter.',
     selectHint: 'Choose an example to read its full prompt and use it in Studio.', prompt: 'Full prompt', copy: 'Copy prompt', copied: 'Copied', use: 'Use this prompt', source: 'View source',
@@ -127,12 +129,12 @@ export const InspirationView: FC<{ locale?: LocaleService | undefined; onUseProm
   const [selected, setSelected] = useState<InspirationCase | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [clearingCache, setClearingCache] = useState(false)
+  const [confirmClearOpen, setConfirmClearOpen] = useState(false)
   const [copied, setCopied] = useState(false)
   const [favorites, setFavorites] = useState<Set<string>>(() => loadInspirationFavorites())
   const [onlyFavorites, setOnlyFavorites] = useState(false)
   const [lightboxCase, setLightboxCase] = useState<{ sourceId: string; caseId: string; title: string; alt: string } | null>(null)
   const [toast, setToast] = useState<{ text: string; isError?: boolean } | null>(null)
-  const [cacheNonce, setCacheNonce] = useState(0)
   const toastTimerRef = useRef<number | null>(null)
   const sentinelRef = useRef<HTMLDivElement | null>(null)
 
@@ -260,6 +262,7 @@ export const InspirationView: FC<{ locale?: LocaleService | undefined; onUseProm
   const clearCache = async () => {
     if (clearingCache) return
     setClearingCache(true)
+    setConfirmClearOpen(false)
     try {
       await clearInspirationImageCache()
       const res = await fetch(`${INSPIRATION_ROUTE}/cache/clear`, { method: 'POST', credentials: 'same-origin' })
@@ -267,7 +270,6 @@ export const InspirationView: FC<{ locale?: LocaleService | undefined; onUseProm
         if (res.status === 404) throw new Error(t('clearCacheRestart'))
         throw new Error(`HTTP ${res.status}`)
       }
-      setCacheNonce(n => n + 1)
       showToast(t('cacheCleared'))
     } catch (err: unknown) {
       const msg = err instanceof Error && err.message ? err.message : t('cacheClearFailed')
@@ -296,7 +298,7 @@ export const InspirationView: FC<{ locale?: LocaleService | undefined; onUseProm
         <button
           type="button"
           className="dsh-ig-inspiration-clear-cache"
-          onClick={() => void clearCache()}
+          onClick={() => setConfirmClearOpen(true)}
           disabled={clearingCache}
           title={t('clearCache')}
         >
@@ -360,7 +362,6 @@ export const InspirationView: FC<{ locale?: LocaleService | undefined; onUseProm
                     isFavorited={favorites.has(item.id)}
                     language={language}
                     featuredLabel={t('featured')}
-                    cacheNonce={cacheNonce}
                     onSelect={() => { setSelected(item); setCopied(false) }}
                     onToggleFavorite={() => toggleFavorite(item.id)}
                   />
@@ -384,7 +385,7 @@ export const InspirationView: FC<{ locale?: LocaleService | undefined; onUseProm
                 onClick={() => setLightboxCase({ sourceId: source.id, caseId: selected.id, title: selected.title, alt: selected.imageAlt })}
                 title={t('zoomHint')}
               >
-                <InspirationImage sourceId={source.id} caseId={selected.id} alt={selected.imageAlt} cacheNonce={cacheNonce} />
+                <InspirationImage sourceId={source.id} caseId={selected.id} alt={selected.imageAlt} />
                 <span className="dsh-ig-inspiration-inspector-zoom-hint">
                   <Maximize2 size={11} />
                   {t('zoomHint')}
@@ -429,9 +430,38 @@ export const InspirationView: FC<{ locale?: LocaleService | undefined; onUseProm
             <X size={18} />
           </button>
           <div className="dsh-ig-inspiration-lightbox-img-wrap">
-            <InspirationImage sourceId={lightboxCase.sourceId} caseId={lightboxCase.caseId} alt={lightboxCase.alt} cacheNonce={cacheNonce} />
+            <InspirationImage sourceId={lightboxCase.sourceId} caseId={lightboxCase.caseId} alt={lightboxCase.alt} />
           </div>
           <div className="dsh-ig-inspiration-lightbox-caption">{lightboxCase.title}</div>
+        </div>
+      </div>
+    )}
+
+    {/* 清理缓存二次确认弹窗 */}
+    {confirmClearOpen && (
+      <div className="dsh-ig-inspiration-modal-backdrop" onClick={() => setConfirmClearOpen(false)}>
+        <div className="dsh-ig-inspiration-modal" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
+          <h3>{t('clearModalTitle')}</h3>
+          <p>{t('clearModalDesc')}</p>
+          <div className="dsh-ig-inspiration-modal-actions">
+            <button
+              type="button"
+              className="dsh-ig-inspiration-modal-btn"
+              onClick={() => setConfirmClearOpen(false)}
+              disabled={clearingCache}
+            >
+              {t('cancel')}
+            </button>
+            <button
+              type="button"
+              className="dsh-ig-inspiration-modal-btn is-danger"
+              onClick={() => void clearCache()}
+              disabled={clearingCache}
+            >
+              {clearingCache ? <LoaderCircle className="dsh-ig-spin" size={13} /> : null}
+              {t('confirmClear')}
+            </button>
+          </div>
         </div>
       </div>
     )}
@@ -453,10 +483,9 @@ const InspirationCard: FC<{
   isFavorited: boolean
   language: Language
   featuredLabel: string
-  cacheNonce?: number | undefined
   onSelect(): void
   onToggleFavorite(): void
-}> = ({ item, sourceId, selected, isFavorited, language, featuredLabel, cacheNonce, onSelect, onToggleFavorite }) => (
+}> = ({ item, sourceId, selected, isFavorited, language, featuredLabel, onSelect, onToggleFavorite }) => (
   <button type="button" className={`dsh-ig-inspiration-card ${selected ? 'is-selected' : ''}`} onClick={onSelect}>
     <div className="dsh-ig-inspiration-visual">
       {item.featured && <span className="dsh-ig-inspiration-featured"><Sparkles size={10} />{featuredLabel}</span>}
@@ -471,7 +500,7 @@ const InspirationCard: FC<{
       >
         <Star size={13} className={isFavorited ? 'fill-star' : ''} />
       </button>
-      <InspirationImage sourceId={sourceId} caseId={item.id} alt={item.imageAlt} cacheNonce={cacheNonce} />
+      <InspirationImage sourceId={sourceId} caseId={item.id} alt={item.imageAlt} />
     </div>
     <div className="dsh-ig-inspiration-card-copy">
       <strong>{item.title}</strong>
@@ -480,23 +509,24 @@ const InspirationCard: FC<{
   </button>
 )
 
-const InspirationImage: FC<{ sourceId: string; caseId: string; alt: string; cacheNonce?: number | undefined }> = ({ sourceId, caseId, alt, cacheNonce }) => {
+const InspirationImage: FC<{ sourceId: string; caseId: string; alt: string }> = ({ sourceId, caseId, alt }) => {
   const [node, setNode] = useState<HTMLDivElement | null>(null)
   const [visible, setVisible] = useState(false)
   const [url, setUrl] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
   const urlRef = useRef<string | null>(null)
+
   useEffect(() => {
     if (node === null) return
     const observer = new IntersectionObserver(entries => setVisible(entries.some(entry => entry.isIntersecting)), { rootMargin: '320px' })
     observer.observe(node)
     return () => observer.disconnect()
   }, [node])
+
   useEffect(() => {
     if (!visible) return
     let active = true
     setFailed(false)
-    setUrl(null)
     void fetchInspirationImage(sourceId, caseId).then(blob => {
       if (!active) return
       const next = URL.createObjectURL(blob)
@@ -505,11 +535,29 @@ const InspirationImage: FC<{ sourceId: string; caseId: string; alt: string; cach
     }).catch(() => { if (active) setFailed(true) })
     return () => {
       active = false
-      if (urlRef.current !== null) URL.revokeObjectURL(urlRef.current)
-      urlRef.current = null
     }
-  }, [visible, sourceId, caseId, cacheNonce])
-  return <div ref={setNode} style={{ width: '100%', height: '100%' }}>{url !== null ? <img src={url} alt={alt} loading="lazy" /> : <div className={`dsh-ig-inspiration-image-placeholder ${failed ? 'is-error' : ''}`}>{failed ? '图片暂时无法读取' : <LoaderCircle className="dsh-ig-spin" size={18} />}</div>}</div>
+  }, [visible, sourceId, caseId])
+
+  useEffect(() => {
+    return () => {
+      if (urlRef.current !== null) {
+        URL.revokeObjectURL(urlRef.current)
+        urlRef.current = null
+      }
+    }
+  }, [])
+
+  return (
+    <div ref={setNode} style={{ width: '100%', height: '100%' }}>
+      {url !== null && !failed ? (
+        <img src={url} alt={alt} loading="lazy" onError={() => setFailed(true)} />
+      ) : (
+        <div className={`dsh-ig-inspiration-image-placeholder ${failed ? 'is-error' : ''}`}>
+          {failed ? '图片暂时无法读取' : <LoaderCircle className="dsh-ig-spin" size={18} />}
+        </div>
+      )}
+    </div>
+  )
 }
 
 async function copyText(value: string): Promise<void> {
