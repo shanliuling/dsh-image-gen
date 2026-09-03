@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type FC } from 'react'
-import { Check, Clipboard, ExternalLink, ImageIcon, LoaderCircle, Maximize2, Search, Sparkles, Star, X } from 'lucide-react'
+import { Check, Clipboard, ExternalLink, ImageIcon, LoaderCircle, Maximize2, Search, Sparkles, Star, Trash2, X } from 'lucide-react'
 import { INSPIRATION_ROUTE } from '../shared.js'
 import type { InspirationCase, InspirationCatalog, InspirationSource } from '../inspiration.js'
-import { fetchInspirationImage } from './inspiration-image-cache.js'
+import { clearInspirationImageCache, fetchInspirationImage } from './inspiration-image-cache.js'
 import { loadCachedInspirationCatalog, saveCachedInspirationCatalog } from './inspiration-catalog-cache.js'
 import type { LocaleService } from './gallery-view.js'
 
@@ -94,7 +94,8 @@ function translateTag(name: string, lang: Language): string {
 const COPY = {
   zh: {
     kicker: 'Prompt inspiration', title: '灵感素材', subtitle: '从公开案例中找构图、质感和文字处理，再带回工作台继续调整。',
-    refresh: '检查更新', refreshing: '正在更新…', allCategories: '全部分类', allStyles: '全部风格', allScenes: '全部场景',
+    refresh: '检查更新', refreshing: '正在更新…', clearCache: '清理缓存', clearingCache: '正在清理…', cacheCleared: '已清空本地图片缓存', cacheClearFailed: '清理缓存失败',
+    allCategories: '全部分类', allStyles: '全部风格', allScenes: '全部场景',
     search: '搜索案例、Prompt、风格…', results: '找到 {count} 个案例', noResults: '没有匹配的素材，换个关键词或筛选条件试试。',
     selectHint: '选择一张素材，查看完整 Prompt 并带回工作台。', prompt: '完整 Prompt', copy: '复制 Prompt', copied: '已复制', use: '使用这个 Prompt', source: '查看原来源',
     loading: '正在读取素材库…', loadFailed: '素材库读取失败，请稍后重试。', imageFailed: '图片暂时无法读取', featured: '精选', updated: '素材已更新（{count} 条）', updateFailed: '更新失败，仍在使用当前内置素材。',
@@ -103,7 +104,8 @@ const COPY = {
   },
   en: {
     kicker: 'Prompt inspiration', title: 'Inspiration', subtitle: 'Explore public examples, then bring a prompt back to Studio to make it your own.',
-    refresh: 'Check updates', refreshing: 'Updating…', allCategories: 'All categories', allStyles: 'All styles', allScenes: 'All scenes',
+    refresh: 'Check updates', refreshing: 'Updating…', clearCache: 'Clear cache', clearingCache: 'Clearing…', cacheCleared: 'Local image cache cleared', cacheClearFailed: 'Failed to clear cache',
+    allCategories: 'All categories', allStyles: 'All styles', allScenes: 'All scenes',
     search: 'Search examples, prompts, styles…', results: '{count} examples', noResults: 'No matching examples. Try another keyword or filter.',
     selectHint: 'Choose an example to read its full prompt and use it in Studio.', prompt: 'Full prompt', copy: 'Copy prompt', copied: 'Copied', use: 'Use this prompt', source: 'View source',
     loading: 'Loading inspiration…', loadFailed: 'Could not load the inspiration library.', imageFailed: 'Image is temporarily unavailable', featured: 'Featured', updated: 'Updated ({count} examples)', updateFailed: 'Update failed. The current bundled library is still available.',
@@ -123,12 +125,14 @@ export const InspirationView: FC<{ locale?: LocaleService | undefined; onUseProm
   const [scene, setScene] = useState('')
   const [visibleLimit, setVisibleLimit] = useState(60)
   const [selected, setSelected] = useState<InspirationCase | null>(null)
-  const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
+  const [clearingCache, setClearingCache] = useState(false)
   const [copied, setCopied] = useState(false)
   const [favorites, setFavorites] = useState<Set<string>>(() => loadInspirationFavorites())
   const [onlyFavorites, setOnlyFavorites] = useState(false)
   const [lightboxCase, setLightboxCase] = useState<{ sourceId: string; caseId: string; title: string; alt: string } | null>(null)
+  const [toast, setToast] = useState<{ text: string; isError?: boolean } | null>(null)
+  const toastTimerRef = useRef<number | null>(null)
   const sentinelRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -140,6 +144,15 @@ export const InspirationView: FC<{ locale?: LocaleService | undefined; onUseProm
     let value: string = COPY[language][key] ?? COPY.zh[key]
     for (const [name, replacement] of Object.entries(values ?? {})) value = value.replace(`{${name}}`, replacement)
     return value
+  }
+
+  const showToast = (text: string, isError = false) => {
+    if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current)
+    setToast({ text, isError })
+    toastTimerRef.current = window.setTimeout(() => {
+      setToast(null)
+      toastTimerRef.current = null
+    }, 2400)
   }
 
   const toggleFavorite = (id: string) => {
@@ -172,7 +185,7 @@ export const InspirationView: FC<{ locale?: LocaleService | undefined; onUseProm
       const bundled = server.status === 'fulfilled' ? server.value : undefined
       const next = resolveActiveCatalog(bundled, cached)
       if (next === undefined) {
-        setError(t('loadFailed'))
+        showToast(t('loadFailed'), true)
         return
       }
       setCatalog(next)
@@ -230,17 +243,30 @@ export const InspirationView: FC<{ locale?: LocaleService | undefined; onUseProm
   const refresh = async () => {
     if (refreshing) return
     setRefreshing(true)
-    setError(null)
     try {
       const next = await loadCatalog('POST')
       setCatalog(next)
       void saveCachedInspirationCatalog(next)
       setSelected(previous => previous === null ? next.sources[0]?.cases[0] ?? null : next.sources[0]?.cases.find(item => item.id === previous.id) ?? next.sources[0]?.cases[0] ?? null)
-      setError(t('updated', { count: String(next.sources[0]?.cases.length ?? 0) }))
+      showToast(t('updated', { count: String(next.sources[0]?.cases.length ?? 0) }))
     } catch {
-      setError(t('updateFailed'))
+      showToast(t('updateFailed'), true)
     } finally {
       setRefreshing(false)
+    }
+  }
+
+  const clearCache = async () => {
+    if (clearingCache) return
+    setClearingCache(true)
+    try {
+      await clearInspirationImageCache()
+      await fetch(`${INSPIRATION_ROUTE}/cache/clear`, { method: 'POST', credentials: 'same-origin' })
+      showToast(t('cacheCleared'))
+    } catch {
+      showToast(t('cacheClearFailed'), true)
+    } finally {
+      setClearingCache(false)
     }
   }
 
@@ -249,18 +275,39 @@ export const InspirationView: FC<{ locale?: LocaleService | undefined; onUseProm
     try {
       await copyText(selected.prompt)
       setCopied(true)
+      showToast(t('copied'))
       window.setTimeout(() => setCopied(false), 1_800)
     } catch {
-      setError(t('loadFailed'))
+      showToast(t('loadFailed'), true)
     }
   }
 
   return <section className="dsh-ig-inspiration" aria-label={t('title')}>
     <header className="dsh-ig-inspiration-head">
       <div><p className="dsh-ig-inspiration-kicker">{t('kicker')}</p><h1>{t('title')}</h1><p className="dsh-ig-inspiration-subtitle">{t('subtitle')}</p></div>
-      <button type="button" className="dsh-ig-inspiration-refresh" onClick={() => void refresh()} disabled={refreshing}>{refreshing ? <LoaderCircle className="dsh-ig-spin" size={14} /> : <Sparkles size={14} />}{refreshing ? t('refreshing') : t('refresh')}</button>
+      <div className="dsh-ig-inspiration-head-actions">
+        <button
+          type="button"
+          className="dsh-ig-inspiration-clear-cache"
+          onClick={() => void clearCache()}
+          disabled={clearingCache}
+          title={t('clearCache')}
+        >
+          {clearingCache ? <LoaderCircle className="dsh-ig-spin" size={13} /> : <Trash2 size={13} />}
+          {clearingCache ? t('clearingCache') : t('clearCache')}
+        </button>
+        <button
+          type="button"
+          className="dsh-ig-inspiration-refresh"
+          onClick={() => void refresh()}
+          disabled={refreshing}
+          title={t('refresh')}
+        >
+          {refreshing ? <LoaderCircle className="dsh-ig-spin" size={13} /> : <Sparkles size={13} />}
+          {refreshing ? t('refreshing') : t('refresh')}
+        </button>
+      </div>
     </header>
-    {error !== null && <p className="dsh-ig-inspiration-error" role="status">{error}</p>}
     {source === null ? <div className="dsh-ig-inspiration-empty"><LoaderCircle className="dsh-ig-spin" size={23} /><span>{t('loading')}</span></div> : <>
       <div className="dsh-ig-inspiration-toolbar">
         <label className="dsh-ig-inspiration-search"><Search size={15} /><input value={search} onChange={event => setSearch(event.target.value)} placeholder={t('search')} /></label>
@@ -378,6 +425,14 @@ export const InspirationView: FC<{ locale?: LocaleService | undefined; onUseProm
           </div>
           <div className="dsh-ig-inspiration-lightbox-caption">{lightboxCase.title}</div>
         </div>
+      </div>
+    )}
+
+    {/* 全局浮动轻量 Toast 提示（2.4 秒自动消失） */}
+    {toast !== null && (
+      <div className={`dsh-ig-inspiration-toast ${toast.isError ? 'is-error' : 'is-success'}`} role="status">
+        {toast.isError ? <X size={14} /> : <Check size={14} />}
+        <span>{toast.text}</span>
       </div>
     )}
   </section>

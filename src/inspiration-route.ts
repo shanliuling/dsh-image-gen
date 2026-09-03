@@ -49,6 +49,10 @@ export function createInspirationRoute(deps: InspirationRouteDeps = {}) {
         return jsonError(res, 502, message(error, 'refresh-failed'))
       }
     }
+    if (req.method === 'POST' && url.pathname === '/cache/clear') {
+      await clearDiskCache()
+      return json(res, 200, { ok: true })
+    }
     const match = /^\/image\/([a-z0-9-]{1,80})\/([a-zA-Z0-9_-]{1,120})$/u.exec(url.pathname)
     if (req.method !== 'GET' || match === null) return jsonError(res, 404, 'not-found')
     const [, sourceId, caseId] = match
@@ -284,5 +288,16 @@ async function trimImageCache(dir: string): Promise<void> {
       try { await unlink(entry.path) } catch {}
       remaining -= entry.size
     }
+  } catch {}
+}
+
+/** 清理全部已缓存的图片文件 */
+async function clearDiskCache(): Promise<void> {
+  try {
+    const dir = await getCacheDir()
+    if (!dir) return
+    const names = await readdir(dir)
+    const valid = names.filter(name => /\.(jpg|png|webp)$/i.test(name))
+    await Promise.all(valid.map(name => unlink(join(dir, name)).catch(() => {})))
   } catch {}
 }

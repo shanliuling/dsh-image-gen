@@ -125,3 +125,21 @@ async function trimCache(db: IDBDatabase): Promise<void> {
     tx.onabort = () => resolve()
   })
 }
+
+export async function clearInspirationImageCache(): Promise<void> {
+  pending.clear()
+  const db = await openDatabase()
+  if (db === undefined) return
+  try {
+    await new Promise<void>(resolve => {
+      const tx = db.transaction(STORE, 'readwrite')
+      const store = tx.objectStore(STORE)
+      store.clear()
+      tx.oncomplete = () => resolve()
+      tx.onerror = () => resolve()
+      tx.onabort = () => resolve()
+    })
+  } finally {
+    db.close()
+  }
+}
