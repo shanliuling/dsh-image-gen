@@ -62,7 +62,7 @@ const COPY = {
     singleModel: '单模型', compareModels: '多模型对比', compareHint: '相同提示词，同时交给多个模型', compareSelect: '选择模型', compareSelected: '已选 {count} 个模型',
     compareNeedTwo: '请至少选择两个已配置模型', compareParameterHint: '不支持所选参数的模型会自动使用默认值', compareAdjusted: '已适配', comparePartial: '{success} 个模型生成成功，{failed} 个失败',
     comparing: '正在对比（共 {count} 个模型）…', compareStart: '开始对比',
-    saveToGallery: '收藏进画廊', saveSelected: '收藏选中（{count}）', savedToGallery: '已收藏进画廊', savedSelected: '已收藏 {count} 张图片', inGallery: '已在画廊', needSelectResult: '请先勾选要收藏的图片',
+    saveToGallery: '保存', saveSelected: '保存({count})', savedToGallery: '已保存到画廊', savedSelected: '已保存 {count} 张图片', inGallery: '已保存', needSelectResult: '请先勾选要保存的图片',
     retry: '重新加载', configLoadFailed: '工作台配置加载失败，请检查服务后重试。',
     noProvider: '请先在设置中配置至少一个云端图像 Provider 的 API Key。', selectConfigured: '该 Provider 尚未配置，请先到设置中配置 API Key。',
     needPrompt: '请输入提示词', needReference: '请先添加至少一张参考图', result: '本次结果', continueEdit: '继续编辑（垫图）', regenerate: '再次生成',
