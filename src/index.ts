@@ -13,7 +13,8 @@ import { IMAGE_ROUTE, DELETE_ROUTE, SAVE_WORKSPACE_ROUTE, imageAttachmentFromMet
 import { editOpenAICompatibleImage, generateOpenAICompatibleImage } from './openai-compatible.js'
 import { resolveReferenceImages } from './reference-image.js'
 import { editSeedreamImage } from './seedream.js'
-import { IMAGE_GENERATION_NAMESPACE, STUDIO_ROUTE, mergeComfyUIPrompt } from './shared.js'
+import { IMAGE_GENERATION_NAMESPACE, INSPIRATION_ROUTE, STUDIO_ROUTE, mergeComfyUIPrompt } from './shared.js'
+import { createInspirationRoute } from './inspiration-route.js'
 import { generateFromStudio, describeStudio } from './studio.js'
 import { serveStudio } from './studio-route.js'
 import { deleteImageFromWorkspace, getDshWorkspaceRoots, getDshWorkspacesFull, saveImageToWorkspace } from './workspace-save.js'
@@ -21,6 +22,7 @@ import { deleteImageFromWorkspace, getDshWorkspaceRoots, getDshWorkspacesFull, s
 export { Config } from './config.js'
 export { IMAGE_ROUTE, DELETE_ROUTE, SAVE_WORKSPACE_ROUTE, imageAttachmentFromMeta } from './image-route.js'
 export { STUDIO_ROUTE } from './shared.js'
+export { INSPIRATION_ROUTE } from './shared.js'
 
 export const name = 'dsh-image-gen'
 export const inject = ['tools', 'attachments', 'credentials', 'webServer']
@@ -92,6 +94,15 @@ export function apply(ctx: Context, config: Config = {}): void {
       maxBodyBytes: Math.ceil(ctx.attachments.imageLimits.maxImageBytes * 1.4 * 5) + 256 * 1024,
     }),
   }), 'dsh-image-gen: studio route')
+  const serveInspiration = createInspirationRoute()
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'prefix', path: INSPIRATION_ROUTE,
+    handler: (req, res) => {
+      const originalUrl = req.url ?? '/'
+      req.url = originalUrl.startsWith(INSPIRATION_ROUTE) ? originalUrl.slice(INSPIRATION_ROUTE.length) || '/' : originalUrl
+      return serveInspiration(req, res)
+    },
+  }), 'dsh-image-gen: inspiration route')
 
   ctx.tools.register(defineTool({
     name: 'generate_image',

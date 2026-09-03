@@ -10,6 +10,7 @@
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
     "verbatimModuleSyntax": true,
+    "resolveJsonModule": true,
     "jsx": "react-jsx",
     "rootDir": "src",
     "outDir": "lib/types",

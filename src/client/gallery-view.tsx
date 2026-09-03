@@ -3,7 +3,7 @@
  * Fully i18n-reactive (Chinese & English) with modular tabs, multi-dimensional filters,
  * responsive image grid, and placeholder routes.
  */
-import { useEffect, useState, useMemo, useRef, type FC, type MouseEvent } from 'react'
+import { useCallback, useEffect, useState, useMemo, useRef, type FC, type MouseEvent } from 'react'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { IMAGE_ROUTE, DELETE_ROUTE, type ImageProvider } from '../shared.js'
 import {
@@ -34,6 +34,7 @@ import {
   type GalleryItem,
 } from './gallery-store.js'
 import { StudioView } from './studio-view.js'
+import { InspirationView } from './inspiration-view.js'
 import { evictAttachmentCache, fetchAttachmentBlob } from './image-cache.js'
 import { copyImageBlob } from './browser-image-utils.js'
 import { conversationRegenerateRequest } from './conversation-regenerate.js'
@@ -44,7 +45,7 @@ export interface LocaleService {
   subscribe(fn: () => void): () => void
 }
 
-export type TabKey = 'gallery' | 'studio' | 'favorites'
+export type TabKey = 'gallery' | 'studio' | 'inspiration' | 'favorites'
 export type SortKey = 'newest' | 'oldest'
 
 const DICT = {
@@ -52,6 +53,7 @@ const DICT = {
     // 顶部 Tab
     tabGallery: '图库',
     tabStudio: '工作台',
+    tabInspiration: '灵感',
     tabFavorites: '收藏',
     tabCompare: '对比',
     tabTasks: '任务',
@@ -146,6 +148,7 @@ const DICT = {
     // Top Tabs
     tabGallery: 'Gallery',
     tabStudio: 'Studio',
+    tabInspiration: 'Inspiration',
     tabFavorites: 'Favorites',
     tabCompare: 'Compare',
     tabTasks: 'Tasks',
@@ -323,6 +326,7 @@ export interface GalleryViewTabProps {
 export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   const { locale, sessionId, useSessions, useWorkspaces } = props
   const [activeTab, setActiveTab] = useState<TabKey>('gallery')
+  const [studioDraft, setStudioDraft] = useState<string | undefined>(undefined)
   const [items, setItems] = useState<GalleryItem[]>([])
   const [search, setSearch] = useState('')
   const [selectedProvider, setSelectedProvider] = useState<string>('all')
@@ -454,6 +458,13 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
       setToast(null)
     }, 2000)
   }
+
+  const useInspirationPrompt = useCallback((prompt: string) => {
+    setStudioDraft(prompt)
+    setActiveTab('studio')
+  }, [])
+
+  const clearStudioDraft = useCallback(() => setStudioDraft(undefined), [])
 
   // Hide chat input composer while browsing gallery/studio
   useEffect(() => {
@@ -996,6 +1007,15 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
 
         <button
           type="button"
+          className={`dsh-ig-studio-tab-btn ${activeTab === 'inspiration' ? 'is-active' : ''}`}
+          onClick={() => setActiveTab('inspiration')}
+        >
+          <Sparkles size={15} />
+          <span>{t('tabInspiration')}</span>
+        </button>
+
+        <button
+          type="button"
           className={`dsh-ig-studio-tab-btn ${activeTab === 'favorites' ? 'is-active' : ''}`}
           onClick={() => setActiveTab('favorites')}
         >
@@ -1137,8 +1157,10 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
               ))}
             </div>
           )
+        ) : activeTab === 'inspiration' ? (
+          <InspirationView locale={locale} onUsePrompt={useInspirationPrompt} />
         ) : (
-          <StudioView locale={locale} workspace={activeWorkspace} />
+          <StudioView locale={locale} workspace={activeWorkspace} initialPrompt={studioDraft} onInitialPromptApplied={clearStudioDraft} onOpenInspiration={() => setActiveTab('inspiration')} />
         )}
       </div>
 
