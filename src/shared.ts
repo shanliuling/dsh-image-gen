@@ -7,6 +7,8 @@ export const IMAGE_ROUTE = '/plugins/dsh-image-gen/image'
 export const DELETE_ROUTE = '/plugins/dsh-image-gen/delete'
 /** Same-origin route used by the browser image workbench. */
 export const STUDIO_ROUTE = '/plugins/dsh-image-gen/studio'
+/** Same-origin route for built-in prompt inspiration metadata and images. */
+export const INSPIRATION_ROUTE = '/plugins/dsh-image-gen/inspiration'
 /** Browser route used for saving generated images to workspace on demand. */
 export const SAVE_WORKSPACE_ROUTE = '/plugins/dsh-image-gen/save-workspace'
 /** Namespace persisted through DSH Settings. */

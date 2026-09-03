@@ -77,6 +77,7 @@ const COPY = {
     newGeneration: '新建生成', new: '新建',
     configuredCount: 'API 已配置 · {count}', unconfiguredStatus: 'API 未配置', providerStatus: '云端提供商与模型状态',
     collapseSidebar: '折叠最近生成', expandSidebar: '展开最近生成',
+    findInspiration: '找灵感',
   },
   en: {
     title: 'Cloud Image Studio', configured: 'API configured', unconfigured: 'Not configured', recent: 'Recent generations', empty: 'No generated images yet',
@@ -103,6 +104,7 @@ const COPY = {
     newGeneration: 'New generation', new: 'New',
     configuredCount: 'API configured · {count}', unconfiguredStatus: 'Not configured', providerStatus: 'Provider & Model Status',
     collapseSidebar: 'Collapse sidebar', expandSidebar: 'Expand recent list',
+    findInspiration: 'Find inspiration',
   },
 } as const
 
@@ -118,7 +120,10 @@ export interface StudioWorkspaceProps {
 export const StudioView: FC<{
   locale?: LocaleService | undefined
   workspace?: StudioWorkspaceProps | null | undefined
-}> = ({ locale, workspace }) => {
+  initialPrompt?: string | undefined
+  onInitialPromptApplied?(): void
+  onOpenInspiration?(): void
+}> = ({ locale, workspace, initialPrompt, onInitialPromptApplied, onOpenInspiration }) => {
   const [lang, setLang] = useState<'zh' | 'en'>(() => locale?.getSnapshot?.().active?.startsWith('en') ? 'en' : 'zh')
   const [config, setConfig] = useState<StudioConfigResponse | null>(null)
   const [configLoading, setConfigLoading] = useState(true)
@@ -161,6 +166,14 @@ export const StudioView: FC<{
   const canvasRef = useRef<HTMLDivElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const image = useAttachmentImage(selected?.attachment)
+
+  useEffect(() => {
+    if (initialPrompt === undefined) return
+    setMode('generate')
+    setPanelTab('generate')
+    setPrompt(initialPrompt)
+    onInitialPromptApplied?.()
+  }, [initialPrompt, onInitialPromptApplied])
 
   const maxReferences = comparisonEnabled
     ? (comparisonProviders.includes('dashscope') ? 3 : 5)
@@ -1094,7 +1107,7 @@ export const StudioView: FC<{
               </div>
             )}
             <div className="dsh-ig-field">
-              <div className="dsh-ig-field-label"><label htmlFor="dsh-ig-prompt">{t('prompt')} <b>*</b></label><button type="button" onClick={() => setPrompt('')}>{t('clear')}</button></div>
+              <div className="dsh-ig-field-label"><label htmlFor="dsh-ig-prompt">{t('prompt')} <b>*</b></label><span><button type="button" className="dsh-ig-find-inspiration" onClick={onOpenInspiration}><Sparkles size={11} />{t('findInspiration')}</button><button type="button" onClick={() => setPrompt('')}>{t('clear')}</button></span></div>
               <textarea
                 id="dsh-ig-prompt"
                 value={prompt}
