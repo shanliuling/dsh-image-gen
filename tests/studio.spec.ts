@@ -18,6 +18,34 @@ import {
   loadConversationImageRevisionChain,
   selectConversationImageRevision,
 } from '../src/client/conversation-image-revisions.js'
+import { buildComparisonTargets, initialComparisonProviders } from '../src/client/multi-model-compare.js'
+
+describe('multi-model comparison planning', () => {
+  const profiles = [
+    studioProfile({}, 'google', true),
+    studioProfile({}, 'openai', true),
+    studioProfile({}, 'seedream', true),
+    studioProfile({}, 'dashscope', false),
+  ]
+
+  it('starts with the active provider and one additional configured model', () => {
+    expect(initialComparisonProviders(profiles, 'openai')).toEqual(['openai', 'google'])
+  })
+
+  it('maps unsupported shared settings to each provider default', () => {
+    const targets = buildComparisonTargets(profiles, ['google', 'openai', 'seedream', 'dashscope'], '16:9', '4K')
+    expect(targets.map(target => ({
+      provider: target.profile.provider,
+      ratio: target.ratio,
+      quality: target.quality,
+      adjusted: target.adjusted,
+    }))).toEqual([
+      { provider: 'google', ratio: '16:9', quality: '4K', adjusted: false },
+      { provider: 'openai', ratio: '1:1', quality: 'standard', adjusted: true },
+      { provider: 'seedream', ratio: 'auto', quality: '4K', adjusted: true },
+    ])
+  })
+})
 
 describe('image workbench provider capabilities', () => {
   it('exposes only parameters implemented by each cloud adapter', () => {
