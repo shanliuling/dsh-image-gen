@@ -40,6 +40,8 @@
 pnpm dsh plugin --profile web add dsh-image-gen@latest
 ```
 
+> **Update notice:** This release includes major changes. Existing users should update to the latest version.
+
 ---
 
 ## One plugin, four creative workflows
@@ -135,11 +137,8 @@ For more precise parameter control, open **Gallery** from the conversation heade
 
 ### 💬 In-chat generation, editing, and revision switching
 
-- The Agent automatically selects generation or editing based on your intent.
-- Supports text-to-image, single-image editing, multi-image reference, image composition, and style transfer.
-- Reference images can come from the current upload, earlier generated images in the conversation, or workspace files.
-- Edit the prompt on an existing image card and regenerate asynchronously without adding duplicate messages.
-- Old and new results stay on the same card, with a built-in revision switcher for comparison.
+- Use natural language for text-to-image, image-to-image, multi-image reference, and style transfer.
+- Edit the original prompt to regenerate, then switch between revisions on the same image card.
 
 <br />
 
@@ -154,13 +153,8 @@ For more precise parameter control, open **Gallery** from the conversation heade
 
 ### 🎛️ Studio batch creation
 
-- Switch quickly between text-to-image and image-to-image workflows.
-- Upload or drag in reference images—up to 5 in most cases and up to 3 for DashScope.
-- Control the Provider, model, aspect ratio, quality, and number of outputs.
-- Generate 1–4 candidates concurrently; successful results are preserved even when another request fails or times out.
-- Pan the canvas freely, zoom from 25% to 500%, fit to the viewport, or inspect results in fullscreen.
-- Continue editing recent images and inspect their prompt, model, dimensions, and generation time.
-- Save only selected results to the gallery and workspace to avoid unnecessary files.
+- Use up to 5 reference images and generate 1–4 candidates at a time.
+- Control the Provider, model, aspect ratio, and quality, then save only the results you want.
 
 <br />
 
@@ -174,7 +168,7 @@ For more precise parameter control, open **Gallery** from the conversation heade
 
 ### ⚖️ Side-by-side multi-model comparison
 
-Run the same prompt and reference images concurrently across multiple configured cloud Providers. A failure from one model does not discard successful results from the others. When a model does not support the chosen aspect ratio or quality, the plugin adapts the request to the nearest available option so you can compare styles and details directly.
+Run the same prompt and reference images across multiple models, then compare and save the results on one canvas.
 
 <br />
 
@@ -188,11 +182,8 @@ Run the same prompt and reference images concurrently across multiple configured
 
 ### ✨ 500+ prompt inspiration examples
 
-- Explore **500+ curated practical examples**, with precise filtering by keyword, category, style, and use case.
-- Browse a masonry layout with lazy loading, infinite scrolling, and fullscreen image viewing.
-- Favorite examples, copy complete prompts, or send a prompt to Studio for further refinement.
-- Browser and host-disk caching with update checks, retry support, and cache cleanup.
-- **Runs entirely from local cache after download; browsing and learning consume no tokens or generation quota.**
+- Browse and filter **500+ prompt examples**, then favorite, copy, or send them directly to Studio.
+- Images are cached locally, so browsing and learning consume no tokens or generation quota.
 
 <br />
 
@@ -206,13 +197,8 @@ Run the same prompt and reference images concurrently across multiple configured
 
 ### 🖼️ Gallery, favorites, and batch management
 
-- Collect saved images from both chat and Studio.
-- Filter or sort by Provider, aspect ratio, prompt keyword, and generation time.
-- Use “Current workspace only” to isolate generated records between projects.
-- Favorite, download, copy, continue editing, or regenerate images and prompts.
-- Browse continuously in the lightbox using the mouse or `←` / `→` keys.
-- Batch selection supports select all, invert, clear, and `Shift + click` range selection.
-- When deleting a gallery record, optionally remove the associated local file after workspace-path validation.
+- Manage images saved from chat and Studio in one place, isolated by workspace.
+- Search, filter, favorite, download, continue editing, regenerate, and batch-manage results.
 
 <br />
 
@@ -226,15 +212,12 @@ Run the same prompt and reference images concurrently across multiple configured
 
 ### 🧩 Multiple local ComfyUI workflows
 
-Bring private image generation on your local GPU directly into Agent conversations. *(ComfyUI is currently available through Agent chat and is not yet integrated into Studio or multi-model comparison.)*
+Bring private image generation on your local GPU directly into Agent conversations.
 
-- Import **API Format Workflow JSON** exported by ComfyUI.
-- Manage multiple named workflows and rename, delete, or choose a default workflow.
-- Let the Agent select a workflow by name for the current request.
-- Configure an independent prompt preset for each workflow.
-- Supports the `{{prompt}}`, `{{seed}}`, and image-to-image `{{image}}` placeholders.
-- Remains compatible with the legacy `%prompt%`, `%seed%`, and `%image%` syntax.
-- Image-to-image workflows currently accept one source image per edit.
+- Import and manage multiple named workflows with prompt presets and common placeholders.
+- Let the Agent select a workflow by name for text-to-image or image-to-image generation in chat.
+
+> ComfyUI is not yet integrated into Studio or multi-model comparison.
 
 <br />
 
