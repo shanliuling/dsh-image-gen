@@ -27,10 +27,11 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react'
-import { DELETE_ROUTE, SAVE_WORKSPACE_ROUTE, STUDIO_ROUTE, type StudioConfigResponse, type StudioGenerateResponse, type StudioGeneratedItem, type StudioProviderProfile, type StudioReference } from '../shared.js'
+import { DELETE_ROUTE, SAVE_WORKSPACE_ROUTE, STUDIO_ROUTE, type CloudImageProvider, type StudioConfigResponse, type StudioGenerateResponse, type StudioGeneratedItem, type StudioProviderProfile, type StudioReference } from '../shared.js'
 import { deleteGalleryItem, getGalleryItems, saveGalleryItem, subscribeGallery, toggleFavoriteGalleryItem, type GalleryItem } from './gallery-store.js'
 import { evictAttachmentCache, fetchAttachmentBlob } from './image-cache.js'
 import { copyImageBlob, downloadBlobUrl, formatRelativeTime } from './browser-image-utils.js'
+import { buildComparisonTargets, initialComparisonProviders } from './multi-model-compare.js'
 
 const PAGE_SIZE = 12
 
@@ -41,6 +42,7 @@ export interface LocaleService {
 
 type Mode = 'generate' | 'edit'
 type PanelTab = 'generate' | 'details'
+type BatchKind = 'multi-image' | 'multi-model'
 
 export interface StudioReferenceItem {
   id: string
@@ -57,7 +59,10 @@ const COPY = {
     provider: 'Provider', model: 'Model', ratio: '比例', quality: '清晰度', start: '开始生成', generating: '正在生成…', cancelGenerate: '取消生成',
     count: '生成数量', countUnit: '{n} 张', partialSuccess: '已生成 {success} 张图片，{failed} 张失败', generatingCount: '正在生成（共 {count} 张）…',
     batchResult: '本次生成（共 {count} 张）',
-    saveToGallery: '收藏进画廊', savedToGallery: '已收藏进画廊', inGallery: '已在画廊',
+    singleModel: '单模型', compareModels: '多模型对比', compareHint: '相同提示词，同时交给多个模型', compareSelect: '选择模型', compareSelected: '已选 {count} 个模型',
+    compareNeedTwo: '请至少选择两个已配置模型', compareParameterHint: '不支持所选参数的模型会自动使用默认值', compareAdjusted: '已适配', comparePartial: '{success} 个模型生成成功，{failed} 个失败',
+    comparing: '正在对比（共 {count} 个模型）…', compareStart: '开始对比',
+    saveToGallery: '收藏进画廊', saveSelected: '收藏选中（{count}）', savedToGallery: '已收藏进画廊', savedSelected: '已收藏 {count} 张图片', inGallery: '已在画廊', needSelectResult: '请先勾选要收藏的图片',
     retry: '重新加载', configLoadFailed: '工作台配置加载失败，请检查服务后重试。',
     noProvider: '请先在设置中配置至少一个云端图像 Provider 的 API Key。', selectConfigured: '该 Provider 尚未配置，请先到设置中配置 API Key。',
     needPrompt: '请输入提示词', needReference: '请先添加至少一张参考图', result: '本次结果', continueEdit: '继续编辑（垫图）', regenerate: '再次生成',
@@ -80,7 +85,10 @@ const COPY = {
     provider: 'Provider', model: 'Model', ratio: 'Aspect ratio', quality: 'Quality', start: 'Generate', generating: 'Generating…', cancelGenerate: 'Cancel',
     count: 'Number of images', countUnit: '{n}', partialSuccess: 'Generated {success} images, {failed} failed', generatingCount: 'Generating ({count} images)…',
     batchResult: 'Generated {count} images',
-    saveToGallery: 'Save to Gallery', savedToGallery: 'Saved to Gallery', inGallery: 'In Gallery',
+    singleModel: 'Single model', compareModels: 'Compare models', compareHint: 'Send the same prompt to multiple models', compareSelect: 'Choose models', compareSelected: '{count} models selected',
+    compareNeedTwo: 'Select at least two configured models', compareParameterHint: 'Unsupported settings use each model’s default', compareAdjusted: 'Adjusted', comparePartial: '{success} models succeeded, {failed} failed',
+    comparing: 'Comparing {count} models…', compareStart: 'Compare models',
+    saveToGallery: 'Save to Gallery', saveSelected: 'Save selected ({count})', savedToGallery: 'Saved to Gallery', savedSelected: 'Saved {count} images', inGallery: 'In Gallery', needSelectResult: 'Select images to save first',
     retry: 'Retry', configLoadFailed: 'Failed to load studio configuration.',
     noProvider: 'Configure an API key for at least one cloud image provider in Settings.', selectConfigured: 'This provider is not configured. Add its API key in Settings first.',
     needPrompt: 'Enter a prompt', needReference: 'Add at least one reference image first', result: 'Current result', continueEdit: 'Continue editing', regenerate: 'Generate again',
@@ -129,6 +137,10 @@ export const StudioView: FC<{
   const [references, setReferences] = useState<StudioReferenceItem[]>([])
   const [count, setCount] = useState(1)
   const [currentBatch, setCurrentBatch] = useState<GalleryItem[] | null>(null)
+  const [selectedBatchIds, setSelectedBatchIds] = useState<string[]>([])
+  const [batchKind, setBatchKind] = useState<BatchKind | null>(null)
+  const [comparisonEnabled, setComparisonEnabled] = useState(false)
+  const [comparisonProviders, setComparisonProviders] = useState<CloudImageProvider[]>([])
   const [isGenerating, setIsGenerating] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -150,7 +162,9 @@ export const StudioView: FC<{
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const image = useAttachmentImage(selected?.attachment)
 
-  const maxReferences = provider === 'dashscope' ? 3 : 5
+  const maxReferences = comparisonEnabled
+    ? (comparisonProviders.includes('dashscope') ? 3 : 5)
+    : (provider === 'dashscope' ? 3 : 5)
   const referencesRef = useRef(references)
   referencesRef.current = references
 
@@ -172,7 +186,10 @@ export const StudioView: FC<{
       if (!response.ok || !('providers' in payload)) throw new Error('error' in payload && payload.error ? payload.error : 'Studio unavailable')
       setConfig(payload)
       const initial = payload.providers.find(item => item.provider === payload.activeProvider) ?? payload.providers[0]
-      if (initial !== undefined) applyProvider(initial)
+      if (initial !== undefined) {
+        applyProvider(initial)
+        setComparisonProviders(initialComparisonProviders(payload.providers, initial.provider))
+      }
     } catch (fetchError) {
       if (!controller.signal.aborted) setConfigError(messageOf(fetchError))
     } finally {
@@ -274,6 +291,14 @@ export const StudioView: FC<{
   const activeProfile = useMemo(() => config?.providers.find(item => item.provider === provider), [config, provider])
   const configuredCount = config?.providers.filter(item => item.configured).length ?? 0
   const displayItems = useMemo(() => items.slice(0, visibleLimit), [items, visibleLimit])
+  const comparisonProfiles = useMemo(
+    () => (config?.providers ?? []).filter(item => item.configured && (mode === 'generate' || item.supportsEditing)),
+    [config, mode],
+  )
+  const comparisonTargets = useMemo(
+    () => buildComparisonTargets(comparisonProfiles, comparisonProviders, ratio, quality),
+    [comparisonProfiles, comparisonProviders, ratio, quality],
+  )
 
   const applyProvider = (profile: StudioProviderProfile) => {
     setProvider(profile.provider)
@@ -309,6 +334,8 @@ export const StudioView: FC<{
 
   const selectItem = (item: GalleryItem) => {
     setCurrentBatch(null)
+    setSelectedBatchIds([])
+    setBatchKind(null)
     setSelected(item)
     setPanelTab('details')
     resetFit()
@@ -316,6 +343,8 @@ export const StudioView: FC<{
 
   const startNew = () => {
     setCurrentBatch(null)
+    setSelectedBatchIds([])
+    setBatchKind(null)
     setSelected(null)
     setPanelTab('generate')
     resetFit()
@@ -446,10 +475,40 @@ export const StudioView: FC<{
     }
   }
 
+  const toggleComparison = (enabled: boolean) => {
+    setComparisonEnabled(enabled)
+    setError(null)
+    if (!enabled) {
+      if (activeProfile !== undefined) {
+        if (!activeProfile.ratioOptions.some(option => option.value === ratio)) setRatio(activeProfile.defaultRatio)
+        if (!activeProfile.qualityOptions.some(option => option.value === quality)) setQuality(activeProfile.defaultQuality)
+      }
+      return
+    }
+    if (config === null) return
+    const initial = initialComparisonProviders(comparisonProfiles, provider as CloudImageProvider)
+      .filter(item => mode !== 'edit' || referencesRef.current.length <= 3 || item !== 'dashscope')
+    setComparisonProviders(initial)
+    if (!['1:1', '3:2', '2:3', '16:9', '9:16'].includes(ratio)) setRatio('1:1')
+    if (!['standard', '1K', '2K', '4K'].includes(quality)) setQuality('1K')
+  }
+
+  const toggleComparisonProvider = (target: CloudImageProvider) => {
+    if (mode === 'edit' && target === 'dashscope' && referencesRef.current.length > 3 && !comparisonProviders.includes(target)) {
+      setError(t('maxReferencesExceeded', { max: '3' }))
+      return
+    }
+    setComparisonProviders(current => current.includes(target)
+      ? current.filter(item => item !== target)
+      : [...current, target])
+    setError(null)
+  }
+
   const submit = async () => {
     if (isGenerating || activeProfile === undefined) return
     if (prompt.trim().length === 0) return setError(t('needPrompt'))
-    if (!activeProfile.configured) return setError(t('selectConfigured'))
+    if (comparisonEnabled && comparisonTargets.length < 2) return setError(t('compareNeedTwo'))
+    if (!comparisonEnabled && !activeProfile.configured) return setError(t('selectConfigured'))
     if (mode === 'edit' && references.length === 0) return setError(t('needReference'))
     setIsGenerating(true)
     setError(null)
@@ -471,6 +530,62 @@ export const StudioView: FC<{
             throw new Error('无效参考图')
           }))
         : undefined
+
+      if (comparisonEnabled) {
+        const settled = await Promise.allSettled(comparisonTargets.map(async target => {
+          const response = await fetch(STUDIO_ROUTE, {
+            method: 'POST', credentials: 'same-origin', signal: controller.signal,
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              mode,
+              provider: target.profile.provider,
+              model: target.profile.model,
+              prompt: prompt.trim(),
+              ratio: target.ratio,
+              quality: target.quality,
+              ...(workspace?.path ? { workspaceRoot: workspace.path } : {}),
+              ...(referencesPayload === undefined ? {} : { references: referencesPayload }),
+            }),
+          })
+          const payload = await response.json() as StudioGenerateResponse | { error?: string }
+          if (!response.ok || !('attachment' in payload)) {
+            throw new Error('error' in payload && payload.error ? payload.error : `${target.profile.label}: ${t('generationFailed')}`)
+          }
+          return { payload, target }
+        }))
+
+        if (controller.signal.aborted) return
+        const successes = settled.filter(result => result.status === 'fulfilled')
+        const failed = settled.length - successes.length
+        if (successes.length === 0) {
+          const firstFailure = settled.find(result => result.status === 'rejected')
+          throw firstFailure?.status === 'rejected' ? firstFailure.reason : new Error(t('generationFailed'))
+        }
+
+        const galleryEntries = successes.map(({ value }, idx): GalleryItem => ({
+          id: String(value.payload.attachment.attachmentId || `${value.payload.createdAt}-${idx}`),
+          attachment: value.payload.attachment,
+          prompt: value.payload.prompt,
+          provider: value.payload.provider,
+          model: value.payload.model,
+          createdAt: value.payload.createdAt + idx,
+          aspectRatio: value.target.ratio,
+          imageSize: value.target.quality,
+          output: value.payload.output,
+          ...(value.payload.savedTo ? { savedTo: value.payload.savedTo } : {}),
+          ...(workspace?.path ? { workspacePath: workspace.path } : {}),
+          ...(workspace?.workspaceId ? { workspaceId: workspace.workspaceId } : {}),
+        }))
+
+        setCurrentBatch(galleryEntries.length > 1 ? galleryEntries : null)
+        setSelectedBatchIds(galleryEntries.length > 1 ? [galleryEntries[0]!.id] : [])
+        setBatchKind(galleryEntries.length > 1 ? 'multi-model' : null)
+        setSelected(galleryEntries[0]!)
+        setPanelTab('details')
+        resetFit()
+        if (failed > 0) flash(t('comparePartial', { success: String(successes.length), failed: String(failed) }))
+        return
+      }
 
       const response = await fetch(STUDIO_ROUTE, {
         method: 'POST', credentials: 'same-origin', signal: controller.signal,
@@ -512,9 +627,13 @@ export const StudioView: FC<{
 
       if (galleryEntries.length > 1) {
         setCurrentBatch(galleryEntries)
+        setSelectedBatchIds([galleryEntries[0]!.id])
+        setBatchKind('multi-image')
         setSelected(galleryEntries[0]!)
       } else if (galleryEntries.length === 1) {
         setCurrentBatch(null)
+        setSelectedBatchIds([])
+        setBatchKind(null)
         setSelected(galleryEntries[0]!)
       }
       setPanelTab('details')
@@ -541,9 +660,29 @@ export const StudioView: FC<{
     return items.some(item => item.id === selected.id)
   }, [items, selected])
 
-  const handleSaveToGallery = async () => {
-    if (selected === null || isSelectedInGallery) return
-    let savedTo = selected.savedTo
+  const selectedBatchItems = useMemo(() => {
+    if (currentBatch === null) return []
+    const ids = new Set(selectedBatchIds)
+    return currentBatch.filter(item => ids.has(item.id))
+  }, [currentBatch, selectedBatchIds])
+
+  const pendingGalleryItems = useMemo(() => {
+    const galleryIds = new Set(items.map(item => item.id))
+    const targets = currentBatch === null ? (selected === null ? [] : [selected]) : selectedBatchItems
+    return targets.filter(item => !galleryIds.has(item.id))
+  }, [currentBatch, items, selected, selectedBatchItems])
+
+  const saveButtonLabel = currentBatch !== null
+    ? pendingGalleryItems.length > 0
+      ? t('saveSelected', { count: String(pendingGalleryItems.length) })
+      : selectedBatchItems.length === 0 ? t('saveSelected', { count: '0' }) : t('inGallery')
+    : isSelectedInGallery ? t('inGallery') : t('saveToGallery')
+  const saveSelectionComplete = currentBatch === null
+    ? isSelectedInGallery
+    : selectedBatchItems.length > 0 && pendingGalleryItems.length === 0
+
+  const saveGalleryEntry = async (item: GalleryItem): Promise<GalleryItem> => {
+    let savedTo = item.savedTo
     const targetRoot = workspace?.path || config?.workspaceRoot
 
     if (!savedTo) {
@@ -553,34 +692,47 @@ export const StudioView: FC<{
           credentials: 'same-origin',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
-            attachment: selected.attachment,
+            attachment: item.attachment,
             ...(targetRoot ? { workspaceRoot: targetRoot } : {}),
           }),
         })
         if (res.ok) {
           const data = await res.json() as { ok: boolean; savedTo?: string }
-          if (data.savedTo) {
-            savedTo = data.savedTo
-          }
+          if (data.savedTo) savedTo = data.savedTo
         }
-      } catch (e) {
-        console.warn('Failed to save to workspace:', e)
+      } catch (saveError) {
+        console.warn('Failed to save to workspace:', saveError)
       }
     }
 
     const updatedItem: GalleryItem = {
-      ...selected,
+      ...item,
       ...(savedTo ? { savedTo } : {}),
       ...(targetRoot ? { workspacePath: targetRoot } : {}),
       ...(workspace?.workspaceId ? { workspaceId: workspace.workspaceId } : {}),
     }
-
     await saveGalleryItem(updatedItem)
-    setSelected(updatedItem)
-    if (currentBatch) {
-      setCurrentBatch(prev => prev ? prev.map(i => i.id === updatedItem.id ? updatedItem : i) : prev)
+    return updatedItem
+  }
+
+  const handleSaveToGallery = async () => {
+    if (selected === null) return
+    if (currentBatch !== null && selectedBatchItems.length === 0) return setError(t('needSelectResult'))
+    if (pendingGalleryItems.length === 0) return
+
+    const activeId = selected.id
+    const settled = await Promise.allSettled(pendingGalleryItems.map(saveGalleryEntry))
+    const saved = settled.flatMap(result => result.status === 'fulfilled' ? [result.value] : [])
+    if (saved.length === 0) {
+      const failed = settled.find(result => result.status === 'rejected')
+      setError(failed?.status === 'rejected' ? messageOf(failed.reason) : t('generationFailed'))
+      return
     }
-    flash(t('savedToGallery'))
+    const savedById = new Map(saved.map(item => [item.id, item]))
+    setCurrentBatch(current => current?.map(item => savedById.get(item.id) ?? item) ?? null)
+    setSelected(savedById.get(activeId) ?? saved[0]!)
+    setError(null)
+    flash(saved.length > 1 ? t('savedSelected', { count: String(saved.length) }) : t('savedToGallery'))
   }
 
   const handleConfirmDelete = async () => {
@@ -609,6 +761,7 @@ export const StudioView: FC<{
         await deleteGalleryItem(idToDelete)
       }
       evictAttachmentCache(attachmentId)
+      setSelectedBatchIds(current => current.filter(id => id !== idToDelete))
       if (currentBatch) {
         const remaining = currentBatch.filter(i => i.id !== idToDelete)
         if (remaining.length > 1) {
@@ -778,8 +931,8 @@ export const StudioView: FC<{
             {isGenerating ? (
               <div className="dsh-ig-generating-state">
                 <div className="dsh-ig-generation-orbit"><Sparkles size={28} /></div>
-                <strong>{count > 1 ? t('generatingCount', { count: String(count) }) : t('generating')}</strong>
-                <span>{activeProfile?.label} · {model}</span>
+                <strong>{comparisonEnabled ? t('comparing', { count: String(comparisonTargets.length) }) : count > 1 ? t('generatingCount', { count: String(count) }) : t('generating')}</strong>
+                <span>{comparisonEnabled ? comparisonTargets.map(target => target.profile.label).join(' · ') : `${activeProfile?.label ?? ''} · ${model}`}</span>
               </div>
             ) : currentBatch && currentBatch.length > 1 ? (
               <div
@@ -796,10 +949,15 @@ export const StudioView: FC<{
                     key={batchItem.id}
                     item={batchItem}
                     index={index}
-                    isSelected={selected?.id === batchItem.id}
+                    badge={batchKind === 'multi-model' ? batchItem.model : undefined}
+                    isActive={selected?.id === batchItem.id}
+                    isChecked={selectedBatchIds.includes(batchItem.id)}
                     onSelect={() => {
                       if (!hasDraggedRef.current) {
                         setSelected(batchItem)
+                        setSelectedBatchIds(current => current.includes(batchItem.id)
+                          ? current.filter(id => id !== batchItem.id)
+                          : [...current, batchItem.id])
                       }
                     }}
                   />
@@ -832,13 +990,13 @@ export const StudioView: FC<{
               <div>
                 <button
                   type="button"
-                  className={`dsh-ig-save-gallery-btn ${isSelectedInGallery ? 'is-saved' : ''}`}
+                  className={`dsh-ig-save-gallery-btn ${saveSelectionComplete ? 'is-saved' : ''}`}
                   onClick={() => void handleSaveToGallery()}
-                  title={isSelectedInGallery ? t('inGallery') : t('saveToGallery')}
-                  disabled={isSelectedInGallery}
+                  title={saveButtonLabel}
+                  disabled={saveSelectionComplete}
                 >
-                  {isSelectedInGallery ? <Check size={15} /> : <BookmarkPlus size={15} />}
-                  <span>{isSelectedInGallery ? t('inGallery') : t('saveToGallery')}</span>
+                  {saveSelectionComplete ? <Check size={15} /> : <BookmarkPlus size={15} />}
+                  <span>{saveButtonLabel}</span>
                 </button>
                 <button
                   type="button"
@@ -963,23 +1121,38 @@ export const StudioView: FC<{
                 </div>
               )
             ) : <>
-              <div className="dsh-ig-field-grid"><FieldSelect label={t('provider')} value={provider} onChange={changeProvider} options={config.providers.map(item => ({ value: item.provider, label: `${item.label}${item.configured ? '' : ` · ${t('unconfigured')}`}` }))} /><FieldSelect label={t('model')} value={model} onChange={setModel} options={activeProfile === undefined ? [] : [{ value: activeProfile.model, label: activeProfile.model }]} /></div>
-              <div className="dsh-ig-field-grid"><FieldSelect label={t('ratio')} value={ratio} onChange={setRatio} options={activeProfile?.ratioOptions ?? []} /><FieldSelect label={t('quality')} value={quality} onChange={setQuality} options={activeProfile?.qualityOptions ?? []} /></div>
-              <div className="dsh-ig-field">
-                <label>{t('count')}</label>
-                <div className="dsh-ig-count-row">
-                  {[1, 2, 3, 4].map(option => (
-                    <button
-                      key={option}
-                      type="button"
-                      className={`dsh-ig-count-pill ${count === option ? 'is-active' : ''}`}
-                      onClick={() => setCount(option)}
-                    >
-                      {t('countUnit', { n: String(option) })}
-                    </button>
-                  ))}
+              {comparisonProfiles.length >= 2 && (
+                <div className="dsh-ig-generation-kind" role="group" aria-label={t('compareModels')}>
+                  <button type="button" className={!comparisonEnabled ? 'is-active' : ''} onClick={() => toggleComparison(false)}>{t('singleModel')}</button>
+                  <button type="button" className={comparisonEnabled ? 'is-active' : ''} onClick={() => toggleComparison(true)}><Copy size={13} />{t('compareModels')}</button>
                 </div>
-              </div>
+              )}
+              {comparisonEnabled ? <>
+                <div className="dsh-ig-compare-box">
+                  <div className="dsh-ig-compare-heading">
+                    <div><strong>{t('compareSelect')}</strong><small>{t('compareHint')}</small></div>
+                    <span>{t('compareSelected', { count: String(comparisonTargets.length) })}</span>
+                  </div>
+                  <div className="dsh-ig-model-checks">
+                    {comparisonProfiles.map(item => {
+                      const target = comparisonTargets.find(candidate => candidate.profile.provider === item.provider)
+                      return (
+                        <button key={item.provider} type="button" className={target ? 'is-selected' : ''} aria-pressed={Boolean(target)} onClick={() => toggleComparisonProvider(item.provider)}>
+                          <span className="dsh-ig-model-checkmark">{target ? <Check size={12} /> : null}</span>
+                          <span className="dsh-ig-model-copy"><strong>{item.label}</strong><small title={item.model}>{item.model}</small></span>
+                          {target && <span className="dsh-ig-model-settings">{target.ratio} · {target.quality}{target.adjusted ? <em>{t('compareAdjusted')}</em> : null}</span>}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <p>{t('compareParameterHint')}</p>
+                </div>
+                <div className="dsh-ig-field-grid"><FieldSelect label={t('ratio')} value={ratio} onChange={setRatio} options={comparisonRatioOptions(lang)} /><FieldSelect label={t('quality')} value={quality} onChange={setQuality} options={comparisonQualityOptions(lang)} /></div>
+              </> : <>
+                <div className="dsh-ig-field-grid"><FieldSelect label={t('provider')} value={provider} onChange={changeProvider} options={config.providers.map(item => ({ value: item.provider, label: `${item.label}${item.configured ? '' : ` · ${t('unconfigured')}`}` }))} /><FieldSelect label={t('model')} value={model} onChange={setModel} options={activeProfile === undefined ? [] : [{ value: activeProfile.model, label: activeProfile.model }]} /></div>
+                <div className="dsh-ig-field-grid"><FieldSelect label={t('ratio')} value={ratio} onChange={setRatio} options={activeProfile?.ratioOptions ?? []} /><FieldSelect label={t('quality')} value={quality} onChange={setQuality} options={activeProfile?.qualityOptions ?? []} /></div>
+                <div className="dsh-ig-field"><label>{t('count')}</label><div className="dsh-ig-count-row">{[1, 2, 3, 4].map(option => <button key={option} type="button" className={`dsh-ig-count-pill ${count === option ? 'is-active' : ''}`} onClick={() => setCount(option)}>{t('countUnit', { n: String(option) })}</button>)}</div></div>
+              </>}
             </>}
             {configuredCount === 0 && config !== null && <div className="dsh-ig-inline-note">{t('noProvider')}</div>}
             {error !== null && <div className="dsh-ig-form-error">{error}</div>}
@@ -991,7 +1164,7 @@ export const StudioView: FC<{
             ) : (
               <button type="button" className="dsh-ig-generate-button" disabled={config === null} onClick={() => void submit()}>
                 <Sparkles size={17} />
-                <span>{t('start')}{count > 1 ? ` (${count})` : ''}</span>
+                <span>{comparisonEnabled ? `${t('compareStart')} (${comparisonTargets.length})` : `${t('start')}${count > 1 ? ` (${count})` : ''}`}</span>
               </button>
             )}
           </div>}
@@ -1109,13 +1282,13 @@ export const StudioView: FC<{
 
               <button
                 type="button"
-                className={`dsh-ig-lightbox-btn ${isSelectedInGallery ? 'is-saved' : ''}`}
-                title={isSelectedInGallery ? t('inGallery') : t('saveToGallery')}
+                className={`dsh-ig-lightbox-btn ${saveSelectionComplete ? 'is-saved' : ''}`}
+                title={saveButtonLabel}
                 onClick={() => void handleSaveToGallery()}
-                disabled={isSelectedInGallery}
+                disabled={saveSelectionComplete}
               >
-                {isSelectedInGallery ? <Check size={14} /> : <BookmarkPlus size={14} />}
-                <span>{isSelectedInGallery ? t('inGallery') : t('saveToGallery')}</span>
+                {saveSelectionComplete ? <Check size={14} /> : <BookmarkPlus size={14} />}
+                <span>{saveButtonLabel}</span>
               </button>
 
               <button
@@ -1168,16 +1341,19 @@ export const StudioView: FC<{
 const BatchCanvasItem: FC<{
   item: GalleryItem
   index: number
-  isSelected: boolean
+  badge?: string | undefined
+  isActive: boolean
+  isChecked: boolean
   onSelect(): void
-}> = ({ item, index, isSelected, onSelect }) => {
+}> = ({ item, index, badge, isActive, isChecked, onSelect }) => {
   const image = useAttachmentImage(item.attachment, true)
   return (
     <div
-      className={`dsh-ig-canvas-item ${isSelected ? 'is-selected' : ''}`}
+      className={`dsh-ig-canvas-item ${isActive ? 'is-active' : ''} ${isChecked ? 'is-checked' : ''}`}
       onClick={onSelect}
     >
-      <span className="dsh-ig-canvas-badge">#{index + 1}</span>
+      <span className={`dsh-ig-canvas-badge ${badge ? 'is-model' : ''}`} title={badge}>{badge ?? `#${index + 1}`}</span>
+      <span className="dsh-ig-canvas-check" aria-hidden="true">{isChecked ? <Check size={14} /> : null}</span>
       {image.url !== null ? (
         <img src={image.url} alt={item.prompt} draggable={false} />
       ) : image.loading ? (
@@ -1194,6 +1370,20 @@ const BatchCanvasItem: FC<{
 }
 
 const FieldSelect: FC<{ label: string; value: string; options: Array<{ value: string; label: string }>; onChange(value: string): void }> = ({ label, value, options, onChange }) => <label className="dsh-ig-field-select"><span>{label}</span><select value={value} onChange={event => onChange(event.target.value)}>{options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+
+function comparisonRatioOptions(lang: 'zh' | 'en'): Array<{ value: string; label: string }> {
+  const labels = lang === 'zh' ? ['1:1 方形', '3:2 横向', '2:3 纵向', '16:9 宽屏', '9:16 竖屏'] : ['1:1 Square', '3:2 Landscape', '2:3 Portrait', '16:9 Widescreen', '9:16 Vertical']
+  return ['1:1', '3:2', '2:3', '16:9', '9:16'].map((value, index) => ({ value, label: labels[index]! }))
+}
+
+function comparisonQualityOptions(lang: 'zh' | 'en'): Array<{ value: string; label: string }> {
+  return [
+    { value: 'standard', label: lang === 'zh' ? '标准' : 'Standard' },
+    { value: '1K', label: '1K' },
+    { value: '2K', label: '2K' },
+    { value: '4K', label: '4K' },
+  ]
+}
 
 const DetailsPanel: FC<{ item: GalleryItem | null; t(key: CopyKey, values?: Record<string, string>): string }> = ({ item, t }) => item === null ? <div className="dsh-ig-details-empty"><ImagePlus size={28} /><span>{t('selectHistory')}</span></div> : <dl className="dsh-ig-details"><div><dt>{t('prompt')}</dt><dd>{item.prompt}</dd></div><div><dt>{t('provider')}</dt><dd>{item.provider}</dd></div><div><dt>{t('model')}</dt><dd>{item.model}</dd></div><div><dt>{t('dimensions')}</dt><dd>{item.attachment.width && item.attachment.height ? `${item.attachment.width} × ${item.attachment.height}` : '—'}</dd></div><div><dt>{t('output')}</dt><dd>{item.output ?? '—'}</dd></div><div><dt>{t('created')}</dt><dd>{new Date(item.createdAt).toLocaleString()}</dd></div></dl>
 
