@@ -1163,7 +1163,7 @@ export const StudioView: FC<{
                 <div className="dsh-ig-field-grid"><FieldSelect label={t('ratio')} value={ratio} onChange={setRatio} options={comparisonRatioOptions(lang)} /><FieldSelect label={t('quality')} value={quality} onChange={setQuality} options={comparisonQualityOptions(lang)} /></div>
               </> : <>
                 <div className="dsh-ig-field-grid"><FieldSelect label={t('provider')} value={provider} onChange={changeProvider} options={config.providers.map(item => ({ value: item.provider, label: `${item.label}${item.configured ? '' : ` · ${t('unconfigured')}`}` }))} /><FieldSelect label={t('model')} value={model} onChange={setModel} options={activeProfile === undefined ? [] : [{ value: activeProfile.model, label: activeProfile.model }]} /></div>
-                <div className="dsh-ig-field-grid"><FieldSelect label={t('ratio')} value={ratio} onChange={setRatio} options={activeProfile?.ratioOptions ?? []} /><FieldSelect label={t('quality')} value={quality} onChange={setQuality} options={activeProfile?.qualityOptions ?? []} /></div>
+                <div className="dsh-ig-field-grid"><FieldSelect label={t('ratio')} value={ratio} onChange={setRatio} options={localizeRatioOptions(activeProfile?.ratioOptions ?? [], lang)} /><FieldSelect label={t('quality')} value={quality} onChange={setQuality} options={localizeQualityOptions(activeProfile?.qualityOptions ?? [], lang)} /></div>
                 <div className="dsh-ig-field"><label>{t('count')}</label><div className="dsh-ig-count-row">{[1, 2, 3, 4].map(option => <button key={option} type="button" className={`dsh-ig-count-pill ${count === option ? 'is-active' : ''}`} onClick={() => setCount(option)}>{t('countUnit', { n: String(option) })}</button>)}</div></div>
               </>}
             </>}
@@ -1384,9 +1384,41 @@ const BatchCanvasItem: FC<{
 
 const FieldSelect: FC<{ label: string; value: string; options: Array<{ value: string; label: string }>; onChange(value: string): void }> = ({ label, value, options, onChange }) => <label className="dsh-ig-field-select"><span>{label}</span><select value={value} onChange={event => onChange(event.target.value)}>{options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
 
+const LOCALIZED_RATIOS: Record<string, { zh: string; en: string }> = {
+  auto: { zh: '自动', en: 'Auto' },
+  '1:1': { zh: '1:1 方形', en: '1:1 Square' },
+  '3:2': { zh: '3:2 横向', en: '3:2 Landscape' },
+  '2:3': { zh: '2:3 肖像', en: '2:3 Portrait' },
+  '4:3': { zh: '4:3 横向', en: '4:3 Landscape' },
+  '3:4': { zh: '3:4 竖向', en: '3:4 Portrait' },
+  '16:9': { zh: '16:9 宽屏', en: '16:9 Widescreen' },
+  '9:16': { zh: '9:16 竖屏', en: '9:16 Portrait' },
+}
+
+const LOCALIZED_QUALITIES: Record<string, { zh: string; en: string }> = {
+  standard: { zh: '标准（推荐）', en: 'Standard (Recommended)' },
+  auto: { zh: '模型自动', en: 'Model Auto' },
+}
+
+function localizeRatioOptions(options: Array<{ value: string; label: string }>, lang: 'zh' | 'en'): Array<{ value: string; label: string }> {
+  return options.map(opt => ({
+    value: opt.value,
+    label: LOCALIZED_RATIOS[opt.value]?.[lang] ?? opt.label,
+  }))
+}
+
+function localizeQualityOptions(options: Array<{ value: string; label: string }>, lang: 'zh' | 'en'): Array<{ value: string; label: string }> {
+  return options.map(opt => ({
+    value: opt.value,
+    label: LOCALIZED_QUALITIES[opt.value]?.[lang] ?? opt.label,
+  }))
+}
+
 function comparisonRatioOptions(lang: 'zh' | 'en'): Array<{ value: string; label: string }> {
-  const labels = lang === 'zh' ? ['1:1 方形', '3:2 横向', '2:3 纵向', '16:9 宽屏', '9:16 竖屏'] : ['1:1 Square', '3:2 Landscape', '2:3 Portrait', '16:9 Widescreen', '9:16 Vertical']
-  return ['1:1', '3:2', '2:3', '16:9', '9:16'].map((value, index) => ({ value, label: labels[index]! }))
+  return ['1:1', '3:2', '2:3', '16:9', '9:16'].map(value => ({
+    value,
+    label: LOCALIZED_RATIOS[value]?.[lang] ?? value,
+  }))
 }
 
 function comparisonQualityOptions(lang: 'zh' | 'en'): Array<{ value: string; label: string }> {
