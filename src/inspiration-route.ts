@@ -239,6 +239,7 @@ async function readImageCache(key: string): Promise<{ type: string; data: Uint8A
       const file = join(dir, `${key}${ext}`)
       try {
         const data = await readFile(file)
+        if (data.byteLength < 64) continue
         return { type: EXT_TO_MIME[ext]!, data: new Uint8Array(data.buffer, data.byteOffset, data.byteLength) }
       } catch {}
     }
@@ -248,9 +249,13 @@ async function readImageCache(key: string): Promise<{ type: string; data: Uint8A
 
 let cacheWriteChain: Promise<void> = Promise.resolve()
 
+export function drainCacheWrites(): Promise<void> {
+  return cacheWriteChain
+}
+
 function writeImageCache(key: string, mimeType: string, data: Uint8Array): void {
   const ext = MIME_TO_EXT[mimeType]
-  if (ext === undefined) return
+  if (ext === undefined || data.byteLength < 64) return
   // 串行队列异步落盘，吞掉全部错误，绝不触发 unhandledRejection 搞崩宿主进程
   cacheWriteChain = cacheWriteChain.then(async () => {
     try {

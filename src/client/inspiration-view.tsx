@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FC } from 'react'
 import { Check, Clipboard, ExternalLink, ImageIcon, LoaderCircle, Maximize2, Search, Sparkles, Star, Trash2, X } from 'lucide-react'
 import { INSPIRATION_ROUTE } from '../shared.js'
 import type { InspirationCase, InspirationCatalog, InspirationSource } from '../inspiration.js'
-import { clearInspirationImageCache, fetchInspirationImage } from './inspiration-image-cache.js'
+import { clearInspirationImageCache, evictInspirationImage, fetchInspirationImage } from './inspiration-image-cache.js'
 import { loadCachedInspirationCatalog, saveCachedInspirationCatalog } from './inspiration-catalog-cache.js'
 import type { LocaleService } from './gallery-view.js'
 
@@ -550,10 +550,40 @@ const InspirationImage: FC<{ sourceId: string; caseId: string; alt: string }> = 
   return (
     <div ref={setNode} style={{ width: '100%', height: '100%' }}>
       {url !== null && !failed ? (
-        <img src={url} alt={alt} loading="lazy" onError={() => setFailed(true)} />
+        <img
+          src={url}
+          alt={alt}
+          loading="lazy"
+          onError={() => {
+            setFailed(true)
+            void evictInspirationImage(sourceId, caseId)
+          }}
+        />
       ) : (
         <div className={`dsh-ig-inspiration-image-placeholder ${failed ? 'is-error' : ''}`}>
-          {failed ? '图片暂时无法读取' : <LoaderCircle className="dsh-ig-spin" size={18} />}
+          {failed ? (
+            <button
+              type="button"
+              className="dsh-ig-inspiration-retry-btn"
+              onClick={e => {
+                e.stopPropagation()
+                setFailed(false)
+                setUrl(null)
+                void evictInspirationImage(sourceId, caseId)
+                  .then(() => fetchInspirationImage(sourceId, caseId))
+                  .then(blob => {
+                    const next = URL.createObjectURL(blob)
+                    urlRef.current = next
+                    setUrl(next)
+                  })
+                  .catch(() => setFailed(true))
+              }}
+            >
+              点击重试
+            </button>
+          ) : (
+            <LoaderCircle className="dsh-ig-spin" size={18} />
+          )}
         </div>
       )}
     </div>

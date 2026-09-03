@@ -28,12 +28,32 @@ export function fetchInspirationImage(sourceId: string, caseId: string): Promise
     })
     if (!response.ok) throw new Error(`灵感图片读取失败 (${String(response.status)})`)
     const blob = await response.blob()
-    if (!['image/jpeg', 'image/png', 'image/webp'].includes(blob.type)) throw new Error('灵感图片格式不受支持')
+    if (blob.size < 64 || !['image/jpeg', 'image/png', 'image/webp'].includes(blob.type)) {
+      throw new Error('灵感图片格式不受支持')
+    }
     void putCached(key, blob)
     return blob
   }).finally(() => pending.delete(key))
   pending.set(key, task)
   return task
+}
+
+export async function evictInspirationImage(sourceId: string, caseId: string): Promise<void> {
+  const key = `${sourceId}:${caseId}`
+  pending.delete(key)
+  const db = await openDatabase()
+  if (db === undefined) return
+  try {
+    await new Promise<void>(resolve => {
+      const tx = db.transaction(STORE, 'readwrite')
+      const store = tx.objectStore(STORE)
+      const req = store.delete(key)
+      req.onsuccess = () => resolve()
+      req.onerror = () => resolve()
+    })
+  } finally {
+    db.close()
+  }
 }
 
 function openDatabase(): Promise<IDBDatabase | undefined> {
@@ -67,7 +87,12 @@ async function getCached(key: string): Promise<Blob | undefined> {
       const request = store.get(key)
       request.onsuccess = () => {
         const entry = request.result as CachedImage | undefined
-        if (entry === undefined || !(entry.blob instanceof Blob)) return resolve(undefined)
+        if (entry === undefined || !(entry.blob instanceof Blob) || entry.blob.size < 64) {
+          if (entry !== undefined) {
+            try { store.delete(key) } catch {}
+          }
+          return resolve(undefined)
+        }
         entry.accessedAt = Date.now()
         store.put(entry)
         resolve(entry.blob)

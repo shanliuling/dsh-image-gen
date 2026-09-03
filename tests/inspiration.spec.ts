@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { BUNDLED_INSPIRATION_CATALOG, findInspirationCase, parseInspirationSnapshot, publicInspirationCatalog } from '../src/inspiration.js'
-import { createInspirationRoute } from '../src/inspiration-route.js'
+import { createInspirationRoute, drainCacheWrites } from '../src/inspiration-route.js'
 import { resolveActiveCatalog } from '../src/client/inspiration-view.js'
 
 describe('inspiration snapshot contract', () => {
@@ -38,6 +38,7 @@ describe('inspiration HTTP route', () => {
 
   afterEach(async () => {
     vi.restoreAllMocks()
+    await drainCacheWrites()
     // 恢复环境变量，清理临时缓存目录
     process.env.USERPROFILE = savedUserProfile
     process.env.HOME = savedHome
@@ -119,9 +120,10 @@ describe('inspiration HTTP route', () => {
   })
 
   it('serves from async disk cache on repeated requests without hitting upstream', async () => {
-    const upstream = vi.fn<typeof fetch>(async () => new Response(new Uint8Array([10, 20, 30]), {
+    const dummyImage = new Uint8Array(128).fill(42)
+    const upstream = vi.fn<typeof fetch>(async () => new Response(dummyImage, {
       status: 200,
-      headers: { 'content-type': 'image/jpeg', 'content-length': '3' },
+      headers: { 'content-type': 'image/jpeg', 'content-length': '128' },
     }))
     const url = await start(upstream)
     const item = BUNDLED_INSPIRATION_CATALOG.sources[0]!.cases[0]!
@@ -130,7 +132,7 @@ describe('inspiration HTTP route', () => {
     expect(first.status).toBe(200)
     expect(upstream).toHaveBeenCalledTimes(1)
     // 等待写盘完成
-    await new Promise(r => setTimeout(r, 80))
+    await drainCacheWrites()
     // 第二次请求：命中磁盘缓存，不再调用 upstream
     const second = await fetch(`${url}/image/awesome-gpt-image-2/${item.id}`, { headers: { origin: url } })
     expect(second.status).toBe(200)
@@ -151,14 +153,15 @@ describe('inspiration HTTP route', () => {
   })
 
   it('clears disk cache and removes image files on POST /cache/clear', async () => {
-    const upstream = vi.fn<typeof fetch>(async () => new Response(new Uint8Array([1, 2, 3]), {
+    const dummyImage = new Uint8Array(128).fill(42)
+    const upstream = vi.fn<typeof fetch>(async () => new Response(dummyImage, {
       status: 200,
-      headers: { 'content-type': 'image/jpeg', 'content-length': '3' },
+      headers: { 'content-type': 'image/jpeg', 'content-length': '128' },
     }))
     const url = await start(upstream)
     const item = BUNDLED_INSPIRATION_CATALOG.sources[0]!.cases[0]!
     await fetch(`${url}/image/awesome-gpt-image-2/${item.id}`, { headers: { origin: url } })
-    await new Promise(r => setTimeout(r, 80))
+    await drainCacheWrites()
 
     const cacheDir = join(tmpHome!, '.dsh', 'cache', 'dsh-image-gen', 'inspiration')
     const filesBefore = readdirSync(cacheDir).filter(name => /\.(jpg|png|webp)$/i.test(name))
