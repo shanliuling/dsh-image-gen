@@ -1,182 +1,362 @@
 <div align="center">
 
-<img src="docs/assets/hero-poster.webp" alt="dsh-image-gen 宣传海报" width="100%" style="max-width: 860px; border-radius: 12px;" />
+<img src="docs/assets/readme/hero-zh.webp" alt="dsh-image-gen 中文功能概览" width="100%" />
 
-<br /><br />
+<br />
+
+<p><strong>简体中文</strong> · <a href="README.en.md">English</a></p>
 
 # 🎨 dsh-image-gen
 
-**为 DeepSeek Harness 提供完整的对话图像能力：文生图、图生图、多图参考、连续编辑、本地 ComfyUI 与画廊管理。**
+### DeepSeek Harness 的原生 AI 图像创作套件
 
-[![npm version](https://img.shields.io/npm/v/dsh-image-gen.svg?style=flat-square&color=blue)](https://www.npmjs.com/package/dsh-image-gen)
-[![DSH Plugin](https://img.shields.io/badge/Plugin%20For-DeepSeek%20Harness-6366f1?style=flat-square)](https://github.com/deepseek-ai)
-[![npm downloads](https://img.shields.io/npm/dm/dsh-image-gen.svg?style=flat-square&color=emerald)](https://www.npmjs.com/package/dsh-image-gen)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
-[![LINUX DO](https://img.shields.io/badge/LINUX%20DO-社区友链-555?style=flat-square)](https://linux.do/)
+<p><b>对话生图与编辑 · Studio 批量创作 · 多模型对比 · 500+ Prompt 灵感 · 图库管理 · 本地 ComfyUI</b></p>
 
-[English](README.en.md) | **简体中文**
+<p>
+  <a href="https://www.npmjs.com/package/dsh-image-gen"><img src="https://img.shields.io/npm/v/dsh-image-gen?style=flat-square&color=4f6ef7" alt="npm version" /></a>
+  <a href="https://www.npmjs.com/package/dsh-image-gen"><img src="https://img.shields.io/npm/dm/dsh-image-gen?style=flat-square&color=10b981" alt="npm downloads" /></a>
+  <a href="https://github.com/shanliuling/dsh-image-gen/actions/workflows/ci.yml"><img src="https://github.com/shanliuling/dsh-image-gen/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/shanliuling/dsh-image-gen/stargazers"><img src="https://img.shields.io/github/stars/shanliuling/dsh-image-gen?style=flat-square" alt="GitHub stars" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-f5c542?style=flat-square" alt="License: MIT" /></a>
+  <a href="https://linux.do/"><img src="https://img.shields.io/badge/LINUX%20DO-社区友链-555?style=flat-square" alt="LINUX DO" /></a>
+</p>
 
-<br />
-
-<p align="center">💬 <b>直接对你的 DeepSeek Harness Agent 发送以下提示词：</b></p>
-
-```text
-帮我安装生图插件，执行命令：pnpm dsh plugin --profile web add dsh-image-gen@latest
-```
-
-<p align="center"><sub>（也可以手动在终端执行：<code>pnpm dsh plugin --profile web add dsh-image-gen@latest</code>）</sub></p>
-
-<br />
-
-<p align="center">安装完成后，在 DSH 设置中填入自己的 API Key 或配置本地 ComfyUI，就可以直接对 Agent 说：</p>
-
-```text
-帮我画一张雨夜霓虹街头的赛博朋克猫咪。
-```
-
-<p align="center">Agent 会自动完成图片生成，也可以直接基于上一张图片继续修改。</p>
+<p>
+  <a href="#快速开始">快速开始</a> ·
+  <a href="#核心能力">核心能力</a> ·
+  <a href="#provider-支持情况">Provider 支持</a> ·
+  <a href="#常见问题">常见问题</a>
+</p>
 
 <br />
-
-<div align="center">
-  <img src="docs/assets/generate-example.png" alt="首次生成图片的对话截图" width="48%" style="vertical-align: top;" />
-  <img src="docs/assets/edit-example.png" alt="基于上一张图片继续编辑的对话截图" width="48%" style="vertical-align: top;" />
-</div>
 
 </div>
 
----
+**为 DeepSeek Harness 带来完整的 AI 图像创作工作流。**
 
-## 💡 它解决什么问题？
+`dsh-image-gen` 不只是简单的对话生图，而是为 DSH 补齐了从**自然语言连续修图**、**Studio 批量创作**、**多模型横向对比**，到 **500+ Prompt 灵感库**与**本地 ComfyUI** 的全流程能力。支持 **Google Gemini、OpenAI Images / Compatible、ByteDance Seedream、Aliyun DashScope** 及本地私有化工作流，采用 BYOK（自带 Key）模式，生成结果支持按工作区隔离存储。
 
-**`dsh-image-gen` 是专为 DeepSeek Harness (DSH) 打造的开源图像生成与编辑插件。**
-
-DeepSeek Harness 已经可以让 Agent 调用不同工具完成任务，本项目为它补上了原生的**图像生成与编辑能力**：
-
-```mermaid
-graph LR
-    A[用户 Prompt] --> B[DeepSeek Harness Agent]
-    B --> C[generate_image / edit_image]
-    C --> D[Gemini / OpenAI / Seedream / DashScope / ComfyUI]
-    D --> E[图片数据]
-    E --> F[当前 Conversation 对话流]
+```bash
+pnpm dsh plugin --profile web add dsh-image-gen@latest
 ```
 
 ---
 
-## 🚀 快速安装与使用
+## 一个插件，四种创作方式
+
+| 入口          | 最适合                    | 你可以做什么                                           |
+| :------------ | :------------------------ | :----------------------------------------------------- |
+| 💬 **对话**   | 让 Agent 理解自然语言需求 | 文生图、图生图、多图参考、连续编辑、原位重新生成       |
+| 🎛️ **工作台** | 精确控制创作参数          | 1–4 张批量生成、最多 5 张参考图、缩放与拖拽画布        |
+| ✨ **灵感**   | 找构图、风格与 Prompt     | 500+ 案例、搜索筛选、收藏、复制、一键带入工作台        |
+| 🖼️ **图库**   | 整理与复用生成结果        | 搜索、筛选、收藏、重新生成、下载、批量管理、工作区隔离 |
+
+---
+
+## 快速开始
 
 ### 1. 安装插件
+
+环境要求：DeepSeek Harness `>= 0.1.1-rc.2` 且 `< 0.2.0`，Node.js `^22.19.0` 或 `>= 24.0.0`。
 
 在你的 DeepSeek Harness 项目根目录下运行：
 
 ```bash
-# 推荐方式：安装或升级到最新版本
 pnpm dsh plugin --profile web add dsh-image-gen@latest
-
-# 若已将 dsh 安装为系统全局命令：
-dsh plugin --profile web add dsh-image-gen@latest
 ```
 
+> 💬 **极客提示**：你也可以直接把这句话发送给 DSH 对话中的 Agent：<br />
+> `帮我安装生图插件，在终端执行：pnpm dsh plugin --profile web add dsh-image-gen@latest`
+
 <details>
-<summary><b>🛠️ 其他安装方式（Git 仓库直装 / 本地调试）</b></summary>
+<summary><strong>其他安装方式（全局 / GitHub 直装 / 本地调试）</strong></summary>
 
 ```bash
-# 方式 B：从 GitHub 仓库直接安装最新代码
+# 若已将 dsh 安装为系统全局命令：
+dsh plugin --profile web add dsh-image-gen@latest
+
+# 从 GitHub 仓库直接安装最新代码：
 pnpm dsh plugin --profile web add git+https://github.com/shanliuling/dsh-image-gen.git
 
-# 方式 C：本地克隆源码开发安装
+# 本地克隆源码开发安装：
 git clone https://github.com/shanliuling/dsh-image-gen.git
 pnpm dsh plugin --profile web add ./dsh-image-gen
 ```
 
 </details>
 
-### 2. 配置 Provider 与工作区设置
+### 2. 配置 Provider
 
-打开 DSH Web 页面（默认 `http://localhost:3080`）：
+重启 DSH 后进入：
 
-1. 进入 **Settings → Plugins → Image generation**。
-2. 选择 Provider；云端 Provider 填写 API Key，本地 ComfyUI 填写地址并导入 API Format Workflow JSON（提示词位置使用 `{{prompt}}`，种子可选用 `{{seed}}`；图生图工作流在 LoadImage 的 `image` 输入中使用 `{{image}}`，调用时插件会自动上传源图并回填文件名，仅允许出现一次）。ComfyUI 支持导入多个命名工作流并选择当前使用的一个，Agent 也可以在调用时通过 `workflow` 参数按名称指定。
-3. 可按需开启 **保存到工作区**（默认开启）并自定义子目录，点击 **保存** 即可。
+**设置 → 插件 → 插件配置 → 图像生成**
 
-<div align="center">
-  <img src="docs/assets/settings-preview.png?v=0.1.7" alt="设置面板预览" width="720" />
-</div>
+选择 Provider，填写自己的 API Key，并按需调整模型、Endpoint / Base URL 与工作区保存选项。使用 ComfyUI 时，请填写 DSH Host 可访问的服务地址，并导入 **API Format Workflow JSON**。
 
-### 3. 开始对话生图
-
-现在直接在聊天框输入：
-
-```text
-生成一张极简主义的现代建筑客厅插画。
-```
-
-当前 Agent 就会自动调用 `generate_image` 工具并在对话流中返回图片。
-
-也可以继续基于上一张图进行编辑：
-
-```text
-给刚才那张图加上落地窗，并把窗外改成雪山。
-```
-
-Agent 会调用 `edit_image`，复用当前会话中的图片继续修改。
-
-### 4. 查看原生生图画廊
-
-点击会话顶栏的 **`[画廊]`** Tab，即可集中查看和搜索所有对话生成的历史图片：
+<br />
 
 <div align="center">
-  <img src="docs/assets/gallery-preview.png" alt="原生生图画廊预览" width="820" />
+  <img src="docs/assets/readme/provider-settings.webp" alt="DSH 插件配置界面" width="100%" style="max-width: 680px; border-radius: 8px;" />
+  <br />
+  <sub>在设置面板中选择 Provider、配置 API Key、模型名称及工作区保存选项。</sub>
 </div>
 
+<br />
+
+### 3. 开始创作
+
+在聊天框中直接描述你想要的图片：
+
+```text
+画一张雨夜霓虹街头的赛博朋克猫咪，电影感光线，16:9。
+```
+
+也可以直接上传参考图，让 Agent 进行风格重构或局部编辑：
+
+```text
+保持角色与构图不变，给猫咪戴上一副黑色墨镜。
+```
+
+<br />
+
+<div align="center">
+  <img src="docs/assets/readme/chat-example.webp" alt="对话生图与风格重构效果" width="100%" style="max-width: 840px; border-radius: 8px;" />
+  <br />
+  <sub>Agent 自动理解视觉意图并生成图片，结果直接呈现在当前会话流中。</sub>
+</div>
+
+<br />
+
+需要更细的参数控制时，点击会话顶部的 **画廊** 入口，进入 **图库 / 工作台 / 灵感 / 收藏**。
+
 ---
 
-## ✨ 主要能力
+## 核心能力
 
-- 💬 **原生对话生图与编辑**：直接在 DeepSeek Harness 对话中生成图片，也可以基于已有图片继续修改。
-- 🔁 **连续多轮编辑**：支持复用当前会话中的上传图片、历史生成图和上一轮编辑结果继续迭代。
-- 🖼️ **画廊与图片工具**：自动汇总历史图片，支持搜索、筛选、全屏预览、复制、下载与删除。
-- 🎨 **多 Provider 支持**：兼容 Google Gemini、OpenAI Images / Compatible、Seedream、DashScope Qwen Image，以及用户本地的 ComfyUI 工作流。
-- 🔑 **BYOK + 原生设置**：API Key、Provider、模型和 Endpoint 都可以直接在 DSH 设置中配置。
-- 💾 **会话与工作区保存**：图片接入 DSH Attachment / Conversation，并可自动保存到当前工作区。
+### 💬 对话生图、编辑与版本切换
+
+- Agent 会根据意图自动调用生成或编辑能力。
+- 支持文生图、单图编辑、多图参考、图片组合与风格迁移。
+- 可使用本轮上传图片、会话历史生成图或工作区图片作为参考。
+- 在原图片卡片上修改 Prompt 并异步重新生成，避免重复消息刷屏。
+- 新旧结果保留在同一张卡片中，通过内置版本控制器随时来回切换对比。
+
+<br />
+
+<div align="center">
+  <img src="docs/assets/readme/regenerating.webp" alt="图片正在重新生成" width="46%" />
+  <img src="docs/assets/readme/revision-switcher.webp" alt="在同一图片卡片中切换生成版本" width="46%" />
+  <br />
+  <sub>修改 Prompt 后原位重新生成，并在同一张图片卡片中切换历史版本。</sub>
+</div>
+
+<br />
+
+### 🎛️ Studio 批量创作
+
+- 在文生图和图生图之间快速切换。
+- 上传或拖入参考图；通常最多 5 张，DashScope 最多 3 张。
+- 精确控制 Provider、模型、画面比例、清晰度和生成数量。
+- 单次并发生成 1–4 张候选图；部分请求超时失败时，成功结果仍会保留。
+- 画布支持自由平移拖拽、25%–500% 缩放、适应窗口与全屏查看。
+- 从最近生成列表继续编辑历史图片，并查看 Prompt、模型、尺寸与耗时。
+- 精选保存：只把选中的满意成图存入图库和工作区，避免无效文件堆积。
+
+<br />
+
+<div align="center">
+  <img src="docs/assets/readme/studio-workbench.webp" alt="dsh-image-gen Studio 工作台" width="100%" />
+  <br />
+  <sub>在同一个 Studio 中完成参考图导入、参数控制、批量生成、结果筛选与保存。</sub>
+</div>
+
+<br />
+
+### ⚖️ 多模型横向对比
+
+对同一个 Prompt 和同一组参考图，**一键并发调用多个已配置的云端 Provider**。某个模型失败不会影响其他成功结果；不支持当前比例或清晰度的模型，会自动适配到最接近的可用参数，直观比对各家模型的成图风格与细节。
+
+<br />
+
+<div align="center">
+  <img src="docs/assets/readme/multi-model-compare.webp" alt="同一 Prompt 的多模型生成对比" width="100%" />
+  <br />
+  <sub>在同一画布中比较不同模型结果，再批量保存满意的图片。</sub>
+</div>
+
+<br />
+
+### ✨ 500+ Prompt 灵感案例
+
+- 精选 **500+ 实战灵感案例**，支持关键词、分类、风格与使用场景精准筛选。
+- 瀑布流浏览、懒加载、无限滚动与全屏大图查看。
+- 收藏案例、复制完整 Prompt，或一键带入 Studio 工作台继续微调。
+- 浏览器与宿主磁盘双层缓存，支持检查更新、失败重试和清理缓存。
+- **全本地缓存运行，浏览与学习过程零 Token、零额度消耗。**
+
+<br />
+
+<div align="center">
+  <img src="docs/assets/readme/inspiration-library.webp" alt="Prompt 灵感素材库" width="100%" />
+  <br />
+  <sub>先找灵感，再把 Prompt 带入工作台；全本地缓存，浏览或复制不消耗生成额度。</sub>
+</div>
+
+<br />
+
+### 🖼️ 图库、收藏与批量管理
+
+- 汇总对话与 Studio 中保存的生成图片。
+- 按 Provider、比例、Prompt 关键词和生成时间筛选或排序。
+- “仅看此工作区”用于彻底隔离不同项目的生成记录。
+- 支持收藏、下载、复制图片与 Prompt、继续编辑和重新生成。
+- Lightbox 支持鼠标与键盘 `←` / `→` 连续浏览。
+- 批量选择支持全选、反选、清空和 `Shift + 点击` 范围选择。
+- 删除图库记录时，可选择是否同时清理经过工作区路径校验的本地文件。
+
+<br />
+
+<div align="center">
+  <img src="docs/assets/readme/gallery-management.webp" alt="图库筛选、收藏与批量管理" width="100%" />
+  <br />
+  <sub>图库支持多维度筛选、收藏、批量管理与工作区数据隔离。</sub>
+</div>
+
+<br />
+
+### 🧩 本地 ComfyUI 多工作流
+
+灵活调用本地 GPU 算力，让私有化绘图无缝融入 Agent 对话。_(ComfyUI 当前通过 Agent 对话调用，暂未接入 Studio 和多模型对比)_
+
+- 导入 ComfyUI 导出的 **API Format Workflow JSON**。
+- 管理多个命名工作流，支持重命名、删除或设置默认工作流。
+- Agent 可以按工作流名称智能调度本次调用使用的工作流。
+- 每个工作流可设置独立的预设 Prompt。
+- 支持 `{{prompt}}`、`{{seed}}` 和图生图用的 `{{image}}` 占位符。
+- 兼容旧版 `%prompt%`、`%seed%`、`%image%` 写法。
+- 图生图工作流目前每次编辑支持一张源图。
+
+<br />
+
+<div align="center">
+  <img src="docs/assets/readme/comfyui-workflows.webp" alt="ComfyUI 多工作流配置" width="760" />
+  <br />
+  <sub>为不同用途维护独立工作流，并通过名称让 Agent 精确选择。</sub>
+</div>
+
+<br />
 
 ---
 
-## 📦 支持的 Provider
+## Provider 支持情况
 
-| Provider | 默认模型 | 默认 Endpoint / Base URL |
-| :--- | :--- | :--- |
-| **Google Gemini** | `gemini-3.1-flash-image` | `https://generativelanguage.googleapis.com/v1beta/interactions` |
-| **OpenAI Images** | `gpt-image-2` | `https://api.openai.com/v1` |
-| **OpenAI Compatible** | 自定义 | 自定义 Base URL |
-| **ByteDance Seedream / 火山方舟** | `doubao-seedream-5-0-260128` | `https://ark.cn-beijing.volces.com/api/v3` |
-| **Aliyun DashScope / Qwen Image** | `qwen-image-3.0` | `https://dashscope.aliyuncs.com/api/v1` |
-| **Local ComfyUI（文生图 + 图生图）** | 用户导入的 API Format Workflow | `http://127.0.0.1:8188` |
+| Provider                          | 对话生图 | 对话编辑 | Studio | 多模型对比 | Studio 参考图 |
+| :-------------------------------- | :------: | :------: | :----: | :--------: | :-----------: |
+| **Google Gemini**                 |    ✅    | ✅ 多图  |   ✅   |     ✅     |   最多 5 张   |
+| **OpenAI Images / Compatible**    |    ✅    | ✅ 多图  |   ✅   |     ✅     |   最多 5 张   |
+| **ByteDance Seedream / 火山方舟** |    ✅    | ✅ 多图  |   ✅   |     ✅     |   最多 5 张   |
+| **Aliyun DashScope / Qwen Image** |    ✅    | ✅ 多图  |   ✅   |     ✅     |   最多 3 张   |
+| **Local ComfyUI**                 |    ✅    | ✅ 单图  |   —    |     —      | 对话编辑 1 张 |
+
+> Studio 与多模型对比目前只支持云端 Provider；多模型对比调用的是各 Provider 在设置中已配置的模型。
+
+<details>
+<summary><strong>当前默认模型与 Endpoint（均可修改）</strong></summary>
+
+| Provider           | 默认模型                     | 默认 Endpoint / Base URL                                        |
+| :----------------- | :--------------------------- | :-------------------------------------------------------------- |
+| Google Gemini      | `gemini-3.1-flash-image`     | `https://generativelanguage.googleapis.com/v1beta/interactions` |
+| OpenAI Images      | `gpt-image-2`                | `https://api.openai.com/v1`                                     |
+| OpenAI Compatible  | 自定义                       | 自定义 Base URL                                                 |
+| ByteDance Seedream | `doubao-seedream-5-0-260128` | `https://ark.cn-beijing.volces.com/api/v3`                      |
+| Aliyun DashScope   | `qwen-image-3.0`             | `https://dashscope.aliyuncs.com/api/v1`                         |
+| Local ComfyUI      | 用户导入的 API Workflow      | `http://127.0.0.1:8188`                                         |
+
+</details>
 
 ---
 
-## 🛠️ 本地开发 (Development)
+## 数据与隐私
+
+- **BYOK**：API Key 通过 DSH Credentials 服务保存，设置页不会回显 Key 明文。
+- **云端请求**：Prompt 与本次使用的参考图会发送给所选 Provider，请遵守对应服务条款。
+- **本地 ComfyUI**：请求发送到用户配置的 ComfyUI 地址。
+- **工作区文件**：开启工作区保存后，对话结果会落盘；Studio 仅保存用户选中的候选图。
+- **图库与收藏**：图库元数据和收藏状态保存在当前浏览器本地存储中。
+- **灵感缓存**：案例元数据随插件提供，图片按需加载并缓存在本机，可随时清理。
+
+## 常见问题
+
+<details>
+<summary><strong>安装后找不到“图像生成”设置怎么办？</strong></summary>
+
+先完全重启当前 DSH Profile，再检查插件配置：
 
 ```bash
-# 克隆仓库
+dsh --profile web --dump-config
+```
+
+如果输出中没有 `dsh-image-gen`，请重新执行安装命令。提交 Issue 时请附 DSH 版本、插件版本和错误日志，不要上传 API Key。
+
+</details>
+
+<details>
+<summary><strong>生成图片保存在哪里？</strong></summary>
+
+开启“保存到工作区”后，对话生成结果默认保存在当前工作区的 `dsh-image-gen/` 子目录，也可以在设置中修改。Studio 候选图先留在临时画布，只有用户选中的结果才会进入图库并保存。
+
+</details>
+
+<details>
+<summary><strong>为什么 ComfyUI 没有出现在 Studio 中？</strong></summary>
+
+当前 Studio 与多模型对比只支持四类云端 Provider。ComfyUI 已支持在 Agent 对话中进行文生图、单图编辑以及多个命名工作流。
+
+</details>
+
+<details>
+<summary><strong>从图库删除会删除聊天记录吗？</strong></summary>
+
+不会。删除图库记录不会修改原聊天消息。你可以额外选择是否清理工作区中的本地图片文件；文件删除通常无法恢复，请确认后操作。
+
+</details>
+
+<details>
+<summary><strong>如何升级？</strong></summary>
+
+```bash
+pnpm dsh plugin --profile web add dsh-image-gen@latest
+```
+
+升级后重启对应的 DSH Profile。
+
+</details>
+
+---
+
+## 本地开发
+
+```bash
 git clone https://github.com/shanliuling/dsh-image-gen.git
 cd dsh-image-gen
 
-# 安装依赖与构建
 pnpm install
 pnpm run typecheck
-pnpm run test
+pnpm test
 pnpm run build
-
-# 检查 npm 打包内容
 pnpm run pack:check
 ```
 
----
+欢迎通过 [Issues](https://github.com/shanliuling/dsh-image-gen/issues) 反馈问题，或阅读 [CONTRIBUTING.md](CONTRIBUTING.md) 后提交 Pull Request。
 
-## 📄 开源协议 (License)
+## License
 
 本项目基于 [MIT License](LICENSE) 开源。
 
-如果这个插件对你有用，欢迎点一个 ⭐️ **Star** 支持！
+<div align="center">
+
+如果 `dsh-image-gen` 对你的工作流有所帮助，欢迎在 GitHub 点亮一颗 ⭐ **Star** 支持持续维护。
+
+**[查看 Releases](https://github.com/shanliuling/dsh-image-gen/releases) · [提交 Issue](https://github.com/shanliuling/dsh-image-gen/issues) · [参与贡献](CONTRIBUTING.md)**
+
+</div>
