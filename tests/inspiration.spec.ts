@@ -1,5 +1,5 @@
 import { createServer, type Server } from 'node:http'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -148,6 +148,28 @@ describe('inspiration HTTP route', () => {
     const item = BUNDLED_INSPIRATION_CATALOG.sources[0]!.cases[0]!
     const response = await fetch(`${url}/image/awesome-gpt-image-2/${item.id}`, { headers: { origin: url } })
     expect(response.status).toBe(502)
+  })
+
+  it('clears disk cache and removes image files on POST /cache/clear', async () => {
+    const upstream = vi.fn<typeof fetch>(async () => new Response(new Uint8Array([1, 2, 3]), {
+      status: 200,
+      headers: { 'content-type': 'image/jpeg', 'content-length': '3' },
+    }))
+    const url = await start(upstream)
+    const item = BUNDLED_INSPIRATION_CATALOG.sources[0]!.cases[0]!
+    await fetch(`${url}/image/awesome-gpt-image-2/${item.id}`, { headers: { origin: url } })
+    await new Promise(r => setTimeout(r, 80))
+
+    const cacheDir = join(tmpHome!, '.dsh', 'cache', 'dsh-image-gen', 'inspiration')
+    const filesBefore = readdirSync(cacheDir).filter(name => /\.(jpg|png|webp)$/i.test(name))
+    expect(filesBefore.length).toBeGreaterThan(0)
+
+    const clearRes = await fetch(`${url}/cache/clear`, { method: 'POST', headers: { origin: url } })
+    expect(clearRes.status).toBe(200)
+    expect(await clearRes.json()).toEqual({ ok: true })
+
+    const filesAfter = readdirSync(cacheDir).filter(name => /\.(jpg|png|webp)$/i.test(name))
+    expect(filesAfter).toHaveLength(0)
   })
 })
 
