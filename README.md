@@ -95,16 +95,6 @@ pnpm dsh plugin --profile web add ./dsh-image-gen
 
 选择 Provider，填写自己的 API Key，并按需调整模型、Endpoint / Base URL 与工作区保存选项。使用 ComfyUI 时，请填写 DSH Host 可访问的服务地址，并导入 **API Format Workflow JSON**。
 
-<br />
-
-<div align="center">
-  <img src="docs/assets/readme/provider-settings.webp" alt="DSH 插件配置界面" width="100%" style="max-width: 680px; border-radius: 8px;" />
-  <br />
-  <sub>在设置面板中选择 Provider、配置 API Key、模型名称及工作区保存选项。</sub>
-</div>
-
-<br />
-
 ### 3. 开始创作
 
 在聊天框中直接描述你想要的图片：
@@ -122,9 +112,10 @@ pnpm dsh plugin --profile web add ./dsh-image-gen
 <br />
 
 <div align="center">
-  <img src="docs/assets/readme/chat-example.webp" alt="对话生图与风格重构效果" width="100%" style="max-width: 840px; border-radius: 8px;" />
+  <img src="docs/assets/readme/provider-settings.webp" alt="DSH 插件配置界面" width="46%" />
+  <img src="docs/assets/readme/chat-example.webp" alt="对话生图与风格重构效果" width="46%" />
   <br />
-  <sub>Agent 自动理解视觉意图并生成图片，结果直接呈现在当前会话流中。</sub>
+  <sub>左：Provider 配置 · 右：在 DSH 对话中直接生图、图生图与连续编辑。</sub>
 </div>
 
 <br />
@@ -222,7 +213,7 @@ pnpm dsh plugin --profile web add ./dsh-image-gen
 <br />
 
 <div align="center">
-  <img src="docs/assets/readme/comfyui-workflows.webp" alt="ComfyUI 多工作流配置" width="760" />
+  <img src="docs/assets/readme/comfyui-workflows.webp" alt="ComfyUI 多工作流配置" width="58%" />
   <br />
   <sub>为不同用途维护独立工作流，并通过名称让 Agent 精确选择。</sub>
 </div>
