@@ -52,20 +52,28 @@ export function apply(ctx: Context, config: Config = {}): void {
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact', path: DELETE_ROUTE,
     handler: (req, res) => serveDelete(req, res, {
-      deleteWorkspaceImage: filePath => deleteImageFromWorkspace(filePath, knownWorkspaceRoots),
+      deleteWorkspaceImage: async filePath => {
+        const discovered = await getDshWorkspaceRoots().catch(() => [])
+        return deleteImageFromWorkspace(filePath, new Set([...knownWorkspaceRoots, ...discovered, process.cwd()]))
+      },
     }),
   }), 'dsh-image-gen: delete route')
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact', path: SAVE_WORKSPACE_ROUTE,
     handler: (req, res) => serveSaveWorkspace(req, res, {
       readImage: ref => ctx.attachments.readImage(ref),
-      saveToWorkspace: options => saveImageToWorkspace({
-        workspaceRoot: options.workspaceRoot,
-        folder: current().workspaceFolder,
-        attachmentId: options.attachmentId,
-        mediaType: options.mediaType,
-        data: options.data,
-      }),
+      saveToWorkspace: options => {
+        if (options.workspaceRoot) {
+          knownWorkspaceRoots.add(options.workspaceRoot)
+        }
+        return saveImageToWorkspace({
+          workspaceRoot: options.workspaceRoot,
+          folder: current().workspaceFolder,
+          attachmentId: options.attachmentId,
+          mediaType: options.mediaType,
+          data: options.data,
+        })
+      },
       getActiveWorkspaceRoot: () => Array.from(knownWorkspaceRoots)[0] || process.cwd(),
       getAllowedWorkspaceRoots: async () => {
         const discovered = await getDshWorkspaceRoots().catch(() => [])

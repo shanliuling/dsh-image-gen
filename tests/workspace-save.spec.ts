@@ -401,3 +401,51 @@ describe('assertWorkspaceAllowed security gate', () => {
   })
 })
 
+describe('getDshWorkspaceRoots & dynamic deletion', () => {
+  it('discovers workspace roots from .dsh/storages/workspace.json and allows deletion', async () => {
+    const fakeHome = await mkdtemp(join(tmpdir(), 'dsh-fake-home-'))
+    const fakeWs = await mkdtemp(join(tmpdir(), 'dsh-fake-ws-'))
+    const savedUserProfile = process.env.USERPROFILE
+    const savedHome = process.env.HOME
+
+    try {
+      process.env.USERPROFILE = fakeHome
+      process.env.HOME = fakeHome
+
+      const storagesDir = join(fakeHome, '.dsh', 'storages')
+      await mkdir(storagesDir, { recursive: true })
+      await writeFile(join(storagesDir, 'workspace.json'), JSON.stringify({
+        tables: {
+          workspaces: {
+            'ws-1': { path: fakeWs, title: 'My Workspace' },
+          },
+        },
+      }), 'utf8')
+
+      const { getDshWorkspaceRoots } = await import('../src/workspace-save.js')
+      const roots = await getDshWorkspaceRoots()
+      expect(roots).toContain(fakeWs)
+
+      const saved = await saveImageToWorkspace({
+        workspaceRoot: fakeWs,
+        folder: 'dsh-image-gen',
+        attachmentId: 'sha256:1122334455667788990011223344556677889900112233445566778899001122',
+        mediaType: 'image/png',
+        data: new Uint8Array([1, 2, 3]),
+      })
+      expect((await stat(saved)).isFile()).toBe(true)
+
+      // Deleting with dynamic roots (simulating restart where in-memory knownRoots was empty)
+      const ok = await deleteImageFromWorkspace(saved, roots)
+      expect(ok).toBe(true)
+      await expect(stat(saved)).rejects.toThrow()
+    } finally {
+      process.env.USERPROFILE = savedUserProfile
+      process.env.HOME = savedHome
+      await rm(fakeHome, { recursive: true, force: true }).catch(() => {})
+      await rm(fakeWs, { recursive: true, force: true }).catch(() => {})
+    }
+  })
+})
+
+
