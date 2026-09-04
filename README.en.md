@@ -51,7 +51,7 @@ pnpm dsh plugin --profile web add dsh-image-gen@latest
 | Entry | Best for | What you can do |
 | :--- | :--- | :--- |
 | 💬 **Chat** | Letting the Agent understand natural-language requests | Text-to-image, image-to-image, multi-image reference, continuous editing, and in-place regeneration |
-| 🎛️ **Studio** | Precise control over creation parameters | Generate 1–4 candidates, use up to 5 reference images, and pan or zoom the canvas |
+| 🎛️ **Studio** | Precise control over creation parameters | Batch generation, multiple reference images, and advanced canvas |
 | ✨ **Inspiration** | Finding compositions, styles, and prompts | Browse 500+ examples, search and filter, favorite, copy, or send a prompt to Studio |
 | 🖼️ **Gallery** | Organizing and reusing generated results | Search, filter, favorite, regenerate, download, batch-manage, and isolate by workspace |
 
@@ -61,7 +61,7 @@ pnpm dsh plugin --profile web add dsh-image-gen@latest
 
 ### 1. Install the plugin
 
-Requirements: DeepSeek Harness `>= 0.1.1-rc.2` and `< 0.2.0`; Node.js `^22.19.0` or `>= 24.0.0`.
+Requirements: DeepSeek Harness stable version, Node.js `^22.19.0` or `>= 24.0.0`.
 
 Run this command from your DeepSeek Harness project root:
 
@@ -97,16 +97,6 @@ After restarting DSH, open:
 
 Choose a Provider, enter your API key, and adjust the model, Endpoint / Base URL, and workspace-save options as needed. For ComfyUI, enter an address reachable by the DSH Host and import an **API Format Workflow JSON** file.
 
-<br />
-
-<div align="center">
-  <img src="docs/assets/readme/provider-settings.webp" alt="DSH Plugin Settings" width="100%" style="max-width: 680px; border-radius: 8px;" />
-  <br />
-  <sub>Select a provider, configure API credentials, set model names, and adjust workspace save options.</sub>
-</div>
-
-<br />
-
 ### 3. Start creating
 
 Describe the image you want directly in chat:
@@ -124,9 +114,10 @@ Keep the character and composition unchanged, then add black sunglasses to the c
 <br />
 
 <div align="center">
-  <img src="docs/assets/readme/chat-example.webp" alt="Chat generation and editing example" width="100%" style="max-width: 840px; border-radius: 8px;" />
+  <img src="docs/assets/readme/provider-settings.webp" alt="DSH Plugin Settings" width="46%" />
+  <img src="docs/assets/readme/chat-example.webp" alt="Chat generation and editing example" width="46%" />
   <br />
-  <sub>The Agent interprets visual prompts and renders generated images directly inside the conversation stream.</sub>
+  <sub>Left: Provider Settings · Right: In-chat generation, editing, and continuous refinement.</sub>
 </div>
 
 <br />
@@ -155,7 +146,7 @@ For more precise parameter control, open **Gallery** from the conversation heade
 
 ### 🎛️ Studio batch creation
 
-- Use up to 5 reference images and generate 1–4 candidates at a time.
+- Support multiple reference images, and generate multiple candidates at a time.
 - Control the Provider, model, aspect ratio, and quality, then save only the results you want.
 
 <br />
@@ -224,7 +215,7 @@ Bring private image generation on your local GPU directly into Agent conversatio
 <br />
 
 <div align="center">
-  <img src="docs/assets/readme/comfyui-workflows.webp" alt="Multiple named ComfyUI workflow settings" width="760" />
+  <img src="docs/assets/readme/comfyui-workflows.webp" alt="Multiple named ComfyUI workflow settings" width="58%" />
   <br />
   <sub>Maintain independent workflows for different tasks and let the Agent select them precisely by name.</sub>
 </div>
@@ -235,13 +226,13 @@ Bring private image generation on your local GPU directly into Agent conversatio
 
 ## Provider Support
 
-| Provider | Chat generation | Chat editing | Studio | Multi-model comparison | Studio references |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **Google Gemini** | ✅ | ✅ Multiple | ✅ | ✅ | Up to 5 |
-| **OpenAI Images / Compatible** | ✅ | ✅ Multiple | ✅ | ✅ | Up to 5 |
-| **ByteDance Seedream / Volcengine Ark** | ✅ | ✅ Multiple | ✅ | ✅ | Up to 5 |
-| **Aliyun DashScope / Qwen Image** | ✅ | ✅ Multiple | ✅ | ✅ | Up to 3 |
-| **Local ComfyUI** | ✅ | ✅ Single | — | — | 1 in chat editing |
+| Provider | Chat generation | Chat editing | Studio | Multi-model comparison |
+| :--- | :---: | :---: | :---: | :---: |
+| **Google Gemini** | ✅ | ✅ Multiple | ✅ | ✅ |
+| **OpenAI Images / Compatible** | ✅ | ✅ Multiple | ✅ | ✅ |
+| **ByteDance Seedream / Volcengine Ark** | ✅ | ✅ Multiple | ✅ | ✅ |
+| **Aliyun DashScope / Qwen Image** | ✅ | ✅ Multiple | ✅ | ✅ |
+| **Local ComfyUI** | ✅ | ✅ Single | — | — |
 
 > Studio and multi-model comparison currently support cloud Providers only. Multi-model comparison uses the model configured for each Provider in Settings.
 

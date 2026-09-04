@@ -226,13 +226,13 @@ pnpm dsh plugin --profile web add ./dsh-image-gen
 
 ## Provider 支持情况
 
-| Provider                          | 对话生图 | 对话编辑 | Studio | 多模型对比 | Studio 参考图 |
-| :-------------------------------- | :------: | :------: | :----: | :--------: | :-----------: |
-| **Google Gemini**                 |    ✅    | ✅ 多图  |   ✅   |     ✅     |   最多 5 张   |
-| **OpenAI Images / Compatible**    |    ✅    | ✅ 多图  |   ✅   |     ✅     |   最多 5 张   |
-| **ByteDance Seedream / 火山方舟** |    ✅    | ✅ 多图  |   ✅   |     ✅     |   最多 5 张   |
-| **Aliyun DashScope / Qwen Image** |    ✅    | ✅ 多图  |   ✅   |     ✅     |   最多 3 张   |
-| **Local ComfyUI**                 |    ✅    | ✅ 单图  |   —    |     —      | 对话编辑 1 张 |
+| Provider                          | 对话生图 | 对话编辑 | Studio | 多模型对比 |
+| :-------------------------------- | :------: | :------: | :----: | :--------: |
+| **Google Gemini**                 |    ✅    | ✅ 多图  |   ✅   |     ✅     |
+| **OpenAI Images / Compatible**    |    ✅    | ✅ 多图  |   ✅   |     ✅     |
+| **ByteDance Seedream / 火山方舟** |    ✅    | ✅ 多图  |   ✅   |     ✅     |
+| **Aliyun DashScope / Qwen Image** |    ✅    | ✅ 多图  |   ✅   |     ✅     |
+| **Local ComfyUI**                 |    ✅    | ✅ 单图  |   —    |     —      |
 
 > Studio 与多模型对比目前只支持云端 Provider；多模型对比调用的是各 Provider 在设置中已配置的模型。
 
