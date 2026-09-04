@@ -42,6 +42,8 @@ pnpm dsh plugin --profile web add dsh-image-gen@latest
 
 > **版本更新提示：** 本次版本变化较大，老用户请更新至最新版本。
 
+<img src="docs/assets/readme/workflow-overview.webp" alt="dsh-image-gen 完整 AI 图像创作工作流" width="100%" />
+
 ---
 
 ## 一个插件，四种创作方式
@@ -49,7 +51,7 @@ pnpm dsh plugin --profile web add dsh-image-gen@latest
 | 入口          | 最适合                    | 你可以做什么                                           |
 | :------------ | :------------------------ | :----------------------------------------------------- |
 | 💬 **对话**   | 让 Agent 理解自然语言需求 | 文生图、图生图、多图参考、连续编辑、原位重新生成       |
-| 🎛️ **工作台** | 精确控制创作参数          | 1–4 张批量生成、最多 5 张参考图、缩放与拖拽画布        |
+| 🎛️ **工作台** | 精确控制创作参数          | 批量生成、多张参考图、高级画布                         |
 | ✨ **灵感**   | 找构图、风格与 Prompt     | 500+ 案例、搜索筛选、收藏、复制、一键带入工作台        |
 | 🖼️ **图库**   | 整理与复用生成结果        | 搜索、筛选、收藏、重新生成、下载、批量管理、工作区隔离 |
 
@@ -59,7 +61,7 @@ pnpm dsh plugin --profile web add dsh-image-gen@latest
 
 ### 1. 安装插件
 
-环境要求：DeepSeek Harness `>= 0.1.1-rc.2` 且 `< 0.2.0`，Node.js `^22.19.0` 或 `>= 24.0.0`。
+环境要求：DeepSeek Harness 稳定版本，Node.js `^22.19.0` 或 `>= 24.0.0`。
 
 在你的 DeepSeek Harness 项目根目录下运行：
 
@@ -144,7 +146,7 @@ pnpm dsh plugin --profile web add ./dsh-image-gen
 
 ### 🎛️ Studio 批量创作
 
-- 支持最多 5 张参考图，一次生成 1–4 张候选图。
+- 支持多张参考图，一次生成多张候选图。
 - 自由控制 Provider、模型、比例和清晰度，只保存满意的结果。
 
 <br />

@@ -42,6 +42,8 @@ pnpm dsh plugin --profile web add dsh-image-gen@latest
 
 > **Update notice:** This release includes major changes. Existing users should update to the latest version.
 
+<img src="docs/assets/readme/workflow-overview.webp" alt="dsh-image-gen complete AI image creation workflow" width="100%" />
+
 ---
 
 ## One plugin, four creative workflows
