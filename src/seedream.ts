@@ -2,6 +2,7 @@
 import type { ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import type { GeneratedCompatibleImage } from './openai-compatible.js'
 import { redactSecrets } from './redact.js'
+import { arkOutputBody, type ArkOutputOptions } from './shared.js'
 
 const ERROR_LIMIT = 4096
 
@@ -15,6 +16,12 @@ export async function editSeedreamImage(input: {
   size?: string
   maxBytes: number
   signal: AbortSignal
+  /**
+   * Ark output controls. The edit path is the only one Ark lets request a
+   * transparent background, and it requires every reference image to carry an
+   * alpha channel — see `arkOutputBody`.
+   */
+  arkOptions?: ArkOutputOptions
 }): Promise<GeneratedCompatibleImage> {
   const response = await fetch(imageEndpoint(input.baseURL), {
     method: 'POST', redirect: 'error', signal: input.signal,
@@ -24,6 +31,7 @@ export async function editSeedreamImage(input: {
       prompt: input.prompt,
       image: input.sourceImages.map(toDataUrl),
       ...(input.size === undefined || input.size.length === 0 ? {} : { size: input.size }),
+      ...arkOutputBody(input.arkOptions),
       response_format: 'b64_json',
     }),
   })

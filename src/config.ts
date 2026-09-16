@@ -2,6 +2,8 @@
 import z from '@deepseek-ai/schemastery'
 
 import {
+  ARK_BACKGROUND_MODES,
+  ARK_OUTPUT_FORMATS,
   DEFAULT_DASHSCOPE_ENDPOINT,
   DEFAULT_DASHSCOPE_MODEL,
   DEFAULT_COMFYUI_BASE_URL,
@@ -28,11 +30,16 @@ import {
   ZHIPU_API_KEY_ENV,
   activeComfyUIWorkflow,
   resolveComfyUIWorkflows,
+  type ArkBackgroundMode,
+  type ArkOutputFormat,
+  type ArkOutputOptions,
   type ComfyUIWorkflowEntry,
   type ImageProvider,
 } from './shared.js'
 
 export {
+  ARK_BACKGROUND_MODES,
+  ARK_OUTPUT_FORMATS,
   DEFAULT_DASHSCOPE_ENDPOINT,
   DEFAULT_DASHSCOPE_MODEL,
   DEFAULT_COMFYUI_BASE_URL,
@@ -58,6 +65,9 @@ export {
   ZHIPU_API_KEY_ENV,
   activeComfyUIWorkflow,
   resolveComfyUIWorkflows,
+  type ArkBackgroundMode,
+  type ArkOutputFormat,
+  type ArkOutputOptions,
   type ComfyUIWorkflowEntry,
   type ImageProvider,
 }
@@ -96,6 +106,22 @@ export interface Config {
   openaiCompatEditExtra?: Record<string, unknown>
   seedreamBaseURL?: string
   seedreamModel?: string
+  /**
+   * Ark `output_format`. Ark defaults to `jpeg`, which is lossy and cannot
+   * carry an alpha channel; `png` is lossless, so it survives later editing
+   * (e.g. background removal) without JPEG ringing around the subject.
+   */
+  seedreamOutputFormat?: ArkOutputFormat
+  /**
+   * Ark `watermark`. Ark defaults to `true`, which bakes an "AI generated"
+   * mark into the bottom-right corner.
+   */
+  seedreamWatermark?: boolean
+  /**
+   * Ark `background`. Only the edit path can honour `transparent`, and only
+   * when every reference image already carries an alpha channel.
+   */
+  seedreamBackground?: ArkBackgroundMode
   dashscopeEndpoint?: string
   dashscopeModel?: string
   xaiBaseURL?: string
@@ -131,6 +157,9 @@ export const Config: z<Config> = z.object({
   openaiCompatEditExtra: z.dict(z.any()).default({}),
   seedreamBaseURL: z.string().default(DEFAULT_SEEDREAM_BASE_URL),
   seedreamModel: z.string().default(DEFAULT_SEEDREAM_MODEL),
+  seedreamOutputFormat: z.union(ARK_OUTPUT_FORMATS).default('jpeg'),
+  seedreamWatermark: z.boolean().default(true),
+  seedreamBackground: z.union(ARK_BACKGROUND_MODES).default('opaque'),
   dashscopeEndpoint: z.string().default(DEFAULT_DASHSCOPE_ENDPOINT),
   dashscopeModel: z.string().default(DEFAULT_DASHSCOPE_MODEL),
   xaiBaseURL: z.string().default(DEFAULT_XAI_BASE_URL),
@@ -152,7 +181,7 @@ export function resolveProvider(config: Config):
   | { provider: 'google'; apiKeyEnv: string; model: string; endpoint: string; aspectRatio: AspectRatio; imageSize: ImageSize }
   | { provider: 'openai'; apiKeyEnv: string; model: string; baseURL: string; imageSize: string }
   | { provider: 'openai-compat'; apiKeyEnv: string; model: string; baseURL: string; imageSize: string; editFormat: 'multipart' | 'jsonImageUrlArray'; editExtra: Record<string, unknown> }
-  | { provider: 'seedream'; apiKeyEnv: string; model: string; baseURL: string; imageSize: string }
+  | { provider: 'seedream'; apiKeyEnv: string; model: string; baseURL: string; imageSize: string; arkOptions: ArkOutputOptions }
   | { provider: 'dashscope'; apiKeyEnv: string; model: string; endpoint: string; imageSize: string }
   | { provider: 'xai'; apiKeyEnv: string; model: string; baseURL: string; imageSize: string }
   | { provider: 'zhipu'; apiKeyEnv: string; model: string; baseURL: string; imageSize: string }
@@ -173,7 +202,18 @@ export function resolveProvider(config: Config):
       }
       return { provider: 'openai-compat', apiKeyEnv: OPENAI_COMPAT_API_KEY_ENV, model, baseURL, imageSize: '1024x1024', editFormat: config.openaiCompatEditFormat ?? 'multipart', editExtra: config.openaiCompatEditExtra ?? {} }
     }
-    case 'seedream': return { provider: 'seedream', apiKeyEnv: SEEDREAM_API_KEY_ENV, model: config.seedreamModel ?? DEFAULT_SEEDREAM_MODEL, baseURL: config.seedreamBaseURL ?? DEFAULT_SEEDREAM_BASE_URL, imageSize: '2K' }
+    case 'seedream': return {
+      provider: 'seedream',
+      apiKeyEnv: SEEDREAM_API_KEY_ENV,
+      model: config.seedreamModel ?? DEFAULT_SEEDREAM_MODEL,
+      baseURL: config.seedreamBaseURL ?? DEFAULT_SEEDREAM_BASE_URL,
+      imageSize: '2K',
+      arkOptions: {
+        outputFormat: config.seedreamOutputFormat ?? 'jpeg',
+        watermark: config.seedreamWatermark ?? true,
+        background: config.seedreamBackground ?? 'opaque',
+      },
+    }
     case 'dashscope': return { provider: 'dashscope', apiKeyEnv: DASHSCOPE_API_KEY_ENV, model: config.dashscopeModel ?? DEFAULT_DASHSCOPE_MODEL, endpoint: config.dashscopeEndpoint ?? DEFAULT_DASHSCOPE_ENDPOINT, imageSize: '1024*1024' }
     case 'xai': return { provider: 'xai', apiKeyEnv: XAI_API_KEY_ENV, model: config.xaiModel ?? DEFAULT_XAI_MODEL, baseURL: config.xaiBaseURL ?? DEFAULT_XAI_BASE_URL, imageSize: '1024x1024' }
     case 'zhipu': return { provider: 'zhipu', apiKeyEnv: ZHIPU_API_KEY_ENV, model: config.zhipuModel ?? DEFAULT_ZHIPU_MODEL, baseURL: config.zhipuBaseURL ?? DEFAULT_ZHIPU_BASE_URL, imageSize: '1024x1024' }

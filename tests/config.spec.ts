@@ -30,7 +30,26 @@ describe('resolveProvider', () => {
 
   it('resolves editable OpenAI-compatible profiles independently', () => {
     expect(resolveProvider({ provider: 'openai' })).toEqual({ provider: 'openai', apiKeyEnv: 'OPENAI_API_KEY', baseURL: DEFAULT_OPENAI_BASE_URL, model: DEFAULT_OPENAI_MODEL, imageSize: '1024x1024' })
-    expect(resolveProvider({ provider: 'seedream' })).toEqual({ provider: 'seedream', apiKeyEnv: 'ARK_API_KEY', baseURL: DEFAULT_SEEDREAM_BASE_URL, model: DEFAULT_SEEDREAM_MODEL, imageSize: '2K' })
+    expect(resolveProvider({ provider: 'seedream' })).toEqual({
+      provider: 'seedream',
+      apiKeyEnv: 'ARK_API_KEY',
+      baseURL: DEFAULT_SEEDREAM_BASE_URL,
+      model: DEFAULT_SEEDREAM_MODEL,
+      imageSize: '2K',
+      arkOptions: { outputFormat: 'jpeg', watermark: true, background: 'opaque' },
+    })
+  })
+
+  it('carries the Seedream output controls through to the resolved profile', () => {
+    expect(resolveProvider({
+      provider: 'seedream',
+      seedreamOutputFormat: 'png',
+      seedreamWatermark: false,
+      seedreamBackground: 'transparent',
+    })).toMatchObject({
+      provider: 'seedream',
+      arkOptions: { outputFormat: 'png', watermark: false, background: 'transparent' },
+    })
   })
 
   it('resolves DashScope profile', () => {

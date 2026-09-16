@@ -6,6 +6,7 @@ import {
   IMAGE_SIZES,
   resolveProvider,
   withProviderOverrides,
+  type ArkOutputOptions,
   type AspectRatio,
   type Config,
   type ImageSize,
@@ -127,7 +128,7 @@ export async function generateFromStudio(
     | { provider: 'google'; apiKeyEnv: string; model: string; endpoint: string; aspectRatio: AspectRatio; imageSize: ImageSize }
     | { provider: 'openai'; apiKeyEnv: string; model: string; baseURL: string; imageSize: string }
     | { provider: 'openai-compat'; apiKeyEnv: string; model: string; baseURL: string; imageSize: string; editFormat: 'multipart' | 'jsonImageUrlArray'; editExtra: Record<string, unknown> }
-    | { provider: 'seedream'; apiKeyEnv: string; model: string; baseURL: string; imageSize: string }
+    | { provider: 'seedream'; apiKeyEnv: string; model: string; baseURL: string; imageSize: string; arkOptions: ArkOutputOptions }
     | { provider: 'dashscope'; apiKeyEnv: string; model: string; endpoint: string; imageSize: string }
     | { provider: 'xai'; apiKeyEnv: string; model: string; baseURL: string; imageSize: string }
     | { provider: 'zhipu'; apiKeyEnv: string; model: string; baseURL: string; imageSize: string }
@@ -163,8 +164,8 @@ export async function generateFromStudio(
     } else if (wired.provider === 'seedream') {
       const size = input.quality
       generated = input.mode === 'edit'
-        ? await editSeedreamImage({ apiKey: credential, baseURL: wired.baseURL, model: wired.model, prompt: input.prompt, sourceImages, size, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal })
-        : await generateOpenAICompatibleImage({ provider: 'seedream', apiKey: credential, baseURL: wired.baseURL, model: wired.model, prompt: input.prompt, size, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal })
+        ? await editSeedreamImage({ apiKey: credential, baseURL: wired.baseURL, model: wired.model, prompt: input.prompt, sourceImages, size, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal, arkOptions: wired.arkOptions })
+        : await generateOpenAICompatibleImage({ provider: 'seedream', apiKey: credential, baseURL: wired.baseURL, model: wired.model, prompt: input.prompt, size, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal, arkOptions: wired.arkOptions })
       output = size
     } else {
       if (input.mode === 'edit' && sourceImages.length > 3) {

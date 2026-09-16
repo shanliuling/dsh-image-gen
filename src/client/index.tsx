@@ -94,6 +94,12 @@ interface ImageSettings {
   openaiCompatEditExtra?: Record<string, unknown>
   seedreamBaseURL?: string
   seedreamModel?: string
+  /** Ark `output_format`; `png` is lossless and keeps an alpha channel. */
+  seedreamOutputFormat?: 'png' | 'jpeg'
+  /** Ark `watermark`; off removes the baked-in "AI generated" mark. */
+  seedreamWatermark?: boolean
+  /** Ark `background`; `transparent` needs an alpha-bearing edit reference. */
+  seedreamBackground?: 'opaque' | 'transparent'
   dashscopeEndpoint?: string
   dashscopeModel?: string
   xaiBaseURL?: string
@@ -240,6 +246,18 @@ const DICT = {
     editExtra: '附加 JSON 字段',
     editExtraPlaceholder: '{"watermark": false, "prompt_extend": true}',
     editExtraHint: '仅 JSON 形态生效；会合并到请求体末尾，可覆盖默认字段。留空表示不附加。',
+    arkOutputFormat: '输出格式',
+    arkOutputFormatPng: 'PNG（无损，带透明通道）',
+    arkOutputFormatJpeg: 'JPEG（方舟默认，有损）',
+    arkOutputFormatHint: 'JPEG 会在主体边缘留下压缩色斑，抠图时变成难去掉的彩色毛边。要后期加工就选 PNG。',
+    arkWatermark: 'AI 生成水印',
+    arkWatermarkOn: '添加（方舟默认）',
+    arkWatermarkOff: '不添加',
+    arkWatermarkHint: '方舟默认在右下角烙上“AI 生成”标识。做游戏素材或需要后期处理时关掉。',
+    arkBackground: '背景',
+    arkBackgroundOpaque: '不透明（方舟默认）',
+    arkBackgroundTransparent: '透明',
+    arkBackgroundHint: '仅图生图有效，且要求参考图本身带透明通道；文生图会被方舟拒绝，因此这一项只在图生图时发出。',
     editExtraInvalid: '附加 JSON 字段必须是合法的 JSON 对象。',
     endpointHintSeedream: '火山方舟兼容的 /api/v3 地址。',
     endpointHintDashScope: '阿里云百炼 DashScope 官方接口地址。',
@@ -369,6 +387,18 @@ const DICT = {
     editExtra: 'Extra JSON fields',
     editExtraPlaceholder: '{"watermark": false, "prompt_extend": true}',
     editExtraHint: 'Only used with the JSON format; merged into the request body last and may override defaults. Leave empty for none.',
+    arkOutputFormat: 'Output format',
+    arkOutputFormatPng: 'PNG (lossless, keeps an alpha channel)',
+    arkOutputFormatJpeg: 'JPEG (Ark default, lossy)',
+    arkOutputFormatHint: 'JPEG ringing around the subject turns into coloured fringing that is hard to remove when cutting the background out. Pick PNG if you plan to edit the result.',
+    arkWatermark: 'AI generated watermark',
+    arkWatermarkOn: 'Add (Ark default)',
+    arkWatermarkOff: 'Do not add',
+    arkWatermarkHint: 'Ark stamps an "AI generated" mark into the bottom-right corner by default. Turn it off for game assets or any post-processing.',
+    arkBackground: 'Background',
+    arkBackgroundOpaque: 'Opaque (Ark default)',
+    arkBackgroundTransparent: 'Transparent',
+    arkBackgroundHint: 'Image-to-image only, and every reference image must already carry an alpha channel; Ark rejects it for text-to-image, so it is sent on edits alone.',
     editExtraInvalid: 'Extra JSON fields must be a valid JSON object.',
     endpointHintSeedream: 'Volcengine Ark compatible /api/v3 base URL.',
     endpointHintDashScope: 'Official Aliyun DashScope endpoint.',
@@ -1001,6 +1031,10 @@ interface ProviderRowState {
   editFormat: 'multipart' | 'jsonImageUrlArray'
   /** openai-compat only: extra JSON fields for the JSON edit body, as user text. */
   editExtraText: string
+  /** seedream only: Ark output controls. Other rows keep the defaults. */
+  outputFormat: 'png' | 'jpeg'
+  watermark: boolean
+  background: 'opaque' | 'transparent'
 }
 
 function emptyProviderRow(): ProviderRowState {
@@ -1025,6 +1059,9 @@ function emptyProviderRow(): ProviderRowState {
     timeoutSeconds: DEFAULT_COMFYUI_TIMEOUT_MS / 1000,
     editFormat: 'multipart',
     editExtraText: '',
+    outputFormat: 'jpeg',
+    watermark: true,
+    background: 'opaque',
   }
 }
 
@@ -1099,6 +1136,11 @@ function rowsFromSettings(value: ImageSettings | undefined): Record<Provider, Pr
       ...(provider === 'openai-compat' ? {
         editFormat: value?.openaiCompatEditFormat === 'jsonImageUrlArray' ? 'jsonImageUrlArray' : 'multipart',
         editExtraText: editExtraTextOf(value?.openaiCompatEditExtra),
+      } : {}),
+      ...(provider === 'seedream' ? {
+        outputFormat: value?.seedreamOutputFormat === 'png' ? 'png' : 'jpeg',
+        watermark: value?.seedreamWatermark !== false,
+        background: value?.seedreamBackground === 'transparent' ? 'transparent' : 'opaque',
       } : {}),
     }
   }
@@ -1390,6 +1432,11 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
           await props.scope.set('openaiCompatEditFormat', row.editFormat)
           await props.scope.set('openaiCompatEditExtra', editExtra)
         }
+        if (provider === 'seedream') {
+          await props.scope.set('seedreamOutputFormat', row.outputFormat)
+          await props.scope.set('seedreamWatermark', row.watermark)
+          await props.scope.set('seedreamBackground', row.background)
+        }
         if (row.keyInput.trim().length > 0) {
           const keyRef = cloudCredentialRef(provider)
           if (keyRef === undefined) throw new Error(t('comfyuiNoKey'))
@@ -1663,6 +1710,49 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
               </select>
               <span className="dsh-ig-hint">{t('editFormatHint')}</span>
             </label>
+          ) : null}
+          {provider === 'seedream' ? (
+            <>
+              <label className="dsh-ig-field">
+                <span className="dsh-ig-label">{t('arkOutputFormat')}</span>
+                <select
+                  className="dsh-ig-input"
+                  value={row.outputFormat}
+                  onChange={event => { updateRow(provider, { outputFormat: event.target.value === 'png' ? 'png' : 'jpeg' }) }}
+                  disabled={!snapshot.writable}
+                >
+                  <option value="jpeg">{t('arkOutputFormatJpeg')}</option>
+                  <option value="png">{t('arkOutputFormatPng')}</option>
+                </select>
+                <span className="dsh-ig-hint">{t('arkOutputFormatHint')}</span>
+              </label>
+              <label className="dsh-ig-field">
+                <span className="dsh-ig-label">{t('arkWatermark')}</span>
+                <select
+                  className="dsh-ig-input"
+                  value={row.watermark ? 'on' : 'off'}
+                  onChange={event => { updateRow(provider, { watermark: event.target.value === 'on' }) }}
+                  disabled={!snapshot.writable}
+                >
+                  <option value="on">{t('arkWatermarkOn')}</option>
+                  <option value="off">{t('arkWatermarkOff')}</option>
+                </select>
+                <span className="dsh-ig-hint">{t('arkWatermarkHint')}</span>
+              </label>
+              <label className="dsh-ig-field">
+                <span className="dsh-ig-label">{t('arkBackground')}</span>
+                <select
+                  className="dsh-ig-input"
+                  value={row.background}
+                  onChange={event => { updateRow(provider, { background: event.target.value === 'transparent' ? 'transparent' : 'opaque' }) }}
+                  disabled={!snapshot.writable}
+                >
+                  <option value="opaque">{t('arkBackgroundOpaque')}</option>
+                  <option value="transparent">{t('arkBackgroundTransparent')}</option>
+                </select>
+                <span className="dsh-ig-hint">{t('arkBackgroundHint')}</span>
+              </label>
+            </>
           ) : null}
           {provider === 'openai-compat' && row.editFormat === 'jsonImageUrlArray' ? (
             <label className="dsh-ig-field">
