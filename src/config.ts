@@ -202,17 +202,24 @@ export function resolveProvider(config: Config):
       }
       return { provider: 'openai-compat', apiKeyEnv: OPENAI_COMPAT_API_KEY_ENV, model, baseURL, imageSize: '1024x1024', editFormat: config.openaiCompatEditFormat ?? 'multipart', editExtra: config.openaiCompatEditExtra ?? {} }
     }
-    case 'seedream': return {
-      provider: 'seedream',
-      apiKeyEnv: SEEDREAM_API_KEY_ENV,
-      model: config.seedreamModel ?? DEFAULT_SEEDREAM_MODEL,
-      baseURL: config.seedreamBaseURL ?? DEFAULT_SEEDREAM_BASE_URL,
-      imageSize: '2K',
-      arkOptions: {
-        outputFormat: config.seedreamOutputFormat ?? 'jpeg',
-        watermark: config.seedreamWatermark ?? true,
-        background: config.seedreamBackground ?? 'opaque',
-      },
+    case 'seedream': {
+      const seedreamBackground = config.seedreamBackground ?? 'opaque'
+      return {
+        provider: 'seedream',
+        apiKeyEnv: SEEDREAM_API_KEY_ENV,
+        model: config.seedreamModel ?? DEFAULT_SEEDREAM_MODEL,
+        baseURL: config.seedreamBaseURL ?? DEFAULT_SEEDREAM_BASE_URL,
+        imageSize: '2K',
+        arkOptions: {
+          // Ark rejects `output_format: jpeg` together with `background: transparent`
+          // outright — a JPEG cannot carry the alpha channel the transparent mode
+          // exists to produce. The two controls are independent in the settings UI,
+          // so couple them here rather than letting the combination reach the wire.
+          outputFormat: seedreamBackground === 'transparent' ? 'png' : config.seedreamOutputFormat ?? 'jpeg',
+          watermark: config.seedreamWatermark ?? true,
+          background: seedreamBackground,
+        },
+      }
     }
     case 'dashscope': return { provider: 'dashscope', apiKeyEnv: DASHSCOPE_API_KEY_ENV, model: config.dashscopeModel ?? DEFAULT_DASHSCOPE_MODEL, endpoint: config.dashscopeEndpoint ?? DEFAULT_DASHSCOPE_ENDPOINT, imageSize: '1024*1024' }
     case 'xai': return { provider: 'xai', apiKeyEnv: XAI_API_KEY_ENV, model: config.xaiModel ?? DEFAULT_XAI_MODEL, baseURL: config.xaiBaseURL ?? DEFAULT_XAI_BASE_URL, imageSize: '1024x1024' }

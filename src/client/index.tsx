@@ -1333,6 +1333,11 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
             activeWorkflow: activeComfyUIWorkflow(value ?? {})?.name ?? '',
             timeoutSeconds: Math.max(1, Math.round((value?.comfyuiTimeoutMs ?? DEFAULT_COMFYUI_TIMEOUT_MS) / 1000)),
           } : {}),
+          ...(provider === 'seedream' ? {
+            outputFormat: value?.seedreamOutputFormat === 'png' ? 'png' : 'jpeg',
+            watermark: value?.seedreamWatermark !== false,
+            background: value?.seedreamBackground === 'transparent' ? 'transparent' : 'opaque',
+          } : {}),
         }
       }
       return next

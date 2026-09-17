@@ -35,7 +35,10 @@ export async function generateOpenAICompatibleImage(input: {
       model: input.model,
       prompt: input.prompt,
       size: input.size,
-      ...(input.provider === 'seedream' ? { response_format: 'url', ...arkOutputBody(input.arkOptions) } : {}),
+      // `background: false` — Ark rejects `transparent` on this endpoint
+      // outright (it needs exactly one input image), so it is the edit path's
+      // option alone.
+      ...(input.provider === 'seedream' ? { response_format: 'url', ...arkOutputBody(input.arkOptions, { background: false }) } : {}),
     }),
   })
   return parseImageResponse(response, input.provider, input)

@@ -105,3 +105,28 @@ describe('Ark output options reach the request body', () => {
     expect(body.background).toBeUndefined()
   })
 })
+
+// Ark rejects `transparent` on images/generations outright:
+//   400 InvalidParameter "transparent background requires exactly one input image"
+// so the generation endpoint must drop the field even when the settings ask for it.
+describe('Ark transparent background stays on the edit path', () => {
+  it('drops background from a generation request that asks for transparency', async () => {
+    const fetchMock = stubImageFetch()
+    await generateOpenAICompatibleImage({
+      provider: 'seedream', apiKey: 'ark-key', ...SEEDREAM,
+      prompt: 'a sword', size: '1024x1024', maxBytes: 1024, signal,
+      arkOptions: { outputFormat: 'png', watermark: false, background: 'transparent' },
+    })
+    const body = bodyOf(fetchMock)
+    expect(body.background).toBeUndefined()
+    // The other two controls still travel; only background is endpoint-specific.
+    expect(body.output_format).toBe('png')
+    expect(body.watermark).toBe(false)
+  })
+
+  it('omits background when the caller opts out', () => {
+    expect(arkOutputBody({ background: 'transparent' }, { background: false })).toEqual({})
+    expect(arkOutputBody({ outputFormat: 'png', background: 'transparent' }, { background: false }))
+      .toEqual({ output_format: 'png' })
+  })
+})

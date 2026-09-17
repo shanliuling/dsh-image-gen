@@ -52,6 +52,27 @@ describe('resolveProvider', () => {
     })
   })
 
+  // Ark rejects `output_format: jpeg` together with `background: transparent` —
+  // a JPEG cannot carry the alpha channel the transparent mode exists to produce.
+  // The settings UI keeps the two controls independent, so the profile couples them.
+  it('forces PNG output when the Seedream background is transparent', () => {
+    expect(resolveProvider({
+      provider: 'seedream',
+      seedreamOutputFormat: 'jpeg',
+      seedreamBackground: 'transparent',
+    })).toMatchObject({
+      arkOptions: { outputFormat: 'png', background: 'transparent' },
+    })
+    // An opaque background leaves the chosen format alone.
+    expect(resolveProvider({
+      provider: 'seedream',
+      seedreamOutputFormat: 'jpeg',
+      seedreamBackground: 'opaque',
+    })).toMatchObject({
+      arkOptions: { outputFormat: 'jpeg', background: 'opaque' },
+    })
+  })
+
   it('resolves DashScope profile', () => {
     expect(resolveProvider({ provider: 'dashscope' })).toEqual({
       provider: 'dashscope',

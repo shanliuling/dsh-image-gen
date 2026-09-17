@@ -337,17 +337,27 @@ export interface ArkOutputOptions {
 /**
  * Map the Ark output controls onto request-body fields.
  *
- * `background` is emitted only when it is `transparent`: Ark restricts that
- * mode to image-to-image with a single alpha-bearing input, so forwarding the
- * default `opaque` on every call would only add a way for text-to-image
- * requests to fail without changing any result.
+ * `background` is opt-in per call site because Ark restricts `transparent` to
+ * image-to-image with a single alpha-bearing reference and rejects the whole
+ * request otherwise:
+ *
+ *   text-to-image + transparent → 400 InvalidParameter
+ *     "transparent background requires exactly one input image"
+ *
+ * So the generation endpoint must never carry it, and that caller passes
+ * `{ background: false }`. `background: opaque` is never emitted anywhere: it
+ * is already Ark's default, so sending it would change nothing while adding a
+ * field only the edit path can act on.
  */
-export function arkOutputBody(options: ArkOutputOptions | undefined): Record<string, unknown> {
+export function arkOutputBody(
+  options: ArkOutputOptions | undefined,
+  { background = true }: { background?: boolean } = {},
+): Record<string, unknown> {
   if (options === undefined) return {}
   const body: Record<string, unknown> = {}
   if (options.outputFormat !== undefined) body.output_format = options.outputFormat
   if (options.watermark !== undefined) body.watermark = options.watermark
-  if (options.background === 'transparent') body.background = 'transparent'
+  if (background && options.background === 'transparent') body.background = 'transparent'
   return body
 }
 
