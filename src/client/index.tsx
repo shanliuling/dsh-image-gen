@@ -147,7 +147,7 @@ interface SettingsFace {
   credentialEvents?: CredentialEvents | undefined
 }
 interface ImageCardFace { locale?: LocaleService | undefined; promoted: boolean }
-type SettingsCardProps = PropsRuntime<'settings.plugin.item'> & InjectFace<SettingsFace>
+type SettingsCardProps = PropsRuntime<'settings.section'> & InjectFace<SettingsFace>
 type ImageCardProps = PropsRuntime<'tool.call.toolview'> & InjectFace<ImageCardFace>
 interface ImageResultNodeProps {
   node: { data: { results: readonly ImageResultPresentation[] } }
@@ -834,10 +834,23 @@ export function apply(ctx: Context): void {
   }
   const injectSettingsItem = (owner: Context): void => {
     const ownerRegister = owner.slots.register.bind(owner.slots) as unknown as (options: object, component: unknown) => () => void
-    owner.slots.inject('settings.plugin.item', () => ownerRegister({
+    const injectSettingsFace = (): SettingsFace => ({ scope, credentials: credentialsProxy, credentialsAvailable, locale, credentialEvents })
+    // DSH 0.1.6 renamed the settings-card host slot from 'settings.plugin.item'
+    // to 'settings.section', and the new host reads id/order/label instead of key.
+    // 'settings.section' exists on 0.1.5 as well, but register on both names so a
+    // single build keeps the card reachable on either host.
+    ;(owner.slots.inject as (key: string, factory: () => () => void) => void)('settings.section', () => ownerRegister({
+      name: 'settings.section',
+      id: IMAGE_GENERATION_NAMESPACE,
+      order: 20,
+      label: () => (locale?.getSnapshot?.()?.active?.startsWith('en') ? 'Image generation' : '图像生成'),
+      locale,
+      inject: injectSettingsFace,
+    }, ImageGenerationSettingsCard))
+    ;(owner.slots.inject as (key: string, factory: () => () => void) => void)('settings.plugin.item', () => ownerRegister({
       name: 'settings.plugin.item',
       key: IMAGE_GENERATION_NAMESPACE,
-      inject: (): SettingsFace => ({ scope, credentials: credentialsProxy, credentialsAvailable, locale, credentialEvents }),
+      inject: injectSettingsFace,
     }, ImageGenerationSettingsCard))
   }
   // Composer tool-row pill (DSH official slot: 'conversation.input.right', the
