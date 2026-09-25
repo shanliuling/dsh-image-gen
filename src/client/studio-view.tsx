@@ -72,7 +72,7 @@ const COPY = {
     needPrompt: '请输入提示词', needReference: '请先添加至少一张参考图', result: '本次结果', continueEdit: '继续编辑（垫图）', regenerate: '再次生成',
     copy: '复制', copied: '已复制到剪贴板', copyFailed: '复制失败', download: '下载', remove: '删除', fit: '适应窗口', infiniteCanvas: '无限画布', loading: '正在读取图片…', generationFailed: '生成失败',
     selectHistory: '从左侧选择一张图片，或在右侧开始新的生成。', created: '生成时间', elapsed: '耗时', dimensions: '尺寸', output: '输出参数',
-    closeReference: '移除参考图', uploadInvalid: '请选择有效的图片文件（最大 10MB）', imageLoadFailed: '图片读取失败',
+    closeReference: '移除参考图', uploadInvalid: '请选择有效的图片文件（最大 10MB）', uploadUnreadable: '部分图片读取失败，请重新选择后再试', imageLoadFailed: '图片读取失败',
     fullscreen: '大图全屏', close: '关闭', copyPpt: '复制 Prompt', copiedPrompt: '已复制 Prompt', copiedImage: '已复制图片',
     favorite: '收藏', favorited: '已收藏', favoriteAdded: '已添加到收藏', favoriteRemoved: '已取消收藏', gallerySaveFailed: '保存到图库失败，请重试',
     loadMore: '加载更多 ({n})', deleteModalTitle: '从图库删除', deleteModalDesc: '确定从图库中删除这张图片吗？（原聊天记录不会受影响）',
@@ -103,7 +103,7 @@ const COPY = {
     needPrompt: 'Enter a prompt', needReference: 'Add at least one reference image first', result: 'Current result', continueEdit: 'Continue editing', regenerate: 'Generate again',
     copy: 'Copy', copied: 'Copied to clipboard', copyFailed: 'Copy failed', download: 'Download', remove: 'Delete', fit: 'Fit', infiniteCanvas: 'Infinite canvas', loading: 'Loading image…', generationFailed: 'Generation failed',
     selectHistory: 'Select an image on the left, or start a new generation on the right.', created: 'Created', elapsed: 'Elapsed', dimensions: 'Dimensions', output: 'Output',
-    closeReference: 'Remove reference', uploadInvalid: 'Choose a valid image file up to 10MB.', imageLoadFailed: 'Could not load image',
+    closeReference: 'Remove reference', uploadInvalid: 'Choose a valid image file up to 10MB.', uploadUnreadable: 'Some images could not be read; pick them again.', imageLoadFailed: 'Could not load image',
     fullscreen: 'Fullscreen', close: 'Close', copyPpt: 'Copy Prompt', copiedPrompt: 'Prompt copied', copiedImage: 'Image copied',
     favorite: 'Favorite', favorited: 'Favorited', favoriteAdded: 'Added to favorites', favoriteRemoved: 'Removed from favorites', gallerySaveFailed: 'Failed to save to the gallery, please retry',
     loadMore: 'Load more ({n})', deleteModalTitle: 'Delete from gallery', deleteModalDesc: 'Remove this image from the local gallery? (Chat history remains unaffected)',
@@ -516,7 +516,7 @@ export const StudioView: FC<{
     // Canvas click is for selection, not preview
   }
 
-  const addReferenceFiles = (fileList: FileList | File[] | null | undefined) => {
+  const addReferenceFiles = async (fileList: FileList | File[] | null | undefined) => {
     if (!fileList || fileList.length === 0) return
     const files = Array.from(fileList)
     const validFiles: File[] = []
@@ -543,7 +543,20 @@ export const StudioView: FC<{
       setError(null)
     }
 
-    const newItems: StudioReferenceItem[] = toAdd.map((file, idx) => ({
+    // Snapshot bytes now: a file picked from a temp path (screenshot, IM
+    // download, removable drive) can become unreadable before generation,
+    // which would fail the request with a FileReader permission error.
+    const snapshotted: File[] = []
+    for (const file of toAdd) {
+      try {
+        const bytes = await file.arrayBuffer()
+        snapshotted.push(new File([bytes], file.name, { type: file.type, lastModified: file.lastModified }))
+      } catch {
+        setError(t('uploadUnreadable'))
+      }
+    }
+
+    const newItems: StudioReferenceItem[] = snapshotted.map((file, idx) => ({
       id: `upload-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 7)}`,
       file,
       previewUrl: URL.createObjectURL(file),
@@ -1328,7 +1341,7 @@ export const StudioView: FC<{
                     onDrop={event => {
                       event.preventDefault()
                       setDragging(false)
-                      addReferenceFiles(event.dataTransfer.files)
+                      void addReferenceFiles(event.dataTransfer.files)
                     }}
                   >
                     <Upload size={20} />
@@ -1369,7 +1382,7 @@ export const StudioView: FC<{
                   accept="image/png,image/jpeg,image/webp,image/gif"
                   hidden
                   onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                    addReferenceFiles(event.target.files)
+                    void addReferenceFiles(event.target.files)
                     event.target.value = ''
                   }}
                 />
