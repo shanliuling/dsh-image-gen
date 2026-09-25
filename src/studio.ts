@@ -42,6 +42,102 @@ const RATIO_LABELS: Record<string, string> = {
   '3:4': '3:4 竖向',
   '16:9': '16:9 宽屏',
   '9:16': '9:16 竖屏',
+  '4:5': '4:5 肖像',
+  '5:4': '5:4 横向',
+  '3:1': '3:1 全景',
+  '1:3': '1:3 长条',
+  '21:9': '21:9 超宽',
+  '9:21': '9:21 超高',
+}
+
+/** Built-in OpenAI-shape size trio used when no relay table is configured. */
+const LEGACY_OPENAI_TABLE: Record<string, Record<string, string>> = {
+  '1:1': { '1K': '1024x1024' },
+  '3:2': { '1K': '1536x1024' },
+  '2:3': { '1K': '1024x1536' },
+}
+
+/** Preferred picker ordering for derived ratio options. */
+const RATIO_ORDER = ['1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '9:21', '21:9', '1:3', '3:1']
+
+/** Ordering rank of a resolution tier label; unknown tiers keep given order. */
+function tierRank(tier: string): number {
+  const match = /^(\d+(?:\.\d+)?)(K?)$/.exec(tier.trim())
+  if (match === null) return Number.NaN
+  return match[2] === 'K' ? Number(match[1]) : Number(match[1]) / 1024
+}
+
+/**
+ * Normalize the configured relay table: drop empty strings and invalid tier
+ * ranks so one typo cannot take the whole workbench down.
+ * @param config - plugin configuration carrying `openaiCompatSizes`.
+ */
+export function openAICompatTable(config: Config): Array<{ ratio: string; tiers: Array<{ tier: string; size: string; rank: number }> }> {
+  const raw = config.openaiCompatSizes
+  const table = raw !== undefined && Object.keys(raw).length > 0 ? raw : LEGACY_OPENAI_TABLE
+  const groups: Array<{ ratio: string; tiers: Array<{ tier: string; size: string; rank: number }> }> = []
+  for (const [ratio, tierMap] of Object.entries(table)) {
+    const tiers: Array<{ tier: string; size: string; rank: number }> = []
+    for (const [tier, size] of Object.entries(tierMap)) {
+      if (typeof size !== 'string' || size.trim().length === 0) continue
+      const rank = tierRank(tier)
+      if (Number.isNaN(rank)) continue
+      tiers.push({ tier, size: size.trim(), rank })
+    }
+    if (tiers.length === 0) continue
+    tiers.sort((a, b) => a.rank - b.rank)
+    groups.push({ ratio, tiers })
+  }
+  return groups.sort((a, b) => ratioPosition(a.ratio) - ratioPosition(b.ratio))
+}
+
+function ratioPosition(ratio: string): number {
+  const index = RATIO_ORDER.indexOf(ratio)
+  return index === -1 ? RATIO_ORDER.length : index
+}
+
+/**
+ * Resolve the wire `size` for one workbench request against the relay table.
+ * Falls down to the largest tier not exceeding the requested one (never up,
+ * so an unsupported combination cannot silently spend more); unparseable
+ * quality labels (legacy `standard`) map to the ratio's lowest tier, and a
+ * ratio with nothing at or below the request is rejected loudly.
+ * @param config - plugin configuration carrying `openaiCompatSizes`.
+ * @param ratio - selected ratio option (`W:H`).
+ * @param quality - selected resolution tier.
+ */
+export function openAIRequestSize(config: Config, ratio: string, quality: string): string {
+  const group = openAICompatTable(config).find(entry => entry.ratio === ratio)
+  if (group === undefined) {
+    if (ratio === '3:2') return '1536x1024'
+    if (ratio === '2:3') return '1024x1536'
+    return '1024x1024'
+  }
+  const requested = tierRank(quality)
+  const wanted = Number.isNaN(requested) ? group.tiers[0]!.rank : requested
+  const withinBudget = group.tiers.filter(entry => entry.rank <= wanted)
+  if (withinBudget.length === 0) {
+    throw new Error(`该比例不支持 ${quality} 清晰度，请降低清晰度或更换比例`)
+  }
+  return withinBudget.reduce((best, entry) => (entry.rank > best.rank ? entry : best)).size
+}
+
+/** Workbench profile derived from the configured relay table. */
+function openAICompatStudioProfile(config: Config, model: string, configured: boolean): StudioProviderProfile {
+  const groups = openAICompatTable(config)
+  const ratioOptions = groups.map(group => ({ value: group.ratio, label: RATIO_LABELS[group.ratio] ?? group.ratio }))
+  const tierMap = new Map<string, StudioOption>()
+  for (const group of groups) for (const entry of group.tiers) tierMap.set(entry.tier, { value: entry.tier, label: entry.tier })
+  const qualityOptions = [...tierMap.values()].sort((a, b) => (tierRank(a.value) || 0) - (tierRank(b.value) || 0))
+  return profile(
+    'openai-compat',
+    model,
+    configured,
+    ratioOptions.length > 0 ? ratioOptions : ['1:1', '3:2', '2:3'].map(option),
+    qualityOptions.length > 0 ? qualityOptions : [{ value: 'standard', label: '标准（推荐）' }],
+    ratioOptions.some(entry => entry.value === '1:1') ? '1:1' : (ratioOptions[0]?.value ?? '1:1'),
+    tierMap.has('2K') ? '2K' : (qualityOptions[0]?.value ?? 'standard'),
+  )
 }
 
 /** Return only browser-safe capability data. */
@@ -127,7 +223,7 @@ export async function generateFromStudio(
   const wired = active as
     | { provider: 'google'; apiKeyEnv: string; model: string; endpoint: string; aspectRatio: AspectRatio; imageSize: ImageSize }
     | { provider: 'openai'; apiKeyEnv: string; model: string; baseURL: string; imageSize: string }
-    | { provider: 'openai-compat'; apiKeyEnv: string; model: string; baseURL: string; imageSize: string; editFormat: 'multipart' | 'jsonImageUrlArray'; editExtra: Record<string, unknown> }
+    | { provider: 'openai-compat'; apiKeyEnv: string; model: string; baseURL: string; imageSize: string; editFormat: 'multipart' | 'jsonImageUrlArray' | 'formReferenceImages'; editExtra: Record<string, unknown> }
     | { provider: 'seedream'; apiKeyEnv: string; model: string; baseURL: string; imageSize: string; arkOptions: ArkOutputOptions }
     | { provider: 'dashscope'; apiKeyEnv: string; model: string; endpoint: string; imageSize: string }
     | { provider: 'xai'; apiKeyEnv: string; model: string; baseURL: string; imageSize: string }
@@ -156,7 +252,7 @@ export async function generateFromStudio(
         : await generateGoogleImage({ apiKey: credential, endpoint: wired.endpoint, model: wired.model, prompt: input.prompt, aspectRatio, imageSize, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal })
       output = `${aspectRatio}, ${imageSize}`
     } else if (wired.provider === 'openai' || wired.provider === 'openai-compat' || wired.provider === 'xai' || wired.provider === 'zhipu') {
-      const size = openAISize(input.ratio)
+      const size = wired.provider === 'openai-compat' ? openAIRequestSize(config, input.ratio, input.quality) : openAISize(input.ratio)
       generated = input.mode === 'edit'
         ? await editOpenAICompatibleImage({ apiKey: credential, baseURL: wired.baseURL, model: wired.model, prompt: input.prompt, sourceImages, size, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal, ...(wired.provider === 'openai-compat' ? { editFormat: wired.editFormat, editExtra: wired.editExtra } : {}) })
         : await generateOpenAICompatibleImage({ provider: wired.provider, apiKey: credential, baseURL: wired.baseURL, model: wired.model, prompt: input.prompt, size, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal })
@@ -384,7 +480,15 @@ export function studioProfile(config: Config, provider: CloudImageProvider, conf
   if (provider === 'google') {
     return profile(provider, model, configured, ASPECT_RATIOS.map(option), IMAGE_SIZES.map(value => ({ value, label: value })), '1:1', '1K')
   }
-  if (provider === 'openai' || provider === 'openai-compat' || provider === 'xai' || provider === 'zhipu') {
+  if (provider === 'openai-compat') {
+    // Empty table keeps the historical profile (quality `standard`) so
+    // persisted selections and existing callers stay valid.
+    if (config.openaiCompatSizes === undefined || Object.keys(config.openaiCompatSizes).length === 0) {
+      return profile(provider, model, configured, ['1:1', '3:2', '2:3'].map(option), [{ value: 'standard', label: '标准（推荐）' }], '1:1', 'standard')
+    }
+    return openAICompatStudioProfile(config, model, configured)
+  }
+  if (provider === 'openai' || provider === 'xai' || provider === 'zhipu') {
     return profile(provider, model, configured, ['1:1', '3:2', '2:3'].map(option), [{ value: 'standard', label: '标准（推荐）' }], '1:1', 'standard')
   }
   if (provider === 'seedream') {

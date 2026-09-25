@@ -93,17 +93,30 @@ export interface Config {
   openaiCompatModel?: string
   /**
    * Request shape the relay's images/edits endpoint expects (#41). Most
-   * relays take OpenAI's multipart form; some (e.g. SenseNova) accept the
-   * generations endpoint but run edits on their own JSON contract with
-   * `images: [{ image_url }]` objects. Defaults to `multipart`.
-   */
-  openaiCompatEditFormat?: 'multipart' | 'jsonImageUrlArray'
+    * relays take OpenAI's multipart form; some (e.g. SenseNova) accept the
+    * generations endpoint but run edits on their own JSON contract with
+    * `images: [{ image_url }]` objects; some take a multipart form whose
+    * `reference_images` field is a JSON array of base64 strings. Defaults to
+    * `multipart`.
+    */
+  openaiCompatEditFormat?: 'multipart' | 'jsonImageUrlArray' | 'formReferenceImages'
   /**
    * Extra JSON fields merged into the JSON edit body last (can override the
    * built-in defaults), e.g. SenseNova's `watermark`/`prompt_extend`.
    * Ignored unless `openaiCompatEditFormat` is `jsonImageUrlArray`.
    */
   openaiCompatEditExtra?: Record<string, unknown>
+  /**
+   * Size table the OpenAI-compatible relay accepts, keyed
+   * `ratio → resolution tier → exact size string`, e.g.
+   * `{'16:9': {'1K': '1536x864', '2K': '2048x1152', '4K': '3840x2160'}}`.
+   * Empty keeps the built-in OpenAI trio (`1024x1024`, `1536x1024`,
+   * `1024x1536`). The workbench derives its ratio picker from the outer keys
+   * and its resolution picker from the tier keys, so relays or models with
+   * richer size tables expose every supported combination instead of the
+   * fixed three. Generation sends the exact configured string.
+   */
+  openaiCompatSizes?: Record<string, Record<string, string>>
   seedreamBaseURL?: string
   seedreamModel?: string
   /**
@@ -153,8 +166,9 @@ export const Config: z<Config> = z.object({
   openaiModel: z.string().default(DEFAULT_OPENAI_MODEL),
   openaiCompatBaseURL: z.string().default(''),
   openaiCompatModel: z.string().default(''),
-  openaiCompatEditFormat: z.union([z.const('multipart'), z.const('jsonImageUrlArray')]).default('multipart'),
+  openaiCompatEditFormat: z.union([z.const('multipart'), z.const('jsonImageUrlArray'), z.const('formReferenceImages')]).default('multipart'),
   openaiCompatEditExtra: z.dict(z.any()).default({}),
+  openaiCompatSizes: z.dict(z.dict(z.string())).default({}),
   seedreamBaseURL: z.string().default(DEFAULT_SEEDREAM_BASE_URL),
   seedreamModel: z.string().default(DEFAULT_SEEDREAM_MODEL),
   seedreamOutputFormat: z.union(ARK_OUTPUT_FORMATS).default('jpeg'),
@@ -180,7 +194,7 @@ export const Config: z<Config> = z.object({
 export function resolveProvider(config: Config):
   | { provider: 'google'; apiKeyEnv: string; model: string; endpoint: string; aspectRatio: AspectRatio; imageSize: ImageSize }
   | { provider: 'openai'; apiKeyEnv: string; model: string; baseURL: string; imageSize: string }
-  | { provider: 'openai-compat'; apiKeyEnv: string; model: string; baseURL: string; imageSize: string; editFormat: 'multipart' | 'jsonImageUrlArray'; editExtra: Record<string, unknown> }
+  | { provider: 'openai-compat'; apiKeyEnv: string; model: string; baseURL: string; imageSize: string; editFormat: 'multipart' | 'jsonImageUrlArray' | 'formReferenceImages'; editExtra: Record<string, unknown> }
   | { provider: 'seedream'; apiKeyEnv: string; model: string; baseURL: string; imageSize: string; arkOptions: ArkOutputOptions }
   | { provider: 'dashscope'; apiKeyEnv: string; model: string; endpoint: string; imageSize: string }
   | { provider: 'xai'; apiKeyEnv: string; model: string; baseURL: string; imageSize: string }

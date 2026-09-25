@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { DEFAULT_GOOGLE_MODEL, DEFAULT_OPENAI_MODEL, DEFAULT_SEEDREAM_MODEL, DEFAULT_DASHSCOPE_MODEL } from '../src/config.js'
-import { generateFromStudio, runPool, studioProfile, describeStudio } from '../src/studio.js'
+import { generateFromStudio, runPool, studioProfile, describeStudio, openAIRequestSize } from '../src/studio.js'
 import { parseStudioGenerateRequest, serveStudio } from '../src/studio-route.js'
 import { SUBSCRIPTION_PROVIDERS, DEFAULT_SUBSCRIPTION_MODELS, SUBSCRIPTION_TIMEOUT_MS, STUDIO_PROVIDERS, CLOUD_IMAGE_PROVIDERS, type SubscriptionProvider } from '../src/shared.js'
 import type { SubscriptionManager, SubscriptionVendor } from '../src/subscription/manager.js'
@@ -1002,3 +1002,43 @@ function stubSubscriptionManager(statuses: Partial<Record<SubscriptionProvider, 
   }
   return manager as unknown as StubSubscriptionManager
 }
+
+describe('openai-compat size table', () => {
+  const table = {
+    '1:1': { '1K': '1024x1024', '4K': '4096x4096' },
+    '16:9': { '1K': '1536x864', '2K': '2048x1152', '4K': '3840x2160' },
+  }
+
+  it('keeps the legacy standard profile when no table is configured', () => {
+    const legacy = studioProfile({}, 'openai-compat', true)
+    expect(legacy.ratioOptions.map(option => option.value)).toEqual(['1:1', '3:2', '2:3'])
+    expect(legacy.qualityOptions).toEqual([{ value: 'standard', label: '标准（推荐）' }])
+    expect(legacy.defaultQuality).toBe('standard')
+    expect(openAIRequestSize({}, '3:2', 'standard')).toBe('1536x1024')
+  })
+
+  it('derives ratio and tier options from the configured table', () => {
+    const derived = studioProfile({ openaiCompatSizes: table, openaiCompatModel: 'image-2', openaiCompatBaseURL: 'https://relay.example/v1' }, 'openai-compat', true)
+    expect(derived.ratioOptions.map(option => option.value)).toEqual(['1:1', '16:9'])
+    expect(derived.qualityOptions.map(option => option.value)).toEqual(['1K', '2K', '4K'])
+    expect(derived.defaultRatio).toBe('1:1')
+    expect(derived.defaultQuality).toBe('2K')
+  })
+
+  it('sends the exact configured size for a supported combination', () => {
+    expect(openAIRequestSize({ openaiCompatSizes: table }, '16:9', '2K')).toBe('2048x1152')
+  })
+
+  it('falls down to the largest tier below the request, never up', () => {
+    expect(openAIRequestSize({ openaiCompatSizes: table }, '16:9', '4K')).toBe('3840x2160')
+    expect(openAIRequestSize({ openaiCompatSizes: table }, '1:1', '2K')).toBe('1024x1024')
+  })
+
+  it('rejects a ratio that offers nothing at or below the requested tier', () => {
+    expect(() => openAIRequestSize({ openaiCompatSizes: { '1:1': { '4K': '4096x4096' } } }, '1:1', '1K')).toThrow('清晰度')
+  })
+
+  it('keeps the legacy trio mapping for ratios outside the table', () => {
+    expect(openAIRequestSize({ openaiCompatSizes: table }, '2:3', '1K')).toBe('1024x1536')
+  })
+})

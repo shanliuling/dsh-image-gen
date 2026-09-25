@@ -22,9 +22,11 @@ import {
   PanelRight,
   PanelRightClose,
   PencilLine,
+  FolderInput,
   Plus,
   RefreshCw,
   Sparkles,
+  Star,
   Trash2,
   Upload,
   X,
@@ -32,7 +34,7 @@ import {
   ZoomOut,
 } from 'lucide-react'
 import { DELETE_ROUTE, SAVE_WORKSPACE_ROUTE, STUDIO_ROUTE, isSubscriptionProvider, type CloudImageProvider, type StudioConfigResponse, type StudioGenerateResponse, type StudioGeneratedItem, type StudioProvider, type StudioProviderProfile, type StudioReference } from '../shared.js'
-import { deleteGalleryItem, getGalleryItems, saveGalleryItem, subscribeGallery, toggleFavoriteGalleryItem, type GalleryItem } from './gallery-store.js'
+import { deleteGalleryItem, getGalleryItems, saveGalleryItem, subscribeGallery, toggleFavoriteGalleryItem, type GalleryItem, saveFavoriteImage, getFavoriteImages, deleteFavoriteImage, saveFavoritePrompt, getFavoritePrompts, deleteFavoritePrompt, subscribeFavorites, addFavoriteFolder, getFavoriteFolders, deleteFavoriteFolder, moveFavoriteImage, moveFavoritePrompt, updateFavoritePrompt, type FavoriteImage, type FavoritePrompt, type FavoriteFolder } from './gallery-store.js'
 import { evictAttachmentCache, fetchAttachmentBlob } from './image-cache.js'
 import { copyImageBlob, downloadBlobUrl, formatRelativeTime } from './browser-image-utils.js'
 import { buildComparisonTargets, initialComparisonProviders } from './multi-model-compare.js'
@@ -58,6 +60,13 @@ export interface StudioReferenceItem {
 const COPY = {
   zh: {
     title: '云端生图工作台', configured: 'API 已配置', unconfigured: '未配置', recent: '最近生成', empty: '暂无生成历史',
+    railTabRecent: '最新生成', railTabFavorites: '收藏', favImages: '收藏图片', favPrompts: '收藏提示词',
+    favFolderAll: '全部', favNewFolder: '新建文件夹', favFolderPlaceholder: '文件夹名称', favCreate: '创建', favCancel: '取消',
+    favMoveTo: '移动到文件夹', favNoFolder: '未分组', favMove: '移动', favDeleteFolder: '删除文件夹',
+    favEditPrompt: '编辑提示词', favUse: '使用', favSave: '保存', favEditPromptPlaceholder: '输入提示词内容…', favFolder: '所属文件夹',
+    favEmptyImages: '在图生图参考图区点「☆ 收藏参考图」后，图片会显示在这里', favEmptyPrompts: '点提示词输入框旁的「☆ 收藏」后，提示词会显示在这里',
+    favoritePrompt: '收藏提示词', favoriteRefs: '收藏参考图', favActionShort: '收藏', favPromptSaved: '已收藏提示词', favRefsSaved: '已收藏 {count} 张参考图',
+    favPromptApplied: '已填入提示词', favRefApplied: '已加入参考图', favSaveFailed: '收藏失败，请重试',
     generate: '文生图', edit: '图生图', reference: '参考图', optional: '选填', upload: '点击或拖拽图片到此处',
     uploadHint: '支持 JPG / PNG / WebP / GIF，最大 10MB（最多 5 张）', prompt: '提示词 Prompt', clear: '清空', promptPlaceholder: '描述主体、构图、风格、光线与需要出现的文字…（支持 Ctrl+Enter 快捷生成）',
     provider: 'Provider', model: 'Model', ratio: '比例', quality: '清晰度', start: '开始生成', generating: '正在生成…', cancelGenerate: '取消生成',
@@ -70,9 +79,9 @@ const COPY = {
     retry: '重新加载', configLoadFailed: '工作台配置加载失败，请检查服务后重试。',
     noProvider: '请先在设置中配置至少一个云端图像 Provider 的 API Key。', selectConfigured: '该 Provider 尚未配置，请先到设置中配置 API Key。',
     needPrompt: '请输入提示词', needReference: '请先添加至少一张参考图', result: '本次结果', continueEdit: '继续编辑（垫图）', regenerate: '再次生成',
-    copy: '复制', copied: '已复制到剪贴板', copyFailed: '复制失败', download: '下载', remove: '删除', fit: '适应窗口', infiniteCanvas: '无限画布', loading: '正在读取图片…', generationFailed: '生成失败',
+    copy: '复制', copied: '已复制到剪贴板', copyFailed: '复制失败', download: '下载', remove: '删除', fit: '适应窗口', infiniteCanvas: '无限画布', loading: '正在读取图片…', generationFailed: '生成失败', gatewayTimeout: '请求被反向代理中断（超时）：请重试；反复出现需调大代理超时或换直连网络', requestFailed: '请求失败（HTTP {status}）',
     selectHistory: '从左侧选择一张图片，或在右侧开始新的生成。', created: '生成时间', elapsed: '耗时', dimensions: '尺寸', output: '输出参数',
-    closeReference: '移除参考图', uploadInvalid: '请选择有效的图片文件（最大 10MB）', imageLoadFailed: '图片读取失败',
+    closeReference: '移除参考图', uploadInvalid: '请选择有效的图片文件（最大 10MB）', uploadUnreadable: '部分图片读取失败，请重新选择后再试', imageLoadFailed: '图片读取失败',
     fullscreen: '大图全屏', close: '关闭', copyPpt: '复制 Prompt', copiedPrompt: '已复制 Prompt', copiedImage: '已复制图片',
     favorite: '收藏', favorited: '已收藏', favoriteAdded: '已添加到收藏', favoriteRemoved: '已取消收藏', gallerySaveFailed: '保存到图库失败，请重试',
     loadMore: '加载更多 ({n})', deleteModalTitle: '从图库删除', deleteModalDesc: '确定从图库中删除这张图片吗？（原聊天记录不会受影响）',
@@ -89,6 +98,13 @@ const COPY = {
   },
   en: {
     title: 'Cloud Image Studio', configured: 'API configured', unconfigured: 'Not configured', recent: 'Recent generations', empty: 'No generated images yet',
+    railTabRecent: 'Latest', railTabFavorites: 'Favorites', favImages: 'Favorite images', favPrompts: 'Favorite prompts',
+    favFolderAll: 'All', favNewFolder: 'New folder', favFolderPlaceholder: 'Folder name', favCreate: 'Create', favCancel: 'Cancel',
+    favMoveTo: 'Move to folder', favNoFolder: 'Unfiled', favMove: 'Move', favDeleteFolder: 'Delete folder',
+    favEditPrompt: 'Edit prompt', favUse: 'Use', favSave: 'Save', favEditPromptPlaceholder: 'Prompt text…', favFolder: 'Folder',
+    favEmptyImages: 'Click ☆ Save reference images in the edit-mode reference area', favEmptyPrompts: 'Click ☆ Save beside the prompt box',
+    favoritePrompt: 'Save prompt', favoriteRefs: 'Save reference images', favActionShort: 'Save', favPromptSaved: 'Prompt saved', favRefsSaved: 'Saved {count} reference images',
+    favPromptApplied: 'Prompt applied', favRefApplied: 'Reference added', favSaveFailed: 'Could not save; please retry',
     generate: 'Text to image', edit: 'Image to image', reference: 'Reference image', optional: 'optional', upload: 'Click or drop images here',
     uploadHint: 'JPG / PNG / WebP / GIF, up to 10MB (max 5)', prompt: 'Prompt', clear: 'Clear', promptPlaceholder: 'Describe the subject, composition, style, lighting, and exact text… (Ctrl+Enter to generate)',
     provider: 'Provider', model: 'Model', ratio: 'Aspect ratio', quality: 'Quality', start: 'Generate', generating: 'Generating…', cancelGenerate: 'Cancel',
@@ -101,9 +117,9 @@ const COPY = {
     retry: 'Retry', configLoadFailed: 'Failed to load studio configuration.',
     noProvider: 'Configure an API key for at least one cloud image provider in Settings.', selectConfigured: 'This provider is not configured. Add its API key in Settings first.',
     needPrompt: 'Enter a prompt', needReference: 'Add at least one reference image first', result: 'Current result', continueEdit: 'Continue editing', regenerate: 'Generate again',
-    copy: 'Copy', copied: 'Copied to clipboard', copyFailed: 'Copy failed', download: 'Download', remove: 'Delete', fit: 'Fit', infiniteCanvas: 'Infinite canvas', loading: 'Loading image…', generationFailed: 'Generation failed',
+    copy: 'Copy', copied: 'Copied to clipboard', copyFailed: 'Copy failed', download: 'Download', remove: 'Delete', fit: 'Fit', infiniteCanvas: 'Infinite canvas', loading: 'Loading image…', generationFailed: 'Generation failed', gatewayTimeout: 'The reverse proxy cut the request (timeout): retry; if it repeats, raise the proxy timeout or use a direct network.', requestFailed: 'Request failed (HTTP {status})',
     selectHistory: 'Select an image on the left, or start a new generation on the right.', created: 'Created', elapsed: 'Elapsed', dimensions: 'Dimensions', output: 'Output',
-    closeReference: 'Remove reference', uploadInvalid: 'Choose a valid image file up to 10MB.', imageLoadFailed: 'Could not load image',
+    closeReference: 'Remove reference', uploadInvalid: 'Choose a valid image file up to 10MB.', uploadUnreadable: 'Some images could not be read; pick them again.', imageLoadFailed: 'Could not load image',
     fullscreen: 'Fullscreen', close: 'Close', copyPpt: 'Copy Prompt', copiedPrompt: 'Prompt copied', copiedImage: 'Image copied',
     favorite: 'Favorite', favorited: 'Favorited', favoriteAdded: 'Added to favorites', favoriteRemoved: 'Removed from favorites', gallerySaveFailed: 'Failed to save to the gallery, please retry',
     loadMore: 'Load more ({n})', deleteModalTitle: 'Delete from gallery', deleteModalDesc: 'Remove this image from the local gallery? (Chat history remains unaffected)',
@@ -159,6 +175,19 @@ export const StudioView: FC<{
   const [configLoading, setConfigLoading] = useState(true)
   const [configError, setConfigError] = useState<string | null>(null)
   const [items, setItems] = useState<GalleryItem[]>([])
+  /** Which rail tab is showing: generation history or the favorites rail. */
+  const [railTab, setRailTab] = useState<'recent' | 'favorites'>('recent')
+  const [favImages, setFavImages] = useState<FavoriteImage[]>([])
+  const [favPrompts, setFavPrompts] = useState<FavoritePrompt[]>([])
+  const [favFolders, setFavFolders] = useState<FavoriteFolder[]>([])
+  const [activeImgFolder, setActiveImgFolder] = useState('')
+  const [activePromptFolder, setActivePromptFolder] = useState('')
+  const [folderDraft, setFolderDraft] = useState<{ kind: 'image' | 'prompt' } | null>(null)
+  const [folderDraftName, setFolderDraftName] = useState('')
+  const [editingPrompt, setEditingPrompt] = useState<FavoritePrompt | null>(null)
+  const [editPromptText, setEditPromptText] = useState('')
+  const [editPromptFolder, setEditPromptFolder] = useState('')
+  const [movingFav, setMovingFav] = useState<{ kind: 'image' | 'prompt', id: string, folderId: string | undefined } | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   /** Manual-only collapse for the right generate form; the form stays put in
    *  narrow seats because it is the primary generation surface. Starts folded
@@ -288,6 +317,16 @@ export const StudioView: FC<{
     return text
   }
 
+  /** Parse a studio response body; a gateway HTML error page (502/504 from a
+   *  reverse proxy) must surface as a readable message, not a JSON SyntaxError. */
+  const readStudioBody = async (response: Response): Promise<StudioConfigResponse | StudioGenerateResponse | { error?: string }> => {
+    try {
+      return await response.json() as StudioConfigResponse | StudioGenerateResponse | { error?: string }
+    } catch {
+      return { error: response.status === 502 || response.status === 504 ? t('gatewayTimeout') : t('requestFailed', { status: String(response.status) }) }
+    }
+  }
+
   useEffect(() => locale?.subscribe?.(() => setLang(locale.getSnapshot().active?.startsWith('en') ? 'en' : 'zh')), [locale])
 
   // Latest form state for the silent refresher, kept in refs so loadConfig's
@@ -304,7 +343,7 @@ export const StudioView: FC<{
     const controller = new AbortController()
     try {
       const response = await fetch(STUDIO_ROUTE, { signal: controller.signal, credentials: 'same-origin' })
-      const payload = await response.json() as StudioConfigResponse | { error?: string }
+      const payload = await readStudioBody(response)
       if (!response.ok || !('providers' in payload)) throw new Error('error' in payload && payload.error ? payload.error : 'Studio unavailable')
       setConfig(payload)
       if (silent) {
@@ -355,6 +394,19 @@ export const StudioView: FC<{
     })
     load()
     const unsubscribe = subscribeGallery(load)
+    return () => { mounted = false; unsubscribe() }
+  }, [])
+
+  useEffect(() => {
+    let mounted = true
+    const load = () => void Promise.all([getFavoriteImages(), getFavoritePrompts(), getFavoriteFolders()]).then(([images, prompts, folders]) => {
+      if (!mounted) return
+      setFavImages(images)
+      setFavPrompts(prompts)
+      setFavFolders(folders)
+    })
+    load()
+    const unsubscribe = subscribeFavorites(load)
     return () => { mounted = false; unsubscribe() }
   }, [])
 
@@ -516,7 +568,110 @@ export const StudioView: FC<{
     // Canvas click is for selection, not preview
   }
 
-  const addReferenceFiles = (fileList: FileList | File[] | null | undefined) => {
+  /** Keep the current prompt text in the favorites rail. */
+  const handleFavoritePrompt = async () => {
+    if (prompt.trim().length === 0) {
+      setError(t('needPrompt'))
+      return
+    }
+    if (await saveFavoritePrompt(prompt)) {
+      // Narrow seats auto-fold the rail; showing where the favorite landed
+      // outranks the fold, so expand it and stop the auto-folding.
+      railToggledByUserRef.current = true
+      setSidebarCollapsed(false)
+      setRailTab('favorites')
+      flash(t('favPromptSaved'))
+    } else {
+      setError(t('favSaveFailed'))
+    }
+  }
+
+  /** Keep every current reference image in the favorites rail. */
+  const handleFavoriteReferences = async () => {
+    const current = referencesRef.current
+    if (current.length === 0) {
+      setError(t('needReference'))
+      return
+    }
+    let saved = 0
+    for (const ref of current) {
+      const name = ref.file?.name ?? ref.id
+      const mediaType = ref.file?.type ?? 'image/png'
+      const ok = ref.attachment !== undefined
+        ? await saveFavoriteImage({ id: ref.attachment.attachmentId, attachment: ref.attachment, name, mediaType })
+        : ref.file !== undefined
+          ? await saveFavoriteImage({ id: `file-${ref.id}`, blob: ref.file, name, mediaType })
+          : false
+      if (ok) saved++
+    }
+    if (saved === 0) {
+      setError(t('favSaveFailed'))
+      return
+    }
+    railToggledByUserRef.current = true
+    setSidebarCollapsed(false)
+    setRailTab('favorites')
+    flash(t('favRefsSaved', { count: String(saved) }))
+  }
+
+  /** Turn one favorite image back into a live reference (edit mode). */
+  const applyFavoriteImage = async (fav: FavoriteImage) => {
+    const max = maxReferences
+    if (referencesRef.current.length >= max) {
+      setError(t('maxReferencesExceeded', { max: String(max) }))
+      return
+    }
+    try {
+      if (fav.attachment !== undefined) {
+        const blob = await fetchAttachmentBlob(fav.attachment)
+        const newItem: StudioReferenceItem = {
+          id: `fav-${fav.id}-${Date.now()}`,
+          attachment: fav.attachment,
+          previewUrl: URL.createObjectURL(blob),
+        }
+        const next = [...referencesRef.current, newItem]
+        setReferences(next)
+        referencesRef.current = next
+        setMode('edit')
+        setError(null)
+        flash(t('favRefApplied'))
+      } else if (fav.blob !== undefined) {
+        const file = new File([fav.blob], fav.name, { type: fav.mediaType })
+        void addReferenceFiles([file])
+        setMode('edit')
+        flash(t('favRefApplied'))
+      }
+    } catch {
+      setError(t('imageLoadFailed'))
+    }
+  }
+
+  /** Fill the prompt box from one favorite prompt. */
+  const createFavFolder = async (kind: 'image' | 'prompt') => {
+    const folder = await addFavoriteFolder(kind, folderDraftName)
+    if (folder === null) { flash(t('favSaveFailed')); return }
+    setFolderDraft(null)
+    setFolderDraftName('')
+  }
+
+  const openPromptEditor = (fav: FavoritePrompt) => {
+    setEditingPrompt(fav)
+    setEditPromptText(fav.text)
+    setEditPromptFolder(fav.folderId ?? '')
+  }
+
+  const doMoveFavorite = (folderId: string | undefined) => {
+    if (movingFav === null) return
+    if (movingFav.kind === 'image') void moveFavoriteImage(movingFav.id, folderId)
+    else void moveFavoritePrompt(movingFav.id, folderId)
+  }
+
+  const applyFavoritePrompt = (fav: FavoritePrompt) => {
+    setPrompt(fav.text)
+    flash(t('favPromptApplied'))
+  }
+
+  const addReferenceFiles = async (fileList: FileList | File[] | null | undefined) => {
     if (!fileList || fileList.length === 0) return
     const files = Array.from(fileList)
     const validFiles: File[] = []
@@ -543,7 +698,20 @@ export const StudioView: FC<{
       setError(null)
     }
 
-    const newItems: StudioReferenceItem[] = toAdd.map((file, idx) => ({
+    // Snapshot bytes now: a file picked from a temp path (screenshot, IM
+    // download, removable drive) can become unreadable before generation,
+    // which would fail the request with a FileReader permission error.
+    const snapshotted: File[] = []
+    for (const file of toAdd) {
+      try {
+        const bytes = await file.arrayBuffer()
+        snapshotted.push(new File([bytes], file.name, { type: file.type, lastModified: file.lastModified }))
+      } catch {
+        setError(t('uploadUnreadable'))
+      }
+    }
+
+    const newItems: StudioReferenceItem[] = snapshotted.map((file, idx) => ({
       id: `upload-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 7)}`,
       file,
       previewUrl: URL.createObjectURL(file),
@@ -698,7 +866,7 @@ export const StudioView: FC<{
               ...(referencesPayload === undefined ? {} : { references: referencesPayload }),
             }),
           })
-          const payload = await response.json() as StudioGenerateResponse | { error?: string }
+          const payload = await readStudioBody(response)
           if (!response.ok || !('attachment' in payload)) {
             throw new Error('error' in payload && payload.error ? payload.error : `${target.profile.label}: ${t('generationFailed')}`)
           }
@@ -746,6 +914,9 @@ export const StudioView: FC<{
           })))
         }
         if (failed > 0) flash(t('comparePartial', { success: String(successes.length), failed: String(failed) }))
+        // See the single-generation path: history is persisted immediately so
+        // a view switch cannot drop the comparison results from the rail.
+        void persistGalleryHistory(galleryEntries)
         return
       }
 
@@ -761,7 +932,7 @@ export const StudioView: FC<{
           }),
         }),
       })
-      const payload = await response.json() as StudioGenerateResponse | { error?: string }
+      const payload = await readStudioBody(response)
       if (!response.ok || !('attachment' in payload)) throw new Error('error' in payload && payload.error ? payload.error : t('generationFailed'))
 
       const generatedList: StudioGeneratedItem[] = Array.isArray(payload.items) && payload.items.length > 0
@@ -813,6 +984,12 @@ export const StudioView: FC<{
         })))
       }
 
+      // Persist history immediately: the workbench unmounts when the user
+      // switches sessions or tabs, and in-memory batches would otherwise be
+      // lost from the recent rail. Best-effort — the result stays on screen
+      // even when IndexedDB write fails; the manual save retries it.
+      void persistGalleryHistory(galleryEntries)
+
       if (payload.failedCount && payload.failedCount > 0) {
         flash(t('partialSuccess', { success: String(generatedList.length), failed: String(payload.failedCount) }))
       }
@@ -829,6 +1006,18 @@ export const StudioView: FC<{
     }
   }
 
+  /**
+   * Best-effort immediate history persistence for a fresh generation batch.
+   * Failures stay non-fatal (the result is already on screen and the manual
+   * save retries the write); each success live-updates the recent rail.
+   */
+  const persistGalleryHistory = async (entries: GalleryItem[]): Promise<void> => {
+    const settled = await Promise.allSettled(entries.map(entry => saveGalleryItem(entry)))
+    if (settled.some(result => result.status === 'rejected')) {
+      console.warn('[dsh-image-gen] history auto-save failed for some results')
+    }
+  }
+
   const isSelectedInGallery = useMemo(() => {
     if (selected === null) return false
     return items.some(item => item.id === selected.id)
@@ -840,19 +1029,25 @@ export const StudioView: FC<{
     return currentBatch.filter(item => ids.has(item.id))
   }, [currentBatch, selectedBatchIds])
 
+  // The manual save's remaining job is the workspace file: history records
+  // are persisted on generation, so an entry is pending only until it carries
+  // a `savedTo` path (or its gallery write failed and still needs a retry).
   const pendingGalleryItems = useMemo(() => {
-    const galleryIds = new Set(items.map(item => item.id))
+    const galleryById = new Map(items.map(item => [item.id, item]))
     const targets = currentBatch === null ? (selected === null ? [] : [selected]) : selectedBatchItems
-    return targets.filter(item => !galleryIds.has(item.id))
+    return targets.filter(item => {
+      const known = galleryById.get(item.id)
+      return known === undefined || known.savedTo === undefined
+    })
   }, [currentBatch, items, selected, selectedBatchItems])
 
   const saveButtonLabel = currentBatch !== null
     ? pendingGalleryItems.length > 0
       ? t('saveSelected', { count: String(pendingGalleryItems.length) })
       : selectedBatchItems.length === 0 ? t('saveSelected', { count: '0' }) : t('inGallery')
-    : isSelectedInGallery ? t('inGallery') : t('saveToGallery')
+    : pendingGalleryItems.length > 0 ? t('saveToGallery') : (selected !== null ? t('inGallery') : t('saveToGallery'))
   const saveSelectionComplete = currentBatch === null
-    ? isSelectedInGallery
+    ? pendingGalleryItems.length === 0
     : selectedBatchItems.length > 0 && pendingGalleryItems.length === 0
 
   const saveGalleryEntry = async (item: GalleryItem): Promise<GalleryItem> => {
@@ -1047,8 +1242,8 @@ export const StudioView: FC<{
           <aside className="dsh-ig-recent-panel">
             <div className="dsh-ig-panel-title">
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span>{t('recent')}</span>
-                <span className="dsh-ig-count-badge">{items.length}</span>
+                <span>{railTab === 'recent' ? t('recent') : t('railTabFavorites')}</span>
+                <span className="dsh-ig-count-badge">{railTab === 'recent' ? items.length : (favImages.length + favPrompts.length)}</span>
               </div>
               <button
                 type="button"
@@ -1059,15 +1254,138 @@ export const StudioView: FC<{
                 <PanelLeftClose size={15} />
               </button>
             </div>
-            <div className="dsh-ig-recent-scroll">
-              {items.length === 0 ? <div className="dsh-ig-recent-empty"><ImagePlus size={22} /><span>{t('empty')}</span></div> : displayItems.map(item => <RecentItem key={item.id} item={item} active={selected?.id === item.id} onClick={() => selectItem(item)} />)}
-              {items.length > visibleLimit && (
-                <button type="button" className="dsh-ig-load-more" onClick={() => setVisibleLimit(l => l + 30)}>
-                  {t('loadMore', { n: String(items.length - visibleLimit) })}
-                </button>
+            <div className="dsh-ig-rail-tabs" role="tablist">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={railTab === 'recent'}
+                className={`dsh-ig-rail-tab ${railTab === 'recent' ? 'is-active' : ''}`}
+                onClick={() => setRailTab('recent')}
+              >{t('railTabRecent')}</button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={railTab === 'favorites'}
+                className={`dsh-ig-rail-tab ${railTab === 'favorites' ? 'is-active' : ''}`}
+                onClick={() => setRailTab('favorites')}
+              >{t('railTabFavorites')}</button>
+            </div>
+            {railTab === 'recent' ? (
+              <div className="dsh-ig-recent-scroll">
+                {items.length === 0 ? <div className="dsh-ig-recent-empty"><ImagePlus size={22} /><span>{t('empty')}</span></div> : displayItems.map(item => <RecentItem key={item.id} item={item} active={selected?.id === item.id} onClick={() => selectItem(item)} />)}
+                {items.length > visibleLimit && (
+                  <button type="button" className="dsh-ig-load-more" onClick={() => setVisibleLimit(l => l + 30)}>
+                    {t('loadMore', { n: String(items.length - visibleLimit) })}
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="dsh-ig-fav-scroll">
+                <div className="dsh-ig-fav-section-label">
+                  <span>{t('favImages')}</span>
+                  <button type="button" className="dsh-ig-fav-folder-add" onClick={() => { setFolderDraft({ kind: 'image' }); setFolderDraftName('') }} title={t('favNewFolder')}>＋</button>
+                </div>
+                <FavoriteFolderBar
+                  folders={favFolders.filter(folder => folder.kind === 'image')}
+                  active={activeImgFolder}
+                  onSelect={id => setActiveImgFolder(id === activeImgFolder ? '' : id)}
+                  onDelete={id => void deleteFavoriteFolder(id)}
+                  deleteLabel={t('favDeleteFolder')}
+                />
+                {folderDraft?.kind === 'image' && (
+                  <div className="dsh-ig-fav-folder-draft">
+                    <input value={folderDraftName} placeholder={t('favFolderPlaceholder')} onChange={e => setFolderDraftName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') void createFavFolder('image') }} />
+                    <button type="button" onClick={() => void createFavFolder('image')}>{t('favCreate')}</button>
+                    <button type="button" onClick={() => setFolderDraft(null)}>{t('favCancel')}</button>
+                  </div>
+                )}
+                {(() => {
+                  const list = favImages.filter(fav => activeImgFolder === '' || fav.folderId === activeImgFolder)
+                  if (list.length === 0) return <div className="dsh-ig-fav-empty"><ImagePlus size={18} /><span>{t('favEmptyImages')}</span></div>
+                  return <div className="dsh-ig-fav-grid">
+                    {list.map(fav => (
+                      <FavoriteImageTile
+                        key={fav.id}
+                        favorite={fav}
+                        onApply={() => void applyFavoriteImage(fav)}
+                        onDelete={() => void deleteFavoriteImage(fav.id)}
+                        onMove={() => setMovingFav({ kind: 'image', id: fav.id, folderId: fav.folderId })}
+                      />
+                    ))}
+                  </div>
+                })()}
+                <div className="dsh-ig-fav-section-label">
+                  <span>{t('favPrompts')}</span>
+                  <button type="button" className="dsh-ig-fav-folder-add" onClick={() => { setFolderDraft({ kind: 'prompt' }); setFolderDraftName('') }} title={t('favNewFolder')}>＋</button>
+                </div>
+                <FavoriteFolderBar
+                  folders={favFolders.filter(folder => folder.kind === 'prompt')}
+                  active={activePromptFolder}
+                  onSelect={id => setActivePromptFolder(id === activePromptFolder ? '' : id)}
+                  onDelete={id => void deleteFavoriteFolder(id)}
+                  deleteLabel={t('favDeleteFolder')}
+                />
+                {folderDraft?.kind === 'prompt' && (
+                  <div className="dsh-ig-fav-folder-draft">
+                    <input value={folderDraftName} placeholder={t('favFolderPlaceholder')} onChange={e => setFolderDraftName(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') void createFavFolder('prompt') }} />
+                    <button type="button" onClick={() => void createFavFolder('prompt')}>{t('favCreate')}</button>
+                    <button type="button" onClick={() => setFolderDraft(null)}>{t('favCancel')}</button>
+                  </div>
+                )}
+                {(() => {
+                  const list = favPrompts.filter(fav => activePromptFolder === '' || fav.folderId === activePromptFolder)
+                  if (list.length === 0) return <div className="dsh-ig-fav-empty"><PencilLine size={18} /><span>{t('favEmptyPrompts')}</span></div>
+                  return <div className="dsh-ig-fav-prompts">
+                    {list.map(fav => (
+                      <div key={fav.id} className="dsh-ig-fav-prompt">
+                        <button type="button" className="dsh-ig-fav-prompt-text" title={fav.text} onClick={() => openPromptEditor(fav)}>{fav.text}</button>
+                        <button type="button" className="dsh-ig-fav-del" title={t('remove')} onClick={() => void deleteFavoritePrompt(fav.id)}><X size={11} /></button>
+                      </div>
+                    ))}
+                  </div>
+                })()}
+              </div>
+            )}
+          </aside>
+        )}
+
+        {(editingPrompt !== null || movingFav !== null) && (
+          <div className="dsh-ig-fav-dialog-wrap" onClick={() => { setEditingPrompt(null); setMovingFav(null) }}>
+            <div className="dsh-ig-fav-dialog" onClick={e => e.stopPropagation()}>
+              {editingPrompt !== null && (
+                <>
+                  <div className="dsh-ig-fav-dialog-title">{t('favEditPrompt')}</div>
+                  <textarea className="dsh-ig-fav-dialog-textarea" value={editPromptText} placeholder={t('favEditPromptPlaceholder')} onChange={e => setEditPromptText(e.target.value)} rows={5} />
+                  <label className="dsh-ig-fav-dialog-folder-label">{t('favFolder')}
+                    <select value={editPromptFolder} onChange={e => setEditPromptFolder(e.target.value)}>
+                      <option value="">{t('favNoFolder')}</option>
+                      {favFolders.filter(folder => folder.kind === 'prompt').map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
+                    </select>
+                  </label>
+                  <div className="dsh-ig-fav-dialog-actions">
+                    <button type="button" className="is-primary" onClick={() => { void updateFavoritePrompt(editingPrompt.id, editPromptText).then(ok => { if (ok) void moveFavoritePrompt(editingPrompt.id, editPromptFolder === '' ? undefined : editPromptFolder) }); setEditingPrompt(null) }}>{t('favSave')}</button>
+                    <button type="button" onClick={() => { applyFavoritePrompt({ ...editingPrompt, text: editPromptText }); setEditingPrompt(null) }}>{t('favUse')}</button>
+                    <button type="button" onClick={() => { setMovingFav({ kind: 'prompt', id: editingPrompt.id, folderId: editingPrompt.folderId }); setEditingPrompt(null) }}>{t('favMove')}</button>
+                    <button type="button" onClick={() => setEditingPrompt(null)}>{t('favCancel')}</button>
+                  </div>
+                </>
+              )}
+              {editingPrompt === null && movingFav !== null && (
+                <>
+                  <div className="dsh-ig-fav-dialog-title">{t('favMoveTo')}</div>
+                  <div className="dsh-ig-fav-dialog-folders">
+                    <button type="button" onClick={() => { void doMoveFavorite(undefined); setMovingFav(null) }}>{t('favNoFolder')}</button>
+                    {favFolders.filter(folder => folder.kind === movingFav.kind).map(folder => (
+                      <button type="button" key={folder.id} className={movingFav.folderId === folder.id ? 'is-current' : ''} onClick={() => { void doMoveFavorite(folder.id); setMovingFav(null) }}>{folder.name}</button>
+                    ))}
+                  </div>
+                  <div className="dsh-ig-fav-dialog-actions">
+                    <button type="button" onClick={() => setMovingFav(null)}>{t('favCancel')}</button>
+                  </div>
+                </>
               )}
             </div>
-          </aside>
+          </div>
         )}
 
         <main className="dsh-ig-canvas-column">
@@ -1312,9 +1630,12 @@ export const StudioView: FC<{
                     {t('referencesCount', { current: String(references.length), max: String(maxReferences) })} <b>*</b>
                   </label>
                   {references.length > 0 && (
-                    <button type="button" onClick={clearAllReferences}>
-                      {t('clear')}
-                    </button>
+                    <>
+                      <button type="button" className="dsh-ig-fav-save-btn" onClick={() => void handleFavoriteReferences()} title={t('favoriteRefs')}><Star size={12} />{t('favoriteRefs')}</button>
+                      <button type="button" onClick={clearAllReferences}>
+                        {t('clear')}
+                      </button>
+                    </>
                   )}
                 </div>
 
@@ -1328,7 +1649,7 @@ export const StudioView: FC<{
                     onDrop={event => {
                       event.preventDefault()
                       setDragging(false)
-                      addReferenceFiles(event.dataTransfer.files)
+                      void addReferenceFiles(event.dataTransfer.files)
                     }}
                   >
                     <Upload size={20} />
@@ -1369,14 +1690,14 @@ export const StudioView: FC<{
                   accept="image/png,image/jpeg,image/webp,image/gif"
                   hidden
                   onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                    addReferenceFiles(event.target.files)
+                    void addReferenceFiles(event.target.files)
                     event.target.value = ''
                   }}
                 />
               </div>
             )}
             <div className="dsh-ig-field">
-              <div className="dsh-ig-field-label"><label htmlFor="dsh-ig-prompt">{t('prompt')} <b>*</b></label><span><button type="button" className="dsh-ig-find-inspiration" onClick={onOpenInspiration}><Sparkles size={11} />{t('findInspiration')}</button><button type="button" onClick={() => setPrompt('')}>{t('clear')}</button></span></div>
+              <div className="dsh-ig-field-label"><label htmlFor="dsh-ig-prompt">{t('prompt')} <b>*</b></label><span><button type="button" className="dsh-ig-find-inspiration" onClick={onOpenInspiration}><Sparkles size={11} />{t('findInspiration')}</button><button type="button" className="dsh-ig-fav-save-btn" onClick={() => void handleFavoritePrompt()} title={t('favoritePrompt')}><Star size={12} />{t('favActionShort')}</button><button type="button" onClick={() => setPrompt('')}>{t('clear')}</button></span></div>
               <textarea
                 id="dsh-ig-prompt"
                 value={prompt}
@@ -1751,6 +2072,42 @@ const RecentItem: FC<{ item: GalleryItem; active: boolean; onClick(): void }> = 
     >
       <div className="dsh-ig-recent-thumb">{image.url !== null ? <img src={image.url} alt="" loading="lazy" /> : <ImagePlus size={18} />}</div>
     </button>
+  )
+}
+
+/** One favorites-rail reference tile: thumbnail with hover delete. */
+const FavoriteImageTile: FC<{ favorite: FavoriteImage; onApply(): void; onDelete(): void; onMove(): void }> = ({ favorite, onApply, onDelete, onMove }) => {
+  const attachmentUrl = useAttachmentImage(favorite.attachment).url
+  const [blobUrl, setBlobUrl] = useState<string | null>(null)
+  useEffect(() => {
+    if (favorite.attachment !== undefined || favorite.blob === undefined) return
+    const url = URL.createObjectURL(favorite.blob)
+    setBlobUrl(url)
+    return () => URL.revokeObjectURL(url)
+  }, [favorite.attachment, favorite.blob])
+  const url = attachmentUrl ?? blobUrl
+  return (
+    <div className="dsh-ig-fav-tile">
+      <button type="button" className="dsh-ig-recent-item" onClick={onApply} title={favorite.name}>
+        <div className="dsh-ig-recent-thumb">{url !== null ? <img src={url} alt="" loading="lazy" /> : <ImagePlus size={18} />}</div>
+      </button>
+      <button type="button" className="dsh-ig-fav-move" onClick={onMove} title={favorite.name}><FolderInput size={11} /></button>
+      <button type="button" className="dsh-ig-fav-del" onClick={onDelete} title={favorite.name}><X size={11} /></button>
+    </div>
+  )
+}
+
+const FavoriteFolderBar: FC<{ folders: FavoriteFolder[]; active: string; onSelect(id: string): void; onDelete(id: string): void; deleteLabel: string }> = ({ folders, active, onSelect, onDelete, deleteLabel }) => {
+  if (folders.length === 0) return null
+  return (
+    <div className="dsh-ig-fav-folders">
+      {folders.map(folder => (
+        <span key={folder.id} className={`dsh-ig-fav-folder-chip ${active === folder.id ? 'is-active' : ''}`}>
+          <button type="button" onClick={() => onSelect(folder.id)}>{folder.name}</button>
+          <button type="button" className="dsh-ig-fav-folder-del" title={deleteLabel} onClick={() => onDelete(folder.id)}><X size={9} /></button>
+        </span>
+      ))}
+    </div>
   )
 }
 

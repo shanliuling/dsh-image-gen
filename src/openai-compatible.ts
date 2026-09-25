@@ -45,7 +45,7 @@ export async function generateOpenAICompatibleImage(input: {
 }
 
 /** How the edits endpoint expects its request body (#41). */
-export type CompatEditFormat = 'multipart' | 'jsonImageUrlArray'
+export type CompatEditFormat = 'multipart' | 'jsonImageUrlArray' | 'formReferenceImages'
 
 export async function editOpenAICompatibleImage(input: {
   apiKey: string
@@ -88,6 +88,22 @@ export async function editOpenAICompatibleImage(input: {
       method: 'POST', redirect: 'error', signal: input.signal,
       headers: { authorization: `Bearer ${input.apiKey}`, 'content-type': 'application/json' },
       body: JSON.stringify(body),
+    })
+    return parseImageResponse(response, 'openai', input)
+  }
+  if (input.editFormat === 'formReferenceImages') {
+    // Some relays take edits as a multipart form whose `reference_images`
+    // field is a JSON array of base64 strings instead of file uploads.
+    const form = new FormData()
+    form.append('model', input.model)
+    form.append('prompt', input.prompt)
+    if (input.size !== undefined && input.size.length > 0) form.append('size', input.size)
+    form.append('response_format', 'b64_json')
+    form.append('reference_images', JSON.stringify(input.sourceImages.map(sourceImage => Buffer.from(sourceImage.data).toString('base64'))))
+    const response = await fetch(imageEndpoint(input.baseURL, 'edits'), {
+      method: 'POST', redirect: 'error', signal: input.signal,
+      headers: { authorization: `Bearer ${input.apiKey}` },
+      body: form,
     })
     return parseImageResponse(response, 'openai', input)
   }

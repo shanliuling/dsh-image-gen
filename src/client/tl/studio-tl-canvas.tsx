@@ -13,7 +13,7 @@ import {
 import { blobToDataUrl } from '../browser-image-utils.js'
 import { clearAttachmentCache, fetchAttachmentBlob } from '../image-cache.js'
 import { CANVAS_MAX_PROMPT_CHARS } from '../../shared.js'
-import { applyBrandTheme } from './tl-brand-theme.js'
+import { applyBrandTheme, syncTldrawThemeWithHost } from './tl-brand-theme.js'
 import { startCanvasSync, type CanvasSyncStatus } from './canvas-sync.js'
 import { clearTlLandings, getTlLandingGeneration, registerTlLandingConsumer, type TlLandingItem } from './tl-canvas-bridge.js'
 
@@ -230,6 +230,8 @@ export const StudioTlCanvas: FC<{ lang?: 'zh' | 'en' }> = memo(function StudioTl
           // Re-tint canvas-rendered colors (selection, marquee, "blue"
           // palette) to the plugin brand; UI chrome comes from TL_THEME_CSS.
           applyBrandTheme(editor)
+          // Follow the DSH host's light/dark theme, now and on later flips.
+          const stopThemeSync = syncTldrawThemeWithHost(editor)
           // Dot-grid backdrop: tldraw's built-in zoom-aware grid, re-tinted to
           // the workbench blue-grey. Gives the empty canvas spatial rhythm and
           // alignment reference without the graph-paper feel of line grids.
@@ -268,6 +270,7 @@ export const StudioTlCanvas: FC<{ lang?: 'zh' | 'en' }> = memo(function StudioTl
             active = false
             mountedCanvases.delete(clear)
             stopLanding()
+            stopThemeSync()
             stopSync()
             retrySync.current = () => {}
           }

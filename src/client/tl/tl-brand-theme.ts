@@ -63,3 +63,19 @@ export function applyBrandTheme(editor: Editor): void {
     },
   })
 }
+
+/**
+ * Match tldraw's light/dark canvas to the DSH host theme. The host publishes
+ * dark mode as the data-ds-dark-theme attribute on <body>; tldraw keeps its
+ * own persisted user preference, so apply the host value now and observe
+ * later flips. Returns the observer disposer.
+ */
+export function syncTldrawThemeWithHost(editor: Editor): () => void {
+  const apply = (): void => {
+    editor.user.updateUserPreferences({ colorScheme: document.body.hasAttribute('data-ds-dark-theme') ? 'dark' : 'light' })
+  }
+  apply()
+  const observer = new MutationObserver(apply)
+  observer.observe(document.body, { attributes: true, attributeFilter: ['data-ds-dark-theme'] })
+  return () => observer.disconnect()
+}
