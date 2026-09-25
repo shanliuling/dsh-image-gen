@@ -70,7 +70,7 @@ const COPY = {
     retry: '重新加载', configLoadFailed: '工作台配置加载失败，请检查服务后重试。',
     noProvider: '请先在设置中配置至少一个云端图像 Provider 的 API Key。', selectConfigured: '该 Provider 尚未配置，请先到设置中配置 API Key。',
     needPrompt: '请输入提示词', needReference: '请先添加至少一张参考图', result: '本次结果', continueEdit: '继续编辑（垫图）', regenerate: '再次生成',
-    copy: '复制', copied: '已复制到剪贴板', copyFailed: '复制失败', download: '下载', remove: '删除', fit: '适应窗口', infiniteCanvas: '无限画布', loading: '正在读取图片…', generationFailed: '生成失败',
+    copy: '复制', copied: '已复制到剪贴板', copyFailed: '复制失败', download: '下载', remove: '删除', fit: '适应窗口', infiniteCanvas: '无限画布', loading: '正在读取图片…', generationFailed: '生成失败', gatewayTimeout: '请求被反向代理中断（超时）：请重试；反复出现需调大代理超时或换直连网络', requestFailed: '请求失败（HTTP {status}）',
     selectHistory: '从左侧选择一张图片，或在右侧开始新的生成。', created: '生成时间', elapsed: '耗时', dimensions: '尺寸', output: '输出参数',
     closeReference: '移除参考图', uploadInvalid: '请选择有效的图片文件（最大 10MB）', uploadUnreadable: '部分图片读取失败，请重新选择后再试', imageLoadFailed: '图片读取失败',
     fullscreen: '大图全屏', close: '关闭', copyPpt: '复制 Prompt', copiedPrompt: '已复制 Prompt', copiedImage: '已复制图片',
@@ -101,7 +101,7 @@ const COPY = {
     retry: 'Retry', configLoadFailed: 'Failed to load studio configuration.',
     noProvider: 'Configure an API key for at least one cloud image provider in Settings.', selectConfigured: 'This provider is not configured. Add its API key in Settings first.',
     needPrompt: 'Enter a prompt', needReference: 'Add at least one reference image first', result: 'Current result', continueEdit: 'Continue editing', regenerate: 'Generate again',
-    copy: 'Copy', copied: 'Copied to clipboard', copyFailed: 'Copy failed', download: 'Download', remove: 'Delete', fit: 'Fit', infiniteCanvas: 'Infinite canvas', loading: 'Loading image…', generationFailed: 'Generation failed',
+    copy: 'Copy', copied: 'Copied to clipboard', copyFailed: 'Copy failed', download: 'Download', remove: 'Delete', fit: 'Fit', infiniteCanvas: 'Infinite canvas', loading: 'Loading image…', generationFailed: 'Generation failed', gatewayTimeout: 'The reverse proxy cut the request (timeout): retry; if it repeats, raise the proxy timeout or use a direct network.', requestFailed: 'Request failed (HTTP {status})',
     selectHistory: 'Select an image on the left, or start a new generation on the right.', created: 'Created', elapsed: 'Elapsed', dimensions: 'Dimensions', output: 'Output',
     closeReference: 'Remove reference', uploadInvalid: 'Choose a valid image file up to 10MB.', uploadUnreadable: 'Some images could not be read; pick them again.', imageLoadFailed: 'Could not load image',
     fullscreen: 'Fullscreen', close: 'Close', copyPpt: 'Copy Prompt', copiedPrompt: 'Prompt copied', copiedImage: 'Image copied',
@@ -288,6 +288,16 @@ export const StudioView: FC<{
     return text
   }
 
+  /** Parse a studio response body; a gateway HTML error page (502/504 from a
+   *  reverse proxy) must surface as a readable message, not a JSON SyntaxError. */
+  const readStudioBody = async (response: Response): Promise<StudioConfigResponse | StudioGenerateResponse | { error?: string }> => {
+    try {
+      return await response.json() as StudioConfigResponse | StudioGenerateResponse | { error?: string }
+    } catch {
+      return { error: response.status === 502 || response.status === 504 ? t('gatewayTimeout') : t('requestFailed', { status: String(response.status) }) }
+    }
+  }
+
   useEffect(() => locale?.subscribe?.(() => setLang(locale.getSnapshot().active?.startsWith('en') ? 'en' : 'zh')), [locale])
 
   // Latest form state for the silent refresher, kept in refs so loadConfig's
@@ -304,7 +314,7 @@ export const StudioView: FC<{
     const controller = new AbortController()
     try {
       const response = await fetch(STUDIO_ROUTE, { signal: controller.signal, credentials: 'same-origin' })
-      const payload = await response.json() as StudioConfigResponse | { error?: string }
+      const payload = await readStudioBody(response)
       if (!response.ok || !('providers' in payload)) throw new Error('error' in payload && payload.error ? payload.error : 'Studio unavailable')
       setConfig(payload)
       if (silent) {
@@ -711,7 +721,7 @@ export const StudioView: FC<{
               ...(referencesPayload === undefined ? {} : { references: referencesPayload }),
             }),
           })
-          const payload = await response.json() as StudioGenerateResponse | { error?: string }
+          const payload = await readStudioBody(response)
           if (!response.ok || !('attachment' in payload)) {
             throw new Error('error' in payload && payload.error ? payload.error : `${target.profile.label}: ${t('generationFailed')}`)
           }
@@ -774,7 +784,7 @@ export const StudioView: FC<{
           }),
         }),
       })
-      const payload = await response.json() as StudioGenerateResponse | { error?: string }
+      const payload = await readStudioBody(response)
       if (!response.ok || !('attachment' in payload)) throw new Error('error' in payload && payload.error ? payload.error : t('generationFailed'))
 
       const generatedList: StudioGeneratedItem[] = Array.isArray(payload.items) && payload.items.length > 0
