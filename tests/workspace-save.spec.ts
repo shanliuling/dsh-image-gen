@@ -293,6 +293,19 @@ describe('workspace scoping and isolation for gallery items', () => {
     expect(isItemInWorkspace(item, { workspaceId: 'ws-skills-sync' })).toBe(false)
   })
 
+  it('keeps unattributed items visible under a workspace filter', async () => {
+    const { isItemInWorkspace } = await import('../src/client/gallery-store.js')
+    const item = {
+      id: 'item-unattributed',
+      attachment: dummyAttachment,
+      prompt: 'test',
+      provider: 'google' as const,
+      model: 'imagen',
+      createdAt: Date.now(),
+    }
+    expect(isItemInWorkspace(item, { workspaceId: 'ws-any', path: '/repo' })).toBe(true)
+  })
+
   it('matches item by sessionId in workspace sessionIds list', async () => {
     const { isItemInWorkspace } = await import('../src/client/gallery-store.js')
     const item = {

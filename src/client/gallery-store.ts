@@ -361,6 +361,13 @@ export function isItemInWorkspace(
     return true
   }
 
+  // Items with no workspace attribution at all (generated before the studio
+  // learned the active workspace) belong to every view; a workspace filter
+  // must not hide them from the gallery or favorites tabs.
+  if (!item.workspaceId && !item.sessionId && !item.workspacePath && !item.savedTo) {
+    return true
+  }
+
   // 1. Direct workspaceId match
   if (item.workspaceId && workspace.workspaceId && item.workspaceId === workspace.workspaceId) {
     return true
