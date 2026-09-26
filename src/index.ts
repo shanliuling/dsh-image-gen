@@ -2,7 +2,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-host-webserver'
-import * as dshSettings from '@deepseek-ai/dsh-settings'
+import type { SettingsForms } from '@deepseek-ai/dsh-settings'
 import { defineTool, type ToolResult } from '@deepseek-ai/dsh-tools'
 import { Config, migrateOpenAICompatConfig, resolveProvider, selectComfyUIWorkflow, withProviderOverrides, type AspectRatio, type ImageSize } from './config.js'
 import { requireApiKey, resolveApiKey } from './credentials.js'
@@ -57,10 +57,23 @@ function providerOverrideOf(value: unknown): ImageProvider | undefined {
 }
 
 export function apply(ctx: Context, config: Config = {}): void {
+  // DSH 0.1.7 resolves every `.volatile()` schema field into a stable box
+  // whose `.get()` returns the current snapshot, so a settings edit lands
+  // without restarting this fiber. Unbox on every read; older hosts hand
+  // over plain values, which the same walk returns untouched.
+  const plainConfig = (source: Config): Config => {
+    const out: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(source)) {
+      out[key] = value !== null && typeof value === 'object' && typeof (value as { get?: unknown }).get === 'function'
+        ? (value as { get(): unknown }).get()
+        : value
+    }
+    return out as Config
+  }
   // Migration on every read: relay configs saved under the old single OpenAI
   // slot keep moving to the dedicated compat row until the persisted copy is
   // rewritten, so both rows coexist after any upgrade.
-  let current: () => Config = () => migrateOpenAICompatConfig(config)
+  let current: () => Config = () => migrateOpenAICompatConfig(plainConfig(config))
   const knownWorkspaceRoots = new Set<string>()
   // Host-side mirror of the workbench infinite canvas: fed by the canvas-state
   // route, read by the canvas tools, the edit_image canvas_selection source,
@@ -71,8 +84,8 @@ export function apply(ctx: Context, config: Config = {}): void {
   const subscriptionManager = new SubscriptionManager(ctx)
   registerSubscriptionRoutes(ctx, subscriptionManager)
 
-  installImageSettings(ctx, config, {
-    setSource: source => { current = () => migrateOpenAICompatConfig(source()) },
+  installImageSettings(ctx, current(), {
+    setSource: source => { current = () => migrateOpenAICompatConfig(plainConfig(source())) },
     onChange: () => {},
   })
   ctx.effect(() => ctx.webServer.register({
@@ -424,39 +437,26 @@ interface SettingsHooks {
   onChange: () => void
 }
 
-/** Top-level relay functions exported by dsh-settings <= 0.1.1-rc.2. */
-interface LegacySettingsApi {
-  installSettingsSection?: {
-    (ctx: Context, ns: unknown, schema: unknown, entry: unknown, hooks: SettingsHooks): void
-  }
-  settingsNamespace?: (value: string) => unknown
+/** The `settings` Context service as typed by dsh-settings 0.1.2–0.1.6. */
+interface SettingsSectionInstaller {
+  installSection(ctx: Context, namespace: unknown, schema: unknown, entry: unknown, hooks: SettingsHooks): void
 }
 
 /**
  * Wire the settings namespace across both dsh-settings API generations.
- * A namespace import keeps module loading safe on either version; the branch
- * picks the service method (0.1.2+) or the legacy top-level relay (<= rc.2),
- * and falls back to the composition entry with a warning when neither exists
- * so an incompatible host degrades the settings UI instead of failing boot.
+ * The probe reads the HOST's `settings` service, never the bundled
+ * dsh-settings module: the build inlines that module, so its exports always
+ * look like the compile-time generation while only the service handed to this
+ * fiber reflects the running host. dsh-settings 0.1.2–0.1.6 put `installSection`
+ * on the service, so the namespace registers through it; DSH 0.1.7 replaced it
+ * with schema-derived forms served by the loader itself (keyed by entry id),
+ * so its service carries no installer and a host without any settings service
+ * simply never runs the callback — both stay silent instead of warning.
  */
 function installImageSettings(ctx: Context, config: Config, hooks: SettingsHooks): void {
-  const namespace = dshSettings as typeof dshSettings & LegacySettingsApi
-  // Runtime probe, not compile-time presence: the host decides which API
-  // generation is live, whichever dsh-settings this bundle was typed against.
-  const modern = namespace.SettingsProvider?.prototype?.installSection
-  if (typeof modern === 'function') {
-    // The injected context is typed by the current dsh-settings, whose module
-    // extension already declares the `settings` service on Context.
-    ctx.inject(['settings'], (settingsCtx: Context) => {
-      settingsCtx.settings.installSection(ctx, IMAGE_GENERATION_NAMESPACE, Config, config, hooks)
-    })
-    return
-  }
-  const legacyInstall = namespace.installSettingsSection
-  const legacyNamespace = namespace.settingsNamespace
-  if (typeof legacyInstall === 'function' && typeof legacyNamespace === 'function') {
-    legacyInstall(ctx, legacyNamespace(IMAGE_GENERATION_NAMESPACE), Config, config, hooks)
-    return
-  }
-  ctx.logger.warn('dsh-image-gen: this DSH exposes neither settings API generation; settings UI stays on the composition entry')
+  ctx.inject(['settings'], settingsCtx => {
+    const settings = settingsCtx.settings as SettingsForms & Partial<SettingsSectionInstaller>
+    if (typeof settings.installSection !== 'function') return
+    settings.installSection(ctx, IMAGE_GENERATION_NAMESPACE, Config, config, hooks)
+  })
 }

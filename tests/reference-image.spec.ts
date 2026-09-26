@@ -29,27 +29,47 @@ function messages(content: unknown[]): Message[] {
   return [{ role: 'assistant', content }] as unknown as Message[]
 }
 
-function sourcedMessage(content: unknown[], source: { kind: 'user' } | { kind: 'tool'; callId: string }): Message {
-  return { id: 'message-id', role: 'user', content, source } as unknown as Message
+function userMessage(content: unknown[]): Message {
+  return { id: 'message-id', role: 'user', content, source: { kind: 'user' } } as unknown as Message
+}
+
+/** DSH 0.1.7 carries tool results as first-class role:'tool' messages. */
+function toolMessage(content: unknown[], callId: string): Message {
+  return { id: 'message-id', role: 'tool', content, source: { kind: 'tool', callId } } as unknown as Message
+}
+
+/** <=0.1.6 nest tool results as blocks inside the message that carries them. */
+function legacyNestedToolResult(content: unknown[]): unknown[] {
+  return [{ type: 'tool-result', toolCallId: 'call-1', content }]
 }
 
 describe('reference image compatibility boundary', () => {
-  it('finds the newest image recursively inside tool-result content', () => {
+  it('finds the newest image inside a tool-result message', () => {
     const older = imageRef('older')
     const newest = imageRef('newest')
     const history = [
       ...messages([{ type: 'image', attachment: older }]),
-      ...messages([{
-        type: 'tool-result',
-        toolCallId: 'call-1',
-        content: [
-          { type: 'text', text: 'edited image' },
-          { type: 'image', attachment: newest },
-        ],
-      }]),
+      toolMessage([
+        { type: 'text', text: 'edited image' },
+        { type: 'image', attachment: newest },
+      ], 'call-1'),
     ]
 
     expect(findReferenceImage(history)).toBe(newest)
+  })
+
+  it('finds the newest image inside a legacy nested tool-result block', () => {
+    const older = imageRef('older')
+    const nested = imageRef('nested')
+    const history = [
+      ...messages([{ type: 'image', attachment: older }]),
+      ...messages(legacyNestedToolResult([
+        { type: 'text', text: 'edited image' },
+        { type: 'image', attachment: nested },
+      ])),
+    ]
+
+    expect(findReferenceImage(history)).toBe(nested)
   })
 
   it('honors an explicit attachment id from an earlier effective message', () => {
@@ -72,7 +92,7 @@ describe('reference image compatibility boundary', () => {
       ...messages([
         { type: 'image', attachment: first },
         { type: 'text', text: 'combine these' },
-        { type: 'tool-result', toolCallId: 'call-2', content: [{ type: 'image', attachment: second }] },
+        { type: 'image', attachment: second },
       ]),
     ]
 
@@ -138,16 +158,12 @@ describe('reference image compatibility boundary', () => {
     const person = imageRef('person')
     const unrelatedWorkspaceImage = imageRef('workspace-image')
     const history = [
-      sourcedMessage([
+      userMessage([
         { type: 'image', attachment: cat },
         { type: 'image', attachment: person },
         { type: 'text', text: 'replace the person with the cat' },
-      ], { kind: 'user' }),
-      sourcedMessage([{
-        type: 'tool-result',
-        toolCallId: 'read-call',
-        content: [{ type: 'image', attachment: unrelatedWorkspaceImage }],
-      }], { kind: 'tool', callId: 'read-call' }),
+      ]),
+      toolMessage([{ type: 'image', attachment: unrelatedWorkspaceImage }], 'read-call'),
     ]
 
     expect(findReferenceImages(history)).toEqual([cat, person])
@@ -156,11 +172,8 @@ describe('reference image compatibility boundary', () => {
   it('falls back to the newest generated or tool-read image when the current human message has no image', () => {
     const generated = imageRef('generated')
     const history = [
-      sourcedMessage([{
-        type: 'tool-result', toolCallId: 'generate-call',
-        content: [{ type: 'image', attachment: generated }],
-      }], { kind: 'tool', callId: 'generate-call' }),
-      sourcedMessage([{ type: 'text', text: 'add sunglasses to the last image' }], { kind: 'user' }),
+      toolMessage([{ type: 'image', attachment: generated }], 'generate-call'),
+      userMessage([{ type: 'text', text: 'add sunglasses to the last image' }]),
     ]
 
     expect(findReferenceImages(history)).toEqual([generated])

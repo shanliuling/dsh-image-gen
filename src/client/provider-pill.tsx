@@ -21,6 +21,7 @@ import {
 } from '../shared.js'
 import type { SettingsScope } from './index.js'
 import type { LocaleService } from './gallery-view.js'
+import { writeSetting } from './settings-write.js'
 
 /** Settings fields the pill reads; a structural subset of the full settings shape. */
 export interface PillSettings {
@@ -70,6 +71,7 @@ const PILL_DICT = {
     subStatusUnknown: '状态未知',
     readOnly: '图像设置为只读，无法在此切换',
     switchFailed: '切换失败',
+    writeRejected: '设置未保存，请重试',
   },
   en: {
     pillLabel: 'Image',
@@ -84,6 +86,7 @@ const PILL_DICT = {
     subStatusUnknown: 'Unknown',
     readOnly: 'Image settings are read-only; switch them in the config source',
     switchFailed: 'Switch failed',
+    writeRejected: 'Setting was not saved. Please try again',
   },
 } as const
 
@@ -294,7 +297,7 @@ export function ImageProviderPill(props: ProviderPillFace) {
     if (pending !== undefined || provider === current) { setOpen(false); return }
     setError('')
     setPending(provider)
-    void props.scope.set('provider', provider)
+    void writeSetting(props.scope, 'provider', provider, t('writeRejected'))
       .then(() => { setOpen(false) })
       .catch(cause => { setError(cause instanceof Error ? cause.message : String(cause)) })
       .finally(() => { setPending(undefined) })

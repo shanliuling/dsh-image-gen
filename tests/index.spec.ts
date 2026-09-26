@@ -3,14 +3,6 @@ import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('@deepseek-ai/dsh-settings', () => {
-  // Prototype method so the dual-path detection in src/index.ts sees it.
-  class SettingsProvider {
-    installSection(): void {}
-  }
-  return { SettingsProvider }
-})
-
 import { apply } from '../src/index.js'
 
 function attachment(id: string): ImageAttachmentRef {
