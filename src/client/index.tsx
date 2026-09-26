@@ -11,7 +11,8 @@ export interface SettingsScopeSnapshot<T> {
 export interface SettingsScope<T> {
   getSnapshot(): SettingsScopeSnapshot<T>
   subscribe(listener: () => void): () => void
-  set(field: string, value: unknown): Promise<void>
+  /** New hosts return true/false; legacy settings scopes resolve to void. */
+  set(field: string, value: unknown): Promise<boolean | void>
 }
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
@@ -24,6 +25,7 @@ import {
   DEFAULT_BASE_URLS,
   DEFAULT_COMFYUI_TIMEOUT_MS,
   DEFAULT_MODELS,
+  IMAGE_GENERATION_ENTRY_ID,
   IMAGE_GENERATION_NAMESPACE,
   IMAGE_PROVIDERS,
   IMAGE_ROUTE,
@@ -68,6 +70,7 @@ import {
 } from './conversation-image-revisions.js'
 import { conversationRegenerateRequest } from './conversation-regenerate.js'
 import { ImageProviderPill, PROVIDER_PILL_STYLE, type ProviderPillFace } from './provider-pill.js'
+import { writeSetting } from './settings-write.js'
 
 /** Build timestamp injected by tsdown at bundle time. */
 declare const __CANVAS_BUILD_TS__: string
@@ -296,6 +299,7 @@ const DICT = {
     saving: '保存中…',
     save: '保存',
     saved: '已保存',
+    settingsWriteRejected: '有一项设置未能保存，请检查后重试。',
     savedToPath: '已保存到',
     generating: '正在生成图片…',
     loading: '正在加载图片…',
@@ -439,6 +443,7 @@ const DICT = {
     saving: 'Saving…',
     save: 'Save',
     saved: 'Saved',
+    settingsWriteRejected: 'A setting could not be saved. Please check and try again.',
     savedToPath: 'Saved to',
     generating: 'Generating image…',
     loading: 'Loading image…',
@@ -761,16 +766,59 @@ const STYLE = `
 
 
 
-/** Required browser services. */
-export const inject = ['slots', 'connection', 'remote', 'settingsScope', 'locale']
+/**
+ * Required browser services. The settings form reader is deliberately absent:
+ * DSH 0.1.7 serves it as `configForms` (keyed by the Loader entry id) while
+ * 0.1.5/0.1.6 expose `settingsScope` (keyed by the legacy namespace), so it is
+ * probed at runtime in `apply`. A static inject of either name would park this
+ * fiber forever on hosts from the other generation — the issue #55 failure.
+ */
+export const inject = ['slots', 'connection', 'remote', 'locale']
+
+/** Settings-form reader as shaped by DSH 0.1.7's `configForms` service. */
+interface ConfigFormsApi {
+  get<T>(id: string): SettingsScope<T>
+}
+/** Settings-form reader as shaped by DSH 0.1.5/0.1.6's `settingsScope` service. */
+interface SettingsScopeApi {
+  bind<T>(options: { namespace: string }): SettingsScope<T>
+}
+
+/** Host with neither settings generation: reads empty, writes refuse, never throws. */
+function degradedScope<T>(): SettingsScope<T> {
+  return {
+    getSnapshot: () => ({ value: undefined, writable: false }),
+    subscribe: () => () => {},
+    set: async () => false,
+  }
+}
 
 /** Mount the settings card, generated-image card, and native conversation gallery view. */
 export function apply(ctx: Context): void {
-  const scope = ctx.settingsScope.bind<ImageSettings>({ namespace: IMAGE_GENERATION_NAMESPACE as never })
-  // Host-owned chat transcript preference ("ui-chat" transcriptView). Unknown,
-  // unavailable, or not-yet-loaded reads fall back to Compact-safe anchoring.
-  const chatScope = ctx.settingsScope.bind<{ transcriptView?: string }>({ namespace: 'ui-chat' as never })
-  const isCompactTranscript = (): boolean => chatScope.getSnapshot().value?.transcriptView !== 'normal'
+  // Probe instead of inject (see `inject`): 0.1.7+ resolves `configForms`,
+  // older hosts fall back to `settingsScope`, and `ctx.get` reads undefined for
+  // a service the host never declared.
+  const configForms = ctx.get('configForms') as ConfigFormsApi | undefined
+  const settingsScopeApi = configForms === undefined
+    ? ctx.get('settingsScope') as SettingsScopeApi | undefined
+    : undefined
+  const scope = configForms?.get<ImageSettings>(IMAGE_GENERATION_ENTRY_ID)
+    ?? settingsScopeApi?.bind<ImageSettings>({ namespace: IMAGE_GENERATION_NAMESPACE })
+    ?? degradedScope<ImageSettings>()
+  // Host-owned chat transcript preference ("ui-chat"), read through the same
+  // generation's reader: 0.1.7 via the form id, older hosts via the namespace.
+  const chatScope = configForms?.get<{ transcriptView?: string }>('ui-chat')
+    ?? settingsScopeApi?.bind<{ transcriptView?: string }>({ namespace: 'ui-chat' })
+    ?? degradedScope<{ transcriptView?: string }>()
+  // 0.1.7 renamed the modes to compact/standard/detailed/verbose (legacy
+  // `normal` maps to `standard`). Unknown or unloaded modes use Compact-safe
+  // anchoring; legacy hosts know just normal/compact.
+  const isCompactTranscript = (): boolean => {
+    const mode = chatScope.getSnapshot().value?.transcriptView
+    return configForms === undefined
+      ? mode !== 'normal'
+      : mode !== 'standard' && mode !== 'detailed' && mode !== 'verbose'
+  }
   const locale = ctx.get('locale') as LocaleService | undefined
   const promotion = { enabled: false }
 
@@ -1329,6 +1377,8 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
     }
     return text
   }
+  const saveSetting = (field: string, value: unknown): Promise<void> =>
+    writeSetting(props.scope, field, value, t('settingsWriteRejected'))
 
   const providerLabels: Record<Provider, string> = {
     google: t('providerGoogle'),
@@ -1415,7 +1465,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
   const selectDefaultProvider = (provider: Provider): void => {
     setDefaultProvider(provider)
     setProviderMessage(''); setProviderMessageIsError(false)
-    void props.scope.set('provider', provider).catch((cause: unknown) => {
+    void saveSetting('provider', provider).catch((cause: unknown) => {
       setDefaultProvider(snapshot.value?.provider ?? 'google')
       setProviderMessage(cause instanceof Error ? cause.message : String(cause))
       setProviderMessageIsError(true)
@@ -1434,13 +1484,13 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
         }
         if (new Set(entries.map(entry => entry.name)).size !== entries.length) throw new Error(t('workflowDuplicateName'))
         const activeEntry = entries.find(entry => entry.name === row.activeWorkflow) ?? entries[0]
-        await props.scope.set('comfyuiBaseURL', row.baseURL)
-        await props.scope.set('comfyuiWorkflows', entries)
-        await props.scope.set('comfyuiActiveWorkflow', activeEntry === undefined ? '' : activeEntry.name)
+        await saveSetting('comfyuiBaseURL', row.baseURL)
+        await saveSetting('comfyuiWorkflows', entries)
+        await saveSetting('comfyuiActiveWorkflow', activeEntry === undefined ? '' : activeEntry.name)
         // Keep the legacy single-workflow fields in sync so older plugin versions keep working.
-        await props.scope.set('comfyuiWorkflowJson', activeEntry === undefined ? '' : activeEntry.json)
-        await props.scope.set('comfyuiWorkflowName', activeEntry === undefined ? '' : activeEntry.name)
-        await props.scope.set('comfyuiTimeoutMs', Math.max(1, Math.round(row.timeoutSeconds)) * 1000)
+        await saveSetting('comfyuiWorkflowJson', activeEntry === undefined ? '' : activeEntry.json)
+        await saveSetting('comfyuiWorkflowName', activeEntry === undefined ? '' : activeEntry.name)
+        await saveSetting('comfyuiTimeoutMs', Math.max(1, Math.round(row.timeoutSeconds)) * 1000)
       } else if (isSubscriptionProvider(provider)) {
         // Subscription rows persist nothing per-provider: the model is fixed
         // by the channel and the login lives in the plugin's own credential
@@ -1460,16 +1510,16 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
             editExtra = parsed as Record<string, unknown>
           }
         }
-        await props.scope.set(modelFieldOf(provider), row.model)
-        await props.scope.set(baseURLFieldOf(provider), row.baseURL)
+        await saveSetting(modelFieldOf(provider), row.model)
+        await saveSetting(baseURLFieldOf(provider), row.baseURL)
         if (provider === 'openai-compat') {
-          await props.scope.set('openaiCompatEditFormat', row.editFormat)
-          await props.scope.set('openaiCompatEditExtra', editExtra)
+          await saveSetting('openaiCompatEditFormat', row.editFormat)
+          await saveSetting('openaiCompatEditExtra', editExtra)
         }
         if (provider === 'seedream') {
-          await props.scope.set('seedreamOutputFormat', row.outputFormat)
-          await props.scope.set('seedreamWatermark', row.watermark)
-          await props.scope.set('seedreamBackground', row.background)
+          await saveSetting('seedreamOutputFormat', row.outputFormat)
+          await saveSetting('seedreamWatermark', row.watermark)
+          await saveSetting('seedreamBackground', row.background)
         }
         if (row.keyInput.trim().length > 0) {
           const keyRef = cloudCredentialRef(provider)
@@ -1641,7 +1691,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
   const toggleSaveToWorkspace = (next: boolean): void => {
     setSaveToWorkspace(next)
     setWorkspaceMessage(''); setWorkspaceMessageIsError(false)
-    void props.scope.set('saveToWorkspace', next).catch((cause: unknown) => {
+    void saveSetting('saveToWorkspace', next).catch((cause: unknown) => {
       setSaveToWorkspace(snapshot.value?.saveToWorkspace ?? true)
       setWorkspaceMessage(cause instanceof Error ? cause.message : String(cause))
       setWorkspaceMessageIsError(true)
@@ -1653,7 +1703,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
     const next = workspaceFolder.trim()
     if (next === (snapshot.value?.workspaceFolder ?? 'dsh-image-gen')) return
     setWorkspaceMessage(''); setWorkspaceMessageIsError(false)
-    void props.scope.set('workspaceFolder', next).then(() => {
+    void saveSetting('workspaceFolder', next).then(() => {
       setWorkspaceMessage(t('saved'))
     }).catch((cause: unknown) => {
       setWorkspaceFolder(snapshot.value?.workspaceFolder ?? 'dsh-image-gen')
@@ -1666,7 +1716,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
   const toggleShowPill = (next: boolean): void => {
     setShowPill(next)
     setUiMessage(''); setUiMessageIsError(false)
-    void props.scope.set('showProviderPill', next).catch((cause: unknown) => {
+    void saveSetting('showProviderPill', next).catch((cause: unknown) => {
       setShowPill(snapshot.value?.showProviderPill === true)
       setUiMessage(cause instanceof Error ? cause.message : String(cause))
       setUiMessageIsError(true)

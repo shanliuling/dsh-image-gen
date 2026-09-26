@@ -23,6 +23,16 @@ import {
 } from '../src/config.js'
 import { mergeComfyUIPrompt, resolveComfyUIWorkflows, uniqueComfyUIWorkflowName } from '../src/shared.js'
 
+/** DSH 0.1.7 resolves `.volatile()` schema fields to boxes; unwrap for assertions. */
+function unwrap<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(Object.entries(value).map(([key, field]) => [
+    key,
+    field !== null && typeof field === 'object' && typeof (field as { get?: unknown }).get === 'function'
+      ? (field as { get(): unknown }).get()
+      : field,
+  ])) as T
+}
+
 describe('resolveProvider', () => {
   it('resolves the Google defaults', () => {
     expect(resolveProvider({})).toEqual({ provider: 'google', apiKeyEnv: 'GEMINI_API_KEY', endpoint: DEFAULT_GOOGLE_ENDPOINT, model: DEFAULT_GOOGLE_MODEL, aspectRatio: '1:1', imageSize: '1K' })
@@ -171,10 +181,10 @@ describe('xai and zhipu providers', () => {
   })
 
   it('validates both providers through the schema with their defaults', () => {
-    const xai = Config({ provider: 'xai' })
+    const xai = unwrap(Config({ provider: 'xai' }))
     expect(xai.xaiBaseURL).toBe(DEFAULT_XAI_BASE_URL)
     expect(xai.xaiModel).toBe(DEFAULT_XAI_MODEL)
-    const zhipu = Config({ provider: 'zhipu' })
+    const zhipu = unwrap(Config({ provider: 'zhipu' }))
     expect(zhipu.zhipuBaseURL).toBe(DEFAULT_ZHIPU_BASE_URL)
     expect(zhipu.zhipuModel).toBe(DEFAULT_ZHIPU_MODEL)
   })
@@ -324,15 +334,22 @@ describe('selectComfyUIWorkflow', () => {
 })
 
 describe('Config Schema validation', () => {
+  it('exposes the opt-in composer pill as a live settings field', () => {
+    expect(unwrap(Config({})).showProviderPill).toBe(false)
+    const enabled = Config({ showProviderPill: true })
+    expect(enabled.showProviderPill).toHaveProperty('get')
+    expect(unwrap(enabled).showProviderPill).toBe(true)
+  })
+
   it('validates provider: dashscope without rejection', () => {
-    const validated = Config({ provider: 'dashscope' })
+    const validated = unwrap(Config({ provider: 'dashscope' }))
     expect(validated.provider).toBe('dashscope')
     expect(validated.dashscopeModel).toBe(DEFAULT_DASHSCOPE_MODEL)
     expect(validated.dashscopeEndpoint).toBe(DEFAULT_DASHSCOPE_ENDPOINT)
   })
 
   it('validates provider: comfyui and applies local defaults', () => {
-    const validated = Config({ provider: 'comfyui' })
+    const validated = unwrap(Config({ provider: 'comfyui' }))
     expect(validated.provider).toBe('comfyui')
     expect(validated.comfyuiBaseURL).toBe(DEFAULT_COMFYUI_BASE_URL)
     expect(validated.comfyuiTimeoutMs).toBe(DEFAULT_COMFYUI_TIMEOUT_MS)
@@ -341,11 +358,11 @@ describe('Config Schema validation', () => {
   })
 
   it('round-trips named workflows through the schema, defaulting blank presets', () => {
-    const validated = Config({
+    const validated = unwrap(Config({
       provider: 'comfyui',
       comfyuiWorkflows: [{ name: 'a.json', json: '{}' }, { name: 'b.json', json: '{}', presetPrompt: 'masterpiece' }],
       comfyuiActiveWorkflow: 'a.json',
-    })
+    }))
     expect(validated.comfyuiWorkflows).toEqual([
       { name: 'a.json', json: '{}', presetPrompt: '' },
       { name: 'b.json', json: '{}', presetPrompt: 'masterpiece' },
@@ -353,4 +370,3 @@ describe('Config Schema validation', () => {
     expect(validated.comfyuiActiveWorkflow).toBe('a.json')
   })
 })
-

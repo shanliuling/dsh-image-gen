@@ -124,6 +124,13 @@ export interface CanvasStatePush {
 /** Namespace persisted through DSH Settings. */
 export const IMAGE_GENERATION_NAMESPACE = 'image-generation'
 
+/**
+ * Loader entry id of this plugin's composition entry (see cordis.patch.yml).
+ * DSH 0.1.7 serves a plugin's settings under its entry id as the namespace,
+ * so browser-side reads/writes bind `configForms` to this id.
+ */
+export const IMAGE_GENERATION_ENTRY_ID = 'image-gen'
+
 /** Supported providers. */
 export const IMAGE_PROVIDERS = ['google', 'openai', 'openai-compat', 'seedream', 'dashscope', 'xai', 'zhipu', 'comfyui', 'chatgpt-sub', 'grok-sub', 'google-sub'] as const
 export type ImageProvider = typeof IMAGE_PROVIDERS[number]

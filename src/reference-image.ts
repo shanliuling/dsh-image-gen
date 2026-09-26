@@ -226,6 +226,13 @@ export function parseImageAttachmentRef(value: unknown): ImageAttachmentRef | un
   }
 }
 
+/**
+ * Newest matching image in one message's blocks. Tool results arrive in two
+ * shapes: 0.1.7 promotes them to first-class `role: 'tool'` messages (walked
+ * by the message-level callers below), while <=0.1.6 nests them as blocks with
+ * a `content` array inside a message. The 0.1.7 `ContentBlock` union declares
+ * no nested `content`, so recurse only when a block actually carries one.
+ */
 function findInBlocks(
   blocks: readonly ContentBlock[],
   sourceAttachmentId?: string,
@@ -239,9 +246,10 @@ function findInBlocks(
       }
       continue
     }
-    if (block.type === 'tool-result') {
-      const nested = findInBlocks(block.content, sourceAttachmentId)
-      if (nested !== undefined) return nested
+    const nested = (block as { content?: unknown }).content
+    if (Array.isArray(nested)) {
+      const found = findInBlocks(nested as ContentBlock[], sourceAttachmentId)
+      if (found !== undefined) return found
     }
   }
   return undefined
@@ -261,7 +269,9 @@ function collectInBlocks(blocks: readonly ContentBlock[]): ImageAttachmentRef[] 
   const refs: ImageAttachmentRef[] = []
   for (const block of blocks) {
     if (block.type === 'image') refs.push(block.attachment)
-    if (block.type === 'tool-result') refs.push(...collectInBlocks(block.content))
+    // Legacy hosts nest tool results as blocks carrying a `content` array.
+    const nested = (block as { content?: unknown }).content
+    if (Array.isArray(nested)) refs.push(...collectInBlocks(nested as ContentBlock[]))
   }
   return refs
 }

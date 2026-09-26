@@ -142,39 +142,58 @@ export interface Config {
   saveToWorkspace?: boolean
   /** Workspace subfolder for generated images; empty means the workspace root. */
   workspaceFolder?: string
+  /** Show the provider switcher beside the chat input. */
+  showProviderPill?: boolean
 }
 
-/** Cordis configuration schema. */
-export const Config: z<Config> = z.object({
-  provider: z.union(IMAGE_PROVIDERS).default('google'),
-  googleModel: z.string().default(DEFAULT_GOOGLE_MODEL),
-  googleEndpoint: z.string().default(DEFAULT_GOOGLE_ENDPOINT),
-  openaiBaseURL: z.string().default(DEFAULT_OPENAI_BASE_URL),
-  openaiModel: z.string().default(DEFAULT_OPENAI_MODEL),
-  openaiCompatBaseURL: z.string().default(''),
-  openaiCompatModel: z.string().default(''),
-  openaiCompatEditFormat: z.union([z.const('multipart'), z.const('jsonImageUrlArray')]).default('multipart'),
-  openaiCompatEditExtra: z.dict(z.any()).default({}),
-  seedreamBaseURL: z.string().default(DEFAULT_SEEDREAM_BASE_URL),
-  seedreamModel: z.string().default(DEFAULT_SEEDREAM_MODEL),
-  seedreamOutputFormat: z.union(ARK_OUTPUT_FORMATS).default('jpeg'),
-  seedreamWatermark: z.boolean().default(true),
-  seedreamBackground: z.union(ARK_BACKGROUND_MODES).default('opaque'),
-  dashscopeEndpoint: z.string().default(DEFAULT_DASHSCOPE_ENDPOINT),
-  dashscopeModel: z.string().default(DEFAULT_DASHSCOPE_MODEL),
-  xaiBaseURL: z.string().default(DEFAULT_XAI_BASE_URL),
-  xaiModel: z.string().default(DEFAULT_XAI_MODEL),
-  zhipuBaseURL: z.string().default(DEFAULT_ZHIPU_BASE_URL),
-  zhipuModel: z.string().default(DEFAULT_ZHIPU_MODEL),
-  comfyuiBaseURL: z.string().default(DEFAULT_COMFYUI_BASE_URL),
-  comfyuiWorkflows: z.array(z.object({ name: z.string(), json: z.string(), presetPrompt: z.string().default('') })).default([]),
-  comfyuiActiveWorkflow: z.string().default(''),
-  comfyuiWorkflowJson: z.string().default(''),
-  comfyuiWorkflowName: z.string().default(''),
-  comfyuiTimeoutMs: z.number().min(1_000).max(3_600_000).default(DEFAULT_COMFYUI_TIMEOUT_MS),
-  saveToWorkspace: z.boolean().default(true),
-  workspaceFolder: z.string().default(DEFAULT_WORKSPACE_FOLDER),
-})
+/**
+ * Mark a schema field live for DSH 0.1.7+: the host serves a plugin's settings
+ * form only for `.volatile()` fields and hands `apply` a `Volatile` box per
+ * field (unwrapped in `src/index.ts`). Hosts ≤0.1.6 ship a schemastery without
+ * the method, so marking is conditional — an unmarked schema stays plain there
+ * and the old settings relay keeps working.
+ */
+function volatile<T extends z>(schema: T): T {
+  const mark = (schema as unknown as { volatile?: () => T }).volatile
+  return typeof mark === 'function' ? mark.call(schema) : schema
+}
+
+/**
+ * Cordis configuration schema. Volatile marking happens per field (see
+ * `volatile`); the `z<Config>` annotation keeps the plain output type for the
+ * rest of the codebase because the wrapping is unwrapped at the entry.
+ */
+export const Config = z.object({
+  provider: volatile(z.union(IMAGE_PROVIDERS).default('google')),
+  googleModel: volatile(z.string().default(DEFAULT_GOOGLE_MODEL)),
+  googleEndpoint: volatile(z.string().default(DEFAULT_GOOGLE_ENDPOINT)),
+  openaiBaseURL: volatile(z.string().default(DEFAULT_OPENAI_BASE_URL)),
+  openaiModel: volatile(z.string().default(DEFAULT_OPENAI_MODEL)),
+  openaiCompatBaseURL: volatile(z.string().default('')),
+  openaiCompatModel: volatile(z.string().default('')),
+  openaiCompatEditFormat: volatile(z.union([z.const('multipart'), z.const('jsonImageUrlArray')]).default('multipart')),
+  openaiCompatEditExtra: volatile(z.dict(z.any()).default({})),
+  seedreamBaseURL: volatile(z.string().default(DEFAULT_SEEDREAM_BASE_URL)),
+  seedreamModel: volatile(z.string().default(DEFAULT_SEEDREAM_MODEL)),
+  seedreamOutputFormat: volatile(z.union(ARK_OUTPUT_FORMATS).default('jpeg')),
+  seedreamWatermark: volatile(z.boolean().default(true)),
+  seedreamBackground: volatile(z.union(ARK_BACKGROUND_MODES).default('opaque')),
+  dashscopeEndpoint: volatile(z.string().default(DEFAULT_DASHSCOPE_ENDPOINT)),
+  dashscopeModel: volatile(z.string().default(DEFAULT_DASHSCOPE_MODEL)),
+  xaiBaseURL: volatile(z.string().default(DEFAULT_XAI_BASE_URL)),
+  xaiModel: volatile(z.string().default(DEFAULT_XAI_MODEL)),
+  zhipuBaseURL: volatile(z.string().default(DEFAULT_ZHIPU_BASE_URL)),
+  zhipuModel: volatile(z.string().default(DEFAULT_ZHIPU_MODEL)),
+  comfyuiBaseURL: volatile(z.string().default(DEFAULT_COMFYUI_BASE_URL)),
+  comfyuiWorkflows: volatile(z.array(z.object({ name: z.string(), json: z.string(), presetPrompt: z.string().default('') })).default([])),
+  comfyuiActiveWorkflow: volatile(z.string().default('')),
+  comfyuiWorkflowJson: volatile(z.string().default('')),
+  comfyuiWorkflowName: volatile(z.string().default('')),
+  comfyuiTimeoutMs: volatile(z.number().min(1_000).max(3_600_000).default(DEFAULT_COMFYUI_TIMEOUT_MS)),
+  saveToWorkspace: volatile(z.boolean().default(true)),
+  workspaceFolder: volatile(z.string().default(DEFAULT_WORKSPACE_FOLDER)),
+  showProviderPill: volatile(z.boolean().default(false)),
+}) as unknown as z<Config>
 
 /** Resolve exactly one provider profile for a tool call. */
 export function resolveProvider(config: Config):

@@ -17,6 +17,7 @@ interface ClientHarness {
   slotRegistrations: Array<{ options: Record<string, unknown>; component: unknown }>
   injectedCredentials: () => unknown
   settingsFace: () => { credentials?: unknown; credentialsAvailable?: () => boolean } | undefined
+  legacyBind: ReturnType<typeof vi.fn>
 }
 
 function clientHarness(options: {
@@ -24,6 +25,8 @@ function clientHarness(options: {
   remote: object
   remoteCredentials?: unknown
   uiConversation?: unknown
+  /** Settings service generation the host ships; DSH 0.1.7+: configForms, 0.1.5/0.1.6: settingsScope. */
+  settingsGeneration?: 'configForms' | 'settingsScope' | 'none'
 }): ClientHarness {
   const registrations = new Map<string, () => unknown>()
   const slotInjections: Array<{ name: string; factory: () => unknown }> = []
@@ -56,11 +59,21 @@ function clientHarness(options: {
   ctx.provide('remote', options.remote)
   if (options.remoteCredentials !== undefined) ctx.provide('remote.credentials', options.remoteCredentials)
   if (options.uiConversation !== undefined) ctx.provide('uiConversation', options.uiConversation)
-  ctx.provide('settingsScope', {
-    bind: vi.fn(() => ({ getSnapshot: vi.fn(), subscribe: vi.fn(), set: vi.fn() })),
-  })
+  const legacyBind = vi.fn((options_: { namespace: string }) => ({
+    getSnapshot: vi.fn(() => ({ value: undefined, writable: true })),
+    subscribe: vi.fn(),
+    set: vi.fn(async () => {}),
+  }))
+  const generation = options.settingsGeneration ?? 'configForms'
+  if (generation === 'configForms') {
+    ctx.provide('configForms', {
+      get: vi.fn(() => ({ getSnapshot: vi.fn(() => ({ value: undefined })), subscribe: vi.fn(), set: vi.fn() })),
+    })
+  } else if (generation === 'settingsScope') {
+    ctx.provide('settingsScope', { bind: legacyBind })
+  }
   ctx.provide('locale', {})
-  return { ctx, registrations, slotInjections, slotRegistrations, injectedCredentials: () => credentialsFace, settingsFace: () => face }
+  return { ctx, registrations, slotInjections, slotRegistrations, injectedCredentials: () => credentialsFace, settingsFace: () => face, legacyBind }
 }
 
 afterEach(() => { vi.unstubAllGlobals() })
@@ -98,6 +111,50 @@ describe('DSH client compatibility', () => {
     await fiber.dispose()
   })
 
+  it('binds the legacy settingsScope namespaces on hosts without configForms', async () => {
+    const harness = clientHarness({
+      connection: {},
+      remote: { credentials: { describe: vi.fn(), set: vi.fn() } },
+      settingsGeneration: 'settingsScope',
+    })
+
+    const fiber = harness.ctx.plugin(plugin)
+    await fiber.await()
+
+    // DSH 0.1.5/0.1.6: no configForms service exists, so the plugin must probe
+    // settingsScope and bind both namespaces through it (issue #55 in reverse).
+    expect(fiber.state).toBe(2)
+    expect(harness.legacyBind).toHaveBeenCalledWith({ namespace: 'image-generation' })
+    expect(harness.legacyBind).toHaveBeenCalledWith({ namespace: 'ui-chat' })
+    const injectSettingsCard = harness.registrations.get('settings.plugins.tab')
+    expect(() => injectSettingsCard?.()).not.toThrow()
+
+    await fiber.dispose()
+  })
+
+  it('degrades to a read-only scope when the host has no settings service', async () => {
+    const harness = clientHarness({
+      connection: {},
+      remote: { credentials: { describe: vi.fn(), set: vi.fn() } },
+      settingsGeneration: 'none',
+    })
+
+    const fiber = harness.ctx.plugin(plugin)
+    await fiber.await()
+
+    // Neither generation: the fiber still mounts and the card degrades its
+    // settings UI instead of parking or crashing.
+    expect(fiber.state).toBe(2)
+    expect(harness.legacyBind).not.toHaveBeenCalled()
+    const injectSettingsCard = harness.registrations.get('settings.plugins.tab')
+    expect(() => injectSettingsCard?.()).not.toThrow()
+    const scope = (harness.settingsFace() as unknown as { scope: { getSnapshot(): unknown } }).scope
+    expect(scope.getSnapshot()).toEqual({ value: undefined, writable: false })
+    await expect(scope.set('provider', 'google' as never)).resolves.toBe(false)
+
+    await fiber.dispose()
+  })
+
   it('uses credentials supplied by the latest DSH Remote service', async () => {
     const credentials = { describe: vi.fn(), set: vi.fn() }
     const harness = clientHarness({
@@ -122,7 +179,7 @@ describe('DSH client compatibility', () => {
   })
 
   it('promotes image results only when modern DSH exposes uiConversation events', async () => {
-    const registerEvent = vi.fn(() => vi.fn())
+    const registerEvent = vi.fn((_definition: unknown) => vi.fn())
     const harness = clientHarness({
       connection: {},
       remote: { credentials: { describe: vi.fn(), set: vi.fn() } },
@@ -133,6 +190,15 @@ describe('DSH client compatibility', () => {
     await fiber.await()
 
     expect(registerEvent).toHaveBeenCalledWith(imageResultNodeShape)
+    const definition = registerEvent.mock.calls[0]?.[0] as {
+      buildViewNode(context: unknown): { anchorSeq: number } | null
+    }
+    // The ui-chat form has not loaded in this harness. Keep a finished image
+    // beside the answer until its transcript mode is known.
+    expect(definition.buildViewNode({
+      key: 'image:1', id: '1', matches: [],
+      state: { results: [{ seq: 4 }], answerSeq: 7, endSeq: 8 },
+    })).toMatchObject({ anchorSeq: 7 })
     expect(harness.slotInjections.some(injection => injection.name === 'conversation.chat.node')).toBe(true)
 
     for (const injection of harness.slotInjections.filter(candidate => candidate.name === 'tool.call.toolview')) {
