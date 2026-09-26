@@ -29,6 +29,7 @@ const GRID_GAP = 40
 const GRID_COLS = 3
 
 const mountedCanvases = new Set<() => void>()
+const mountedEditors = new Set<Editor>()
 
 /** Reset canvas-owned data only. Gallery records and host attachments are untouched. */
 export function clearStudioTlCanvases(): boolean {
@@ -36,6 +37,18 @@ export function clearStudioTlCanvases(): boolean {
   clearTlLandings()
   for (const clear of mountedCanvases) clear()
   clearAttachmentCache()
+  return true
+}
+
+/**
+ * Cancel in-editor selection on every mounted canvas, keeping shapes and sync
+ * untouched. Selection is interaction state tied to the surface: leaving the
+ * studio page cancels it so a stale selection can neither resurface on return
+ * nor linger in the host mirror.
+ */
+export function deselectStudioTlCanvases(): boolean {
+  if (mountedEditors.size === 0) return false
+  for (const editor of mountedEditors) editor.run(() => editor.selectNone())
   return true
 }
 
@@ -227,6 +240,10 @@ export const StudioTlCanvas: FC<{ lang?: 'zh' | 'en' }> = memo(function StudioTl
   const retrySync = useRef<() => void>(() => {})
   const onMount = useCallback((editor: Editor) => {
           let active = true
+          // tldraw restores instance state (including the selection) from the
+          // persisted snapshot; every mount starts as fresh interaction state.
+          editor.run(() => editor.selectNone())
+          mountedEditors.add(editor)
           // Re-tint canvas-rendered colors (selection, marquee, "blue"
           // palette) to the plugin brand; UI chrome comes from TL_THEME_CSS.
           applyBrandTheme(editor)
@@ -266,6 +283,7 @@ export const StudioTlCanvas: FC<{ lang?: 'zh' | 'en' }> = memo(function StudioTl
           mountedCanvases.add(clear)
           return () => {
             active = false
+            mountedEditors.delete(editor)
             mountedCanvases.delete(clear)
             stopLanding()
             stopSync()

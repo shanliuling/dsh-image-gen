@@ -35,6 +35,7 @@ import {
   type GalleryItem,
 } from './gallery-store.js'
 import { StudioView } from './studio-view.js'
+import { deselectStudioTlCanvases } from './tl/studio-tl-canvas.js'
 import { InspirationView } from './inspiration-view.js'
 import { evictAttachmentCache, fetchAttachmentBlob } from './image-cache.js'
 import { copyImageBlob, createZipBlob, downloadBlobUrl, type ZipFileInput } from './browser-image-utils.js'
@@ -363,10 +364,16 @@ export interface GalleryViewTabProps {
   defaultTab?: TabKey
   /** Canvas surface the studio opens with; the sidebar variant shows the tldraw infinite canvas directly. */
   initialCanvasSurface?: 'preview' | 'infinite'
+  /**
+   * Sidebar tab visibility reader injected by DSH's `sidebar.right.pane.tab`
+   * seat (absent on hosts that mount this view elsewhere, e.g. the main-area
+   * conversation tab, where the hook is optional).
+   */
+  useTabInfo?: (() => { tab?: { visible?: boolean } }) | undefined
 }
 
 export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
-  const { locale, sessionId, useSessions, useWorkspaces, credentialEvents, inSidebar, defaultTab, initialCanvasSurface } = props
+  const { locale, sessionId, useSessions, useWorkspaces, credentialEvents, inSidebar, defaultTab, initialCanvasSurface, useTabInfo } = props
   const [activeTab, setActiveTab] = useState<TabKey>(defaultTab ?? 'gallery')
   const [studioDraft, setStudioDraft] = useState<string | undefined>(undefined)
   const [items, setItems] = useState<GalleryItem[]>([])
@@ -390,6 +397,15 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
       localStorage.setItem('dsh-ig-only-current-workspace', String(onlyCurrentWorkspace))
     } catch {}
   }, [onlyCurrentWorkspace])
+
+  // Canvas selection is interaction state tied to this surface: leaving the
+  // studio page cancels it so a stale selection can neither resurface on
+  // return nor linger in the host mirror. Only fires on hosts that inject the
+  // sidebar tab hook; the main-area conversation tab passes none.
+  const tabVisible = useTabInfo?.().tab?.visible
+  useEffect(() => {
+    if (tabVisible === false) deselectStudioTlCanvases()
+  }, [tabVisible])
 
   useEffect(() => {
     let mounted = true
