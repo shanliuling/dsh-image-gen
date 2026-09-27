@@ -17,6 +17,8 @@ export interface StudioRouteDeps {
   describe(): Promise<StudioConfigResponse>
   generate(input: StudioGenerateRequest, signal: AbortSignal): Promise<StudioGenerateResponse>
   maxBodyBytes: number
+  /** Heartbeat cadence for the streaming generation response; tests shrink it. */
+  heartbeatMs?: number
 }
 
 /** Serve workbench capabilities and generation requests without exposing provider credentials. */
@@ -67,19 +69,39 @@ export async function serveStudio(req: IncomingMessage, res: ServerResponse, dep
     subscriptionChannel = isSubscriptionProvider(input.provider)
     const timeoutMs = subscriptionChannel ? SUBSCRIPTION_TIMEOUT_MS : CLOUD_WATCHDOG_MS
     setTimeout(() => { watchdog.abort() }, timeoutMs).unref?.()
-    const output = await deps.generate(input, signal)
-    if (!res.headersSent && !res.writableEnded && !res.destroyed) {
-      json(res, 200, output)
+    // Respond with headers immediately and heartbeat newlines while the
+    // provider works: reverse proxies (openresty defaults to 60s) reset
+    // proxy_read_timeout on every upstream byte, so long generations survive
+    // the gateway. JSON parsers skip leading whitespace, and failures after
+    // this point surface as { error } bodies that clients already handle.
+    res.writeHead(200, {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'no-store',
+      'x-accel-buffering': 'no',
+    })
+    const heartbeat = setInterval(() => {
+      if (!res.destroyed && !res.writableEnded) res.write('\n')
+    }, deps.heartbeatMs ?? 15_000)
+    try {
+      try {
+        const output = await deps.generate(input, signal)
+        res.end(JSON.stringify(output))
+      } catch (error) {
+        if (res.destroyed || res.writableEnded) return
+        const message = watchdog.signal.aborted
+          ? subscriptionChannel
+            ? '上游生成超时（订阅通道 300 秒未返回），请稍后重试'
+            : '上游生成超时（150 秒未返回），请检查网络或代理后重试'
+          : errorMessage(error, 'generation-failed')
+        res.end(JSON.stringify({ error: message }))
+      }
+    } finally {
+      clearInterval(heartbeat)
     }
   } catch (error) {
     if (res.headersSent || res.writableEnded || res.destroyed) {
       // Client disconnected prematurely; do not write to closed/destroyed socket
       return
-    }
-    if (watchdog.signal.aborted) {
-      return jsonError(res, 504, subscriptionChannel
-        ? '上游生成超时（订阅通道 300 秒未返回），请稍后重试'
-        : '上游生成超时（150 秒未返回），请检查网络或代理后重试')
     }
     jsonError(res, controller.signal.aborted ? 499 : 502, errorMessage(error, 'generation-failed'))
   } finally {

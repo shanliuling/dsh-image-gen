@@ -1002,3 +1002,71 @@ function stubSubscriptionManager(statuses: Partial<Record<SubscriptionProvider, 
   }
   return manager as unknown as StubSubscriptionManager
 }
+
+describe('streaming generation heartbeat', () => {
+  it('sends headers plus heartbeat newlines while generating, then a parseable JSON body', async () => {
+    const server = createServer()
+    const url = await new Promise<string>((resolve) => {
+      server.listen(0, '127.0.0.1', () => {
+        const addr = server.address() as AddressInfo
+        resolve(`http://127.0.0.1:${addr.port}`)
+      })
+    })
+    try {
+      server.on('request', (req, res) => {
+        void serveStudio(req, res, {
+          describe: async () => ({ providers: [], activeProvider: 'google' }),
+          generate: async () => {
+            await new Promise(resolve => setTimeout(resolve, 120))
+            return {
+              attachment: { attachmentId: 'sha256:x' as any, mediaType: 'image/png' as const, bytes: 1, width: 1, height: 1 },
+              prompt: 'p', provider: 'google', model: DEFAULT_GOOGLE_MODEL, output: '1:1', createdAt: 1,
+            }
+          },
+          maxBodyBytes: 1024 * 1024,
+          heartbeatMs: 30,
+        })
+      })
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 'generate', provider: 'google', model: DEFAULT_GOOGLE_MODEL, prompt: 'lake', ratio: '1:1', quality: '1K' }),
+      })
+      expect(response.headers.get('x-accel-buffering')).toBe('no')
+      const text = await response.text()
+      expect(text.startsWith('\n')).toBe(true)
+      expect('attachment' in (JSON.parse(text) as Record<string, unknown>)).toBe(true)
+    } finally {
+      await new Promise<void>(resolve => server.close(() => resolve()))
+    }
+  })
+
+  it('reports generation failures as { error } bodies after headers are sent', async () => {
+    const server = createServer()
+    const url = await new Promise<string>((resolve) => {
+      server.listen(0, '127.0.0.1', () => {
+        const addr = server.address() as AddressInfo
+        resolve(`http://127.0.0.1:${addr.port}`)
+      })
+    })
+    try {
+      server.on('request', (req, res) => {
+        void serveStudio(req, res, {
+          describe: async () => ({ providers: [], activeProvider: 'google' }),
+          generate: async () => { throw new Error('provider exploded') },
+          maxBodyBytes: 1024 * 1024,
+          heartbeatMs: 30,
+        })
+      })
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 'generate', provider: 'google', model: DEFAULT_GOOGLE_MODEL, prompt: 'lake', ratio: '1:1', quality: '1K' }),
+      })
+      expect(response.status).toBe(200)
+      expect(JSON.parse(await response.text())).toMatchObject({ error: 'provider exploded' })
+    } finally {
+      await new Promise<void>(resolve => server.close(() => resolve()))
+    }
+  })
+})
