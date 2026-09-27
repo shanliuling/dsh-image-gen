@@ -10,7 +10,8 @@ export interface GalleryItem {
   id: string
   attachment: ImageAttachmentRef
   prompt: string
-  provider: ImageProvider
+  /** Generation provider, or 'import' for user-uploaded images. */
+  provider: ImageProvider | 'import'
   model: string
   createdAt: number
   aspectRatio?: string | undefined

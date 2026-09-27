@@ -5,7 +5,7 @@
  */
 import { useCallback, useEffect, useState, useMemo, useRef, type FC, type MouseEvent } from 'react'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import { IMAGE_ROUTE, DELETE_ROUTE, type ImageProvider } from '../shared.js'
+import { IMAGE_ROUTE, DELETE_ROUTE, IMPORT_ROUTE, type ImageProvider } from '../shared.js'
 import {
   Image as ImageIcon,
   SlidersHorizontal,
@@ -22,6 +22,7 @@ import {
   Check,
   AlertTriangle,
   Sparkles,
+  Upload,
 } from 'lucide-react'
 import {
   getGalleryItems,
@@ -71,6 +72,8 @@ const DICT = {
     filterXAI: 'xAI Grok',
     filterZhipu: '智谱 GLM',
     filterComfyUI: '本地 ComfyUI',
+    filterImport: '导入',
+    importImages: '导入图片', importAdded: '已导入 {count} 张图片', importPartial: '导入 {count} 张，{fail} 张失败', importFailed: '导入失败', importPickHint: '选择要导入的图片（PNG/JPG/WebP/GIF）',
     filterAllModels: '全部模型',
     filterAllRatios: '全部比例',
     searchPlaceholder: '搜索 Prompt、标签…',
@@ -180,6 +183,8 @@ const DICT = {
     filterXAI: 'xAI Grok',
     filterZhipu: 'Zhipu GLM',
     filterComfyUI: 'Local ComfyUI',
+    filterImport: 'Imported',
+    importImages: 'Import images', importAdded: 'Imported {count} images', importPartial: 'Imported {count}, {fail} failed', importFailed: 'Import failed', importPickHint: 'Choose images to import (PNG/JPG/WebP/GIF)',
     filterAllModels: 'All Models',
     filterAllRatios: 'All Ratios',
     searchPlaceholder: 'Search prompt, tags…',
@@ -275,6 +280,20 @@ const DICT = {
 export type DictKey = keyof typeof DICT.zh
 
 /** Format human-readable relative time */
+/** Read a browser-picked file as base64 payload for the import route. */
+function readFileBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = reader.result
+      if (typeof result === 'string') resolve(result.slice(result.indexOf(',') + 1))
+      else reject(new Error('read-failed'))
+    }
+    reader.onerror = () => reject(new Error('read-failed'))
+    reader.readAsDataURL(file)
+  })
+}
+
 function formatRelativeTime(
   timestamp: number,
   t: (key: DictKey, params?: Record<string, string>) => string
@@ -515,6 +534,54 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
     setTimeout(() => {
       setToast(null)
     }, 2000)
+  }
+
+  const [importing, setImporting] = useState(false)
+  const importInputRef = useRef<HTMLInputElement | null>(null)
+
+  const importImages = async (files: FileList | null): Promise<void> => {
+    if (files === null || files.length === 0 || importing) return
+    const all = Array.from(files)
+    const picked = all.filter(file => file.type.startsWith('image/')).slice(0, 8)
+    if (picked.length === 0) {
+      showToast(t('importFailed'))
+      return
+    }
+    setImporting(true)
+    try {
+      const images = await Promise.all(picked.map(async file => ({
+        data: await readFileBase64(file),
+        mediaType: file.type,
+        ...(file.name.length > 0 ? { name: file.name } : {}),
+      })))
+      const response = await fetch(IMPORT_ROUTE, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ images }),
+      })
+      if (!response.ok) throw new Error(`HTTP ${String(response.status)}`)
+      const payload = await response.json() as { images?: { attachment: ImageAttachmentRef }[]; failures?: unknown[] }
+      const saved = payload.images ?? []
+      for (const entry of saved) {
+        await saveGalleryItem({
+          id: entry.attachment.attachmentId,
+          attachment: entry.attachment,
+          prompt: '',
+          provider: 'import',
+          model: '',
+          createdAt: Date.now(),
+        })
+      }
+      const failCount = (payload.failures ?? []).length + (all.length - picked.length)
+      if (saved.length === 0) showToast(t('importFailed'))
+      else if (failCount > 0) showToast(t('importPartial', { count: String(saved.length), fail: String(failCount) }))
+      else showToast(t('importAdded', { count: String(saved.length) }))
+    } catch {
+      showToast(t('importFailed'))
+    } finally {
+      setImporting(false)
+    }
   }
 
   const useInspirationPrompt = useCallback((prompt: string) => {
@@ -1219,6 +1286,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
               <option value="xai">{t('filterXAI')}</option>
               <option value="zhipu">{t('filterZhipu')}</option>
               <option value="comfyui">{t('filterComfyUI')}</option>
+              <option value="import">{t('filterImport')}</option>
             </select>
 
             {/* Ratio Filter */}
@@ -1265,6 +1333,32 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
           </div>
 
           <div className="dsh-ig-studio-toolbar-right">
+            {activeTab === 'gallery' && (
+              <>
+                <input
+                  ref={importInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  multiple
+                  style={{ display: 'none' }}
+                  onChange={event => {
+                    void importImages(event.target.files)
+                    event.target.value = ''
+                  }}
+                />
+                <button
+                  type="button"
+                  className="dsh-ig-studio-btn"
+                  disabled={importing}
+                  title={t('importPickHint')}
+                  onClick={() => importInputRef.current?.click()}
+                >
+                  <Upload size={13} />
+                  <span>{t('importImages')}</span>
+                </button>
+              </>
+            )}
+
             {/* Sort Dropdown */}
             <select
               className="dsh-ig-studio-select dsh-ig-studio-select-sort"
@@ -1522,7 +1616,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
               <div className="dsh-ig-regenerate-modal-title-wrap">
                 <div className="dsh-ig-modal-title">{t('regenerateTitle')}</div>
                 <div className="dsh-ig-regenerate-modal-meta">
-                  <span className="dsh-ig-tag">{previewItem.provider}</span>
+                  <span className="dsh-ig-tag">{previewItem.provider === 'import' ? t('filterImport') : previewItem.provider}</span>
                   {previewItem.model && <span className="dsh-ig-tag dsh-ig-tag-model">{previewItem.model}</span>}
                   <span className="dsh-ig-tag">{formatCardMeta(previewItem)}</span>
                 </div>
@@ -1575,7 +1669,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="dsh-ig-lightbox-meta">
-              <span className="dsh-ig-tag">{previewItem.provider}</span>
+              <span className="dsh-ig-tag">{previewItem.provider === 'import' ? t('filterImport') : previewItem.provider}</span>
               {previewItem.model ? (
                 <span className="dsh-ig-tag dsh-ig-tag-model">{previewItem.model}</span>
               ) : null}

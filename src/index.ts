@@ -15,11 +15,12 @@ import { editComfyUIImage, generateComfyUIImage } from './comfyui.js'
 import { editDashScopeImage, generateDashScopeImage } from './dashscope.js'
 import { editGoogleImage, generateGoogleImage } from './google.js'
 import { IMAGE_ROUTE, DELETE_ROUTE, SAVE_WORKSPACE_ROUTE, imageAttachmentFromMeta, serveImage, serveDelete, serveSaveWorkspace } from './image-route.js'
+import { serveImport } from './import-route.js'
 import { editOpenAICompatibleImage, generateOpenAICompatibleImage } from './openai-compatible.js'
 import { type ResolvedReferenceImage, resolveReferenceImages } from './reference-image.js'
 import { editSeedreamImage } from './seedream.js'
 import { generateSubscriptionImage, registerSubscriptionRoutes, SubscriptionManager } from './subscription.js'
-import { CANVAS_STATE_ROUTE, IMAGE_GENERATION_NAMESPACE, IMAGE_PROVIDERS, INSPIRATION_ROUTE, STUDIO_ROUTE, TEST_CONNECTION_ROUTE, mergeComfyUIPrompt, type ImageProvider } from './shared.js'
+import { CANVAS_STATE_ROUTE, IMAGE_GENERATION_NAMESPACE, IMAGE_PROVIDERS, IMPORT_ROUTE, INSPIRATION_ROUTE, STUDIO_ROUTE, TEST_CONNECTION_ROUTE, mergeComfyUIPrompt, type ImageProvider } from './shared.js'
 import { createInspirationRoute } from './inspiration-route.js'
 import { generateFromStudio, describeStudio } from './studio.js'
 import { serveStudio } from './studio-route.js'
@@ -28,6 +29,7 @@ import { deleteImageFromWorkspace, getDshWorkspaceRoots, getDshWorkspacesFull, s
 
 export { Config } from './config.js'
 export { IMAGE_ROUTE, DELETE_ROUTE, SAVE_WORKSPACE_ROUTE, imageAttachmentFromMeta } from './image-route.js'
+export { IMPORT_ROUTE } from './shared.js'
 export { STUDIO_ROUTE } from './shared.js'
 export { INSPIRATION_ROUTE } from './shared.js'
 export { TEST_CONNECTION_ROUTE } from './shared.js'
@@ -92,6 +94,14 @@ export function apply(ctx: Context, config: Config = {}): void {
     kind: 'exact', path: IMAGE_ROUTE,
     handler: (req, res) => serveImage(req, res, { readImage: ref => ctx.attachments.readImage(ref) }),
   }), 'dsh-image-gen: image route')
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact', path: IMPORT_ROUTE,
+    handler: (req, res) => serveImport(req, res, {
+      saveImage: image => ctx.attachments.saveImage(image),
+      maxImageBytes: ctx.attachments.imageLimits.maxImageBytes,
+      mediaTypes: ctx.attachments.imageLimits.mediaTypes,
+    }),
+  }), 'dsh-image-gen: import route')
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact', path: DELETE_ROUTE,
     handler: (req, res) => serveDelete(req, res, {

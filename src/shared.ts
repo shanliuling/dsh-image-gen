@@ -3,6 +3,8 @@ import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attach
 
 /** Browser route used by the generated-image card. */
 export const IMAGE_ROUTE = '/plugins/dsh-image-gen/image'
+/** Browser route that uploads user-picked images as DSH attachments. */
+export const IMPORT_ROUTE = '/plugins/dsh-image-gen/import'
 /** Browser route used for deleting generated images and workspace files. */
 export const DELETE_ROUTE = '/plugins/dsh-image-gen/delete'
 /** Same-origin route used by the browser image workbench. */
