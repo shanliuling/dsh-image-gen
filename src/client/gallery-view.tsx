@@ -549,11 +549,17 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
     }
     setImporting(true)
     try {
-      const images = await Promise.all(picked.map(async file => ({
-        data: await readFileBase64(file),
-        mediaType: file.type,
-        ...(file.name.length > 0 ? { name: file.name } : {}),
-      })))
+      const reads = await Promise.allSettled(picked.map(file => readFileBase64(file)))
+      const images = reads.flatMap((read, index) => {
+        if (read.status !== 'fulfilled') return []
+        const file = picked[index]!
+        return [{ data: read.value, mediaType: file.type, ...(file.name.length > 0 ? { name: file.name } : {}) }]
+      })
+      const readFailures = reads.length - images.length
+      if (images.length === 0) {
+        showToast(t('importFailed'))
+        return
+      }
       const response = await fetch(IMPORT_ROUTE, {
         method: 'POST',
         credentials: 'same-origin',
@@ -562,21 +568,30 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
       })
       if (!response.ok) throw new Error(`HTTP ${String(response.status)}`)
       const payload = await response.json() as { images?: { attachment: ImageAttachmentRef }[]; failures?: unknown[] }
-      const saved = payload.images ?? []
-      for (const entry of saved) {
-        await saveGalleryItem({
-          id: entry.attachment.attachmentId,
+      const imported = payload.images ?? []
+      let added = 0
+      let writeFailures = 0
+      for (const entry of imported) {
+        // The attachment id is content-addressed, so re-importing bytes that
+        // already exist must not overwrite or alias the original gallery entry.
+        const persisted = await saveGalleryItem({
+          id: `import-${entry.attachment.attachmentId}-${crypto.randomUUID()}`,
           attachment: entry.attachment,
           prompt: '',
           provider: 'import',
           model: '',
           createdAt: Date.now(),
+          ...(activeWorkspace?.workspaceId ? { workspaceId: activeWorkspace.workspaceId } : {}),
+          ...(activeWorkspace?.path ? { workspacePath: activeWorkspace.path } : {}),
+          ...(currentSessionId ? { sessionId: currentSessionId } : {}),
         })
+        if (persisted) added += 1
+        else writeFailures += 1
       }
-      const failCount = (payload.failures ?? []).length + (all.length - picked.length)
-      if (saved.length === 0) showToast(t('importFailed'))
-      else if (failCount > 0) showToast(t('importPartial', { count: String(saved.length), fail: String(failCount) }))
-      else showToast(t('importAdded', { count: String(saved.length) }))
+      const failCount = (payload.failures ?? []).length + (all.length - picked.length) + readFailures + writeFailures
+      if (added === 0) showToast(t('importFailed'))
+      else if (failCount > 0) showToast(t('importPartial', { count: String(added), fail: String(failCount) }))
+      else showToast(t('importAdded', { count: String(added) }))
     } catch {
       showToast(t('importFailed'))
     } finally {

@@ -19,6 +19,8 @@ interface ImportRequestItem {
 
 const MAX_IMAGES_PER_REQUEST = 8
 
+const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/
+
 /** base64 inflates bytes by 4/3; allow one full batch plus JSON overhead. */
 function bodyLimit(maxImageBytes: number): number {
   return MAX_IMAGES_PER_REQUEST * Math.ceil(maxImageBytes * 1.4) + 4096
@@ -38,15 +40,15 @@ export async function serveImport(req: IncomingMessage, res: ServerResponse, dep
   } catch {
     return jsonError(res, 400, 'invalid-request')
   }
-  const images = (body as { images?: unknown }).images
+  const images = typeof body === 'object' && body !== null ? (body as { images?: unknown }).images : undefined
   if (!Array.isArray(images) || images.length === 0 || images.length > MAX_IMAGES_PER_REQUEST) {
     return jsonError(res, 400, 'invalid-image-count')
   }
   const saved: { attachment: ImageAttachmentRef }[] = []
   const failures: { index: number; error: string }[] = []
   for (const [index, item] of images.entries()) {
-    const record = item as Partial<ImportRequestItem>
-    if (typeof record.data !== 'string' || typeof record.mediaType !== 'string') {
+    const record = typeof item === 'object' && item !== null ? item as Partial<ImportRequestItem> : undefined
+    if (record === undefined || typeof record.data !== 'string' || typeof record.mediaType !== 'string') {
       failures.push({ index, error: 'invalid-item' })
       continue
     }
@@ -54,13 +56,13 @@ export async function serveImport(req: IncomingMessage, res: ServerResponse, dep
       failures.push({ index, error: `unsupported-media-type: ${record.mediaType}` })
       continue
     }
-    let bytes: Buffer
-    try {
-      bytes = Buffer.from(record.data, 'base64')
-    } catch {
+    // Buffer.from silently skips characters outside the base64 alphabet, so the
+    // encoded text is validated up front instead of relying on decode failures.
+    if (!BASE64_PATTERN.test(record.data)) {
       failures.push({ index, error: 'invalid-base64' })
       continue
     }
+    const bytes = Buffer.from(record.data, 'base64')
     if (bytes.byteLength === 0 || bytes.byteLength > deps.maxImageBytes) {
       failures.push({ index, error: `size-out-of-range (max ${String(deps.maxImageBytes)} bytes)` })
       continue

@@ -148,6 +148,29 @@ describe('import route', () => {
     expect((payload as { failures: { index: number; error: string }[] }).failures).toEqual([{ index: 0, error: 'disk-full' }])
   })
 
+  it('rejects null JSON bodies without throwing', async () => {
+    await listen()
+    const { status, payload } = await post('null')
+    expect(status).toBe(400)
+    expect(payload).toEqual({ error: 'invalid-image-count' })
+  })
+
+  it('reports null image items as indexed failures', async () => {
+    await listen()
+    const { status, payload } = await post({ images: [null, { data: PNG_BASE64, mediaType: 'image/png' }] })
+    expect(status).toBe(200)
+    const result = payload as { images: unknown[]; failures: { index: number; error: string }[] }
+    expect(result.images).toHaveLength(1)
+    expect(result.failures).toEqual([{ index: 0, error: 'invalid-item' }])
+  })
+
+  it('rejects base64 payloads containing characters outside the alphabet', async () => {
+    await listen()
+    const { status, payload } = await post({ images: [{ data: `${PNG_BASE64}!`, mediaType: 'image/png' }] })
+    expect(status).toBe(200)
+    expect((payload as { failures: { index: number; error: string }[] }).failures).toEqual([{ index: 0, error: 'invalid-base64' }])
+  })
+
   it('rejects request bodies above the batch limit', async () => {
     await listen()
     const { status, payload } = await post(JSON.stringify({ images: [{ data: 'A'.repeat(64 * 1024), mediaType: 'image/png' }] }))
