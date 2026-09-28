@@ -140,12 +140,12 @@ describe('import route', () => {
     expect(result.failures[3].error).toContain('size-out-of-range')
   })
 
-  it('surfaces saveImage errors as per-image failures', async () => {
+  it('reports saveImage errors as a stable code without leaking details', async () => {
     await listen()
-    failNextSave = new Error('disk-full')
+    failNextSave = new Error('disk-full /var/lib/postgresql/pgdata volume 7f3a')
     const { status, payload } = await post({ images: [{ data: PNG_BASE64, mediaType: 'image/png' }] })
     expect(status).toBe(200)
-    expect((payload as { failures: { index: number; error: string }[] }).failures).toEqual([{ index: 0, error: 'disk-full' }])
+    expect((payload as { failures: { index: number; error: string }[] }).failures).toEqual([{ index: 0, error: 'save-failed' }])
   })
 
   it('rejects null JSON bodies without throwing', async () => {

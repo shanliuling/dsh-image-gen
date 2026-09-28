@@ -74,8 +74,10 @@ export async function serveImport(req: IncomingMessage, res: ServerResponse, dep
         ...(typeof record.name === 'string' && record.name.length > 0 ? { name: record.name } : {}),
       })
       saved.push({ attachment })
-    } catch (error) {
-      failures.push({ index, error: error instanceof Error ? error.message : String(error) })
+    } catch {
+      // Host save errors may carry internal details; surface a stable code
+      // instead, matching the canvas upload route's generic failure answer.
+      failures.push({ index, error: 'save-failed' })
     }
   }
   res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
