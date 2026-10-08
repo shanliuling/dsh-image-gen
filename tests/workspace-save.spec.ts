@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -380,9 +380,10 @@ describe('assertWorkspaceAllowed security gate', () => {
       const sub = join(dir, 'nested')
       await mkdir(sub)
       const matchedRoot = await assertWorkspaceAllowed(dir, [dir])
-      expect(matchedRoot.toLowerCase()).toBe(dir.toLowerCase())
+      // Windows runner temp paths can use 8.3 names; the contract returns realpath.
+      expect(matchedRoot).toBe(await realpath(dir))
       const matchedSub = await assertWorkspaceAllowed(sub, [dir])
-      expect(matchedSub.toLowerCase()).toBe(sub.toLowerCase())
+      expect(matchedSub).toBe(await realpath(sub))
     } finally {
       await rm(dir, { recursive: true, force: true }).catch(() => {})
     }
