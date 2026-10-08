@@ -4,10 +4,9 @@ import './tl/css-supports-shim.js'
 import { useEffect, useState, useRef, type ChangeEvent, type FormEvent } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-export interface SettingsScopeSnapshot<T> {
-  value: T | undefined
-  writable: boolean
-}
+import { fetchSettingsHealth, settingsState, type SettingsScopeSnapshot, type SettingsState } from './settings-state.js'
+import type { SettingsHealth } from '../shared.js'
+export type { SettingsScopeSnapshot } from './settings-state.js'
 export interface SettingsScope<T> {
   getSnapshot(): SettingsScopeSnapshot<T>
   subscribe(listener: () => void): () => void
@@ -187,6 +186,10 @@ const DICT = {
     defaultProvider: '默认 Provider',
     defaultProviderHint: 'Agent 生图默认使用；Studio 与工具调用可临时指定其他 Provider。',
     settingsReadOnly: '设置由配置文件提供，只读；如需修改请编辑对应的配置来源。',
+    settingsLoading: '正在加载图像生成设置，请稍候。',
+    settingsRemote: '当前连接不支持保存到宿主，请在 DSH 本机页面修改设置。',
+    settingsUnavailable: '宿主尚未提供图像生成设置，请检查插件是否已启用及其加载日志。',
+    settingsIncompatible: '当前加载的设置库不支持保存。请将插件所在环境的 @deepseek-ai/schemastery 更新到 3.18.4 或兼容的 3.x 版本，并重启 DSH。',
     providerGoogle: 'Google Gemini',
     providerOpenAI: 'OpenAI',
     providerOpenAICompat: 'OpenAI 兼容（中转站）',
@@ -336,6 +339,10 @@ const DICT = {
     defaultProvider: 'Default provider',
     defaultProviderHint: 'Used by the Agent by default; the Studio and tool calls can switch per call.',
     settingsReadOnly: 'Settings come from a profile file and are read-only; edit that source to change them.',
+    settingsLoading: 'Settings are loading; please wait.',
+    settingsRemote: 'This connection cannot save settings to the host. Edit them from the local DSH page.',
+    settingsUnavailable: 'The host has not provided image generation settings. Check that the plugin is enabled and review its load logs.',
+    settingsIncompatible: 'The loaded settings library cannot save these settings. Update @deepseek-ai/schemastery in the plugin environment to 3.18.4 or a compatible 3.x version, then restart DSH.',
     providerGoogle: 'Google Gemini',
     providerOpenAI: 'OpenAI',
     providerOpenAICompat: 'OpenAI-compatible (relay)',
@@ -798,7 +805,7 @@ interface SettingsScopeApi {
 /** Host with neither settings generation: reads empty, writes refuse, never throws. */
 function degradedScope<T>(): SettingsScope<T> {
   return {
-    getSnapshot: () => ({ value: undefined, writable: false }),
+    getSnapshot: () => ({ value: undefined, writable: false, status: 'unavailable' }),
     subscribe: () => () => {},
     set: async () => false,
   }
@@ -1235,6 +1242,9 @@ function rowsFromSettings(value: ImageSettings | undefined): Record<Provider, Pr
 export function ImageGenerationSettingsCard(props: SettingsCardProps) {
   const [open, setOpen] = useState(false)
   const [snapshot, setSnapshot] = useState(() => props.scope.getSnapshot())
+  const [health, setHealth] = useState<SettingsHealth>()
+  const state = settingsState(snapshot, health)
+  const settingsWritable = state === 'ready'
   const [lang, setLang] = useState(() => (props.locale?.getSnapshot?.()?.active?.startsWith('en') ? 'en' : 'zh'))
   const [defaultProvider, setDefaultProvider] = useState<Provider>(() => props.scope.getSnapshot().value?.provider ?? 'google')
   const [providerMessage, setProviderMessage] = useState('')
@@ -1260,7 +1270,22 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
   // the badge flips without closing and reopening the settings card.
   const [subPending, setSubPending] = useState<Array<{ provider: SubscriptionProvider; startedAt: number }>>([])
 
-  useEffect(() => props.scope.subscribe(() => { setSnapshot(props.scope.getSnapshot()) }), [props.scope])
+  useEffect(() => {
+    const sync = (): void => { setSnapshot(props.scope.getSnapshot()) }
+    const unsubscribe = props.scope.subscribe(sync)
+    // The host may accept its first view between render and subscription.
+    // Re-read after subscribing so the card cannot stay in a stale loading state.
+    sync()
+    return unsubscribe
+  }, [props.scope])
+  useEffect(() => {
+    if (!open || snapshot.mode === 'memory') return undefined
+    const controller = new AbortController()
+    void fetchSettingsHealth(controller.signal).then(value => {
+      if (!controller.signal.aborted) setHealth(value)
+    })
+    return () => { controller.abort() }
+  }, [open, snapshot.status, snapshot.mode])
   useEffect(() => {
     return props.locale?.subscribe?.(() => {
       setLang(props.locale?.getSnapshot?.()?.active?.startsWith('en') ? 'en' : 'zh')
@@ -1384,8 +1409,15 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
     }
     return text
   }
-  const saveSetting = (field: string, value: unknown): Promise<void> =>
-    writeSetting(props.scope, field, value, t('settingsWriteRejected'))
+  const stateMessages = {
+    loading: 'settingsLoading', remote: 'settingsRemote', unavailable: 'settingsUnavailable',
+    readOnly: 'settingsReadOnly', incompatible: 'settingsIncompatible',
+  } as const satisfies Record<Exclude<SettingsState, 'ready'>, DictKey>
+  const settingsMessage = state === 'ready' ? undefined : t(stateMessages[state])
+  const saveSetting = async (field: string, value: unknown): Promise<void> => {
+    if (settingsMessage !== undefined) throw new Error(settingsMessage)
+    await writeSetting(props.scope, field, value, t('settingsWriteRejected'))
+  }
 
   const providerLabels: Record<Provider, string> = {
     google: t('providerGoogle'),
@@ -1764,7 +1796,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
               value={row.keyInput}
               onChange={event => { updateRow(provider, { keyInput: event.target.value }) }}
               placeholder={row.keyStatus === 'configured' ? t('apiKeyPlaceholder') : ''}
-              disabled={!snapshot.writable || keyReadOnly || keyUnavailable}
+              disabled={!settingsWritable || keyReadOnly || keyUnavailable}
             />
             <span className="dsh-ig-hint">
               {keyUnavailable ? t('credentialsUnavailable')
@@ -1775,9 +1807,9 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
           <label className="dsh-ig-field">
             <span className="dsh-ig-label">{t('endpoint')}</span>
             <div className="dsh-ig-input-group">
-              <input className="dsh-ig-input" type="url" value={row.baseURL} onChange={event => { updateRow(provider, { baseURL: event.target.value }) }} required disabled={!snapshot.writable} />
+              <input className="dsh-ig-input" type="url" value={row.baseURL} onChange={event => { updateRow(provider, { baseURL: event.target.value }) }} required disabled={!settingsWritable} />
               {provider !== 'openai-compat' ? (
-                <button type="button" className="dsh-ig-btn-reset" title={t('resetTitle')} onClick={() => { updateRow(provider, { baseURL: DEFAULT_BASE_URLS[provider] }) }} disabled={!snapshot.writable}>{t('reset')}</button>
+                <button type="button" className="dsh-ig-btn-reset" title={t('resetTitle')} onClick={() => { updateRow(provider, { baseURL: DEFAULT_BASE_URLS[provider] }) }} disabled={!settingsWritable}>{t('reset')}</button>
               ) : null}
             </div>
             <span className="dsh-ig-hint">{t(CLOUD_HINT_KEYS[provider])}</span>
@@ -1792,7 +1824,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
                   onChange={event => { updateRow(provider, { model: event.target.value }) }}
                   list={`dsh-ig-${provider}-model-options`}
                   required={provider !== 'openai-compat'}
-                  disabled={!snapshot.writable}
+                  disabled={!settingsWritable}
                 />
                 <datalist id={`dsh-ig-${provider}-model-options`}>
                   {row.modelOptions.map(id => <option key={id} value={id} />)}
@@ -1800,12 +1832,12 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
                 <button
                   type="button"
                   className="dsh-ig-btn-secondary"
-                  disabled={row.fetchingModels || row.saving || !snapshot.writable}
+                  disabled={row.fetchingModels || row.saving || !settingsWritable}
                   onClick={() => { void fetchProviderModels(provider) }}
                 >{row.fetchingModels ? t('fetchingModels') : t('fetchModels')}</button>
               </div>
             ) : (
-              <input className="dsh-ig-input" value={row.model} onChange={event => { updateRow(provider, { model: event.target.value }) }} required disabled={!snapshot.writable} />
+              <input className="dsh-ig-input" value={row.model} onChange={event => { updateRow(provider, { model: event.target.value }) }} required disabled={!settingsWritable} />
             )}
             {modelPullSupported(provider) ? (
               row.modelFetchMessage.length > 0 ? (
@@ -1822,7 +1854,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
                 className="dsh-ig-input"
                 value={row.editFormat}
                 onChange={event => { updateRow(provider, { editFormat: parseEditFormat(event.target.value) }) }}
-                disabled={!snapshot.writable}
+                disabled={!settingsWritable}
               >
                 <option value="multipart">{t('editFormatMultipart')}</option>
                 <option value="jsonImageUrlArray">{t('editFormatJsonImageUrlArray')}</option>
@@ -1839,7 +1871,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
                   className="dsh-ig-input"
                   value={row.outputFormat}
                   onChange={event => { updateRow(provider, { outputFormat: event.target.value === 'png' ? 'png' : 'jpeg' }) }}
-                  disabled={!snapshot.writable}
+                  disabled={!settingsWritable}
                 >
                   <option value="jpeg">{t('arkOutputFormatJpeg')}</option>
                   <option value="png">{t('arkOutputFormatPng')}</option>
@@ -1852,7 +1884,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
                   className="dsh-ig-input"
                   value={row.watermark ? 'on' : 'off'}
                   onChange={event => { updateRow(provider, { watermark: event.target.value === 'on' }) }}
-                  disabled={!snapshot.writable}
+                  disabled={!settingsWritable}
                 >
                   <option value="on">{t('arkWatermarkOn')}</option>
                   <option value="off">{t('arkWatermarkOff')}</option>
@@ -1865,7 +1897,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
                   className="dsh-ig-input"
                   value={row.background}
                   onChange={event => { updateRow(provider, { background: event.target.value === 'transparent' ? 'transparent' : 'opaque' }) }}
-                  disabled={!snapshot.writable}
+                  disabled={!settingsWritable}
                 >
                   <option value="opaque">{t('arkBackgroundOpaque')}</option>
                   <option value="transparent">{t('arkBackgroundTransparent')}</option>
@@ -1883,7 +1915,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
                 onChange={event => { updateRow(provider, { editExtraText: event.target.value }) }}
                 placeholder={t('editExtraPlaceholder')}
                 rows={2}
-                disabled={!snapshot.writable}
+                disabled={!settingsWritable}
               />
               <span className="dsh-ig-hint">{t('editExtraHint')}</span>
             </label>
@@ -1895,7 +1927,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
               {row.keyStatus === 'configured' && !keyReadOnly ? (
                 <button type="button" className="dsh-ig-btn-secondary dsh-ig-btn-danger" disabled={row.saving} onClick={() => { void clearProviderKey(provider) }}>{t('clearKey')}</button>
               ) : null}
-              <button className="dsh-ig-save" type="submit" disabled={row.saving || row.testing || row.fetchingModels || !snapshot.writable}>{row.saving ? t('saving') : t('save')}</button>
+              <button className="dsh-ig-save" type="submit" disabled={row.saving || row.testing || row.fetchingModels || !settingsWritable}>{row.saving ? t('saving') : t('save')}</button>
             </span>
           </div>
         </form>
@@ -1911,8 +1943,8 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
           <label className="dsh-ig-field">
             <span className="dsh-ig-label">{t('endpoint')}</span>
             <div className="dsh-ig-input-group">
-              <input className="dsh-ig-input" type="url" value={row.baseURL} onChange={event => { updateRow('comfyui', { baseURL: event.target.value }) }} required disabled={!snapshot.writable} />
-              <button type="button" className="dsh-ig-btn-reset" title={t('resetTitle')} onClick={() => { updateRow('comfyui', { baseURL: DEFAULT_BASE_URLS.comfyui }) }} disabled={!snapshot.writable}>{t('reset')}</button>
+              <input className="dsh-ig-input" type="url" value={row.baseURL} onChange={event => { updateRow('comfyui', { baseURL: event.target.value }) }} required disabled={!settingsWritable} />
+              <button type="button" className="dsh-ig-btn-reset" title={t('resetTitle')} onClick={() => { updateRow('comfyui', { baseURL: DEFAULT_BASE_URLS.comfyui }) }} disabled={!settingsWritable}>{t('reset')}</button>
             </div>
             <span className="dsh-ig-hint">{t('endpointHintComfyUI')}</span>
           </label>
@@ -1962,14 +1994,14 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
           </div>
           <label className="dsh-ig-field">
             <span className="dsh-ig-label">{t('timeout')}</span>
-            <input className="dsh-ig-input" type="number" min="1" max="3600" step="1" value={row.timeoutSeconds} onChange={event => { updateRow('comfyui', { timeoutSeconds: Number(event.target.value) }) }} required disabled={!snapshot.writable} />
+            <input className="dsh-ig-input" type="number" min="1" max="3600" step="1" value={row.timeoutSeconds} onChange={event => { updateRow('comfyui', { timeoutSeconds: Number(event.target.value) }) }} required disabled={!settingsWritable} />
             <span className="dsh-ig-hint">{t('timeoutHint')}</span>
           </label>
           <div className="dsh-ig-row-actions">
             <p className={`dsh-ig-status${row.messageIsError ? ' dsh-ig-status-error' : ''}`} role="status">{row.message || testResultText(row.testResult)}</p>
             <span className="dsh-ig-row-buttons">
               <button type="button" className="dsh-ig-btn-secondary" disabled={row.testing} onClick={() => { void testConnection('comfyui') }}>{row.testing ? t('testing') : t('testConnection')}</button>
-              <button className="dsh-ig-save" type="submit" disabled={row.saving || !snapshot.writable || row.workflows.length === 0}>{row.saving ? t('saving') : t('save')}</button>
+              <button className="dsh-ig-save" type="submit" disabled={row.saving || !settingsWritable || row.workflows.length === 0}>{row.saving ? t('saving') : t('save')}</button>
             </span>
           </div>
         </form>
@@ -2013,7 +2045,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
             <p className={`dsh-ig-status${row.messageIsError ? ' dsh-ig-status-error' : ''}`} role="status">{row.message || testResultText(row.testResult)}</p>
             <span className="dsh-ig-row-buttons">
               <button type="button" className="dsh-ig-btn-secondary" disabled={row.testing} onClick={() => { void testConnection(provider); setSubTick(tick => tick + 1) }}>{row.testing ? t('testing') : t('testConnection')}</button>
-              <button className="dsh-ig-save" type="submit" disabled={row.saving || !snapshot.writable}>{row.saving ? t('saving') : t('save')}</button>
+              <button className="dsh-ig-save" type="submit" disabled={row.saving || !settingsWritable}>{row.saving ? t('saving') : t('save')}</button>
             </span>
           </div>
         </form>
@@ -2051,7 +2083,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
       </button>
       {open ? (
         <div className="dsh-ig-body">
-          {!snapshot.writable ? <p className="dsh-ig-status dsh-ig-status-readonly" role="note">{t('settingsReadOnly')}</p> : null}
+          {settingsMessage !== undefined ? <p className="dsh-ig-status dsh-ig-status-readonly" role="note">{settingsMessage}</p> : null}
           <div className="dsh-ig-field">
             <span className="dsh-ig-label">{t('defaultProvider')}</span>
             <div className="dsh-ig-radios" role="radiogroup" aria-label={t('defaultProvider')}>
@@ -2062,7 +2094,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
                     name="dsh-ig-default-provider"
                     checked={defaultProvider === provider}
                     onChange={() => { selectDefaultProvider(provider) }}
-                    disabled={!snapshot.writable}
+                    disabled={!settingsWritable}
                   />
                   {providerLabels[provider]}
                 </label>
@@ -2078,7 +2110,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
             <span className="dsh-ig-section-title">{t('workspaceSection')}</span>
             <div className="dsh-ig-field">
               <label className="dsh-ig-check-row">
-                <input type="checkbox" checked={saveToWorkspace} onChange={event => { toggleSaveToWorkspace(event.target.checked) }} disabled={!snapshot.writable} />
+                <input type="checkbox" checked={saveToWorkspace} onChange={event => { toggleSaveToWorkspace(event.target.checked) }} disabled={!settingsWritable} />
                 <span className="dsh-ig-label">{t('saveToWorkspace')}</span>
               </label>
               <span className="dsh-ig-hint">{t('saveToWorkspaceHint')}</span>
@@ -2093,7 +2125,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
                   onBlur={() => { commitWorkspaceFolder() }}
                   onKeyDown={event => { if (event.key === 'Enter') commitWorkspaceFolder() }}
                   placeholder="dsh-image-gen"
-                  disabled={!snapshot.writable}
+                  disabled={!settingsWritable}
                 />
                 <span className="dsh-ig-hint">{t('folderHint')}</span>
               </label>
@@ -2108,7 +2140,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
                   type="checkbox"
                   checked={showPill}
                   onChange={event => { toggleShowPill(event.target.checked) }}
-                  disabled={!snapshot.writable}
+                  disabled={!settingsWritable}
                 />
                 <span className="dsh-ig-label">{t('showPill')}</span>
               </label>

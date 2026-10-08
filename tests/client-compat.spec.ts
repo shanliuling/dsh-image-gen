@@ -176,7 +176,7 @@ describe('DSH client compatibility', () => {
     const injectSettingsCard = harness.registrations.get('settings.plugins.tab')
     expect(() => injectSettingsCard?.()).not.toThrow()
     const scope = (harness.settingsFace() as unknown as { scope: { getSnapshot(): unknown } }).scope
-    expect(scope.getSnapshot()).toEqual({ value: undefined, writable: false })
+    expect(scope.getSnapshot()).toEqual({ value: undefined, writable: false, status: 'unavailable' })
     await expect(scope.set('provider', 'google' as never)).resolves.toBe(false)
 
     await fiber.dispose()

@@ -15,6 +15,13 @@ export const INSPIRATION_ROUTE = '/plugins/dsh-image-gen/inspiration'
 export const SAVE_WORKSPACE_ROUTE = '/plugins/dsh-image-gen/save-workspace'
 /** Browser route the settings card probes provider connectivity through. */
 export const TEST_CONNECTION_ROUTE = '/plugins/dsh-image-gen/test'
+/** Non-secret settings capability probe, available even when the host cannot serve a form. */
+export const SETTINGS_HEALTH_ROUTE = '/plugins/dsh-image-gen/settings-health'
+
+export interface SettingsHealth {
+  settings: 'unavailable' | 'legacy' | 'live'
+  liveSchema: boolean
+}
 /** Browser route the workbench infinite canvas pushes live state through. */
 export const CANVAS_STATE_ROUTE = '/plugins/dsh-image-gen/canvas-state'
 /** Upload a selected canvas original to the host attachment store. */

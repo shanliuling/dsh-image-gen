@@ -401,7 +401,12 @@ pnpm run typecheck
 pnpm test
 pnpm run build
 pnpm run pack:check
+pnpm run test:package
 ```
+
+新 DSH 的设置保存需要实际加载的 `@deepseek-ai/schemastery >=3.18.4 <4`。设置卡会区分加载中、宿主未提供设置、远程连接不可保存及依赖不兼容；旧 DSH 的设置接口仍保留。更新依赖时应检查插件所在 profile 的实际依赖，而不只检查源码目录。
+
+`test:package` 需要网络，会在临时目录安装当前构建的插件 tarball 和指定版本的 DSH 0.2 设置服务，通过真实 React 渲染验证卡片状态和保存处理、配置文件写入、重新打开表单和宿主重启后的读取，并验证旧 schemastery 的明确拒绝提示。图片 API、浏览器 DOM 和 RPC 传输不属于此测试；CI 同时在 Windows 和 Linux 执行。
 
 欢迎通过 [Issues](https://github.com/shanliuling/dsh-image-gen/issues) 反馈问题，或阅读 [CONTRIBUTING.md](CONTRIBUTING.md) 后提交 Pull Request。
 

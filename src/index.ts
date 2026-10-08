@@ -26,6 +26,8 @@ import { BUNDLED_INSPIRATION_CATALOG, searchInspirationCases } from './inspirati
 import { generateFromStudio, describeStudio } from './studio.js'
 import { serveStudio } from './studio-route.js'
 import { serveTestConnection } from './test-route.js'
+import { describeSettingsHealth, serveSettingsHealth } from './settings-health.js'
+import { SETTINGS_HEALTH_ROUTE, type SettingsHealth } from './shared.js'
 import { deleteImageFromWorkspace, getDshWorkspaceRoots, getDshWorkspacesFull, saveImageToWorkspace } from './workspace-save.js'
 import { xaiToolParameters } from './xai-params.js'
 
@@ -111,10 +113,14 @@ export function apply(ctx: Context, config: Config = {}): void {
   const subscriptionManager = new SubscriptionManager(ctx)
   registerSubscriptionRoutes(ctx, subscriptionManager)
 
-  installImageSettings(ctx, current(), {
+  const settingsHealth = installImageSettings(ctx, current(), {
     setSource: source => { current = () => migrateOpenAICompatConfig(plainConfig(source())) },
     onChange: () => {},
   })
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact', path: SETTINGS_HEALTH_ROUTE,
+    handler: (req, res) => serveSettingsHealth(req, res, settingsHealth()),
+  }), 'dsh-image-gen: settings health')
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact', path: IMAGE_ROUTE,
     handler: (req, res) => serveImage(req, res, { readImage: ref => ctx.attachments.readImage(ref) }),
@@ -615,12 +621,22 @@ interface SettingsSectionInstaller {
  * on the service, so the namespace registers through it; DSH 0.1.7 replaced it
  * with schema-derived forms served by the loader itself (keyed by entry id),
  * so its service carries no installer and a host without any settings service
- * simply never runs the callback — both stay silent instead of warning.
+ * simply never runs the callback. A modern host with an unmarked schema is
+ * incompatible and must be diagnosed, while old hosts keep their installer.
  */
-function installImageSettings(ctx: Context, config: Config, hooks: SettingsHooks): void {
+function installImageSettings(ctx: Context, config: Config, hooks: SettingsHooks): () => SettingsHealth {
+  let service: unknown
   ctx.inject(['settings'], settingsCtx => {
     const settings = settingsCtx.settings as SettingsForms & Partial<SettingsSectionInstaller>
-    if (typeof settings.installSection !== 'function') return
-    settings.installSection(ctx, IMAGE_GENERATION_NAMESPACE, Config, config, hooks)
+    service = settings
+    const health = describeSettingsHealth(settings, Config)
+    if (health.settings === 'live' && !health.liveSchema) {
+      ctx.logger.warn('dsh-image-gen: the loaded schema lacks volatile fields required by this DSH settings service. Install @deepseek-ai/schemastery >=3.18.4 <4 in the plugin profile and check which copy the plugin resolves; settings cannot be saved with this schema.')
+    }
+    if (typeof settings.installSection === 'function') {
+      settings.installSection(ctx, IMAGE_GENERATION_NAMESPACE, Config, config, hooks)
+    }
+    return () => { service = undefined }
   })
+  return () => describeSettingsHealth(service, Config)
 }

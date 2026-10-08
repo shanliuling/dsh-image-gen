@@ -401,7 +401,12 @@ pnpm run typecheck
 pnpm test
 pnpm run build
 pnpm run pack:check
+pnpm run test:package
 ```
+
+Saving settings on modern DSH requires the actually loaded `@deepseek-ai/schemastery >=3.18.4 <4`. The card distinguishes loading, missing host forms, remote connections that cannot persist, and incompatible schemas. Legacy DSH settings interfaces are retained. Check the dependencies resolved in the plugin profile when updating, as well as those in the source checkout.
+
+`test:package` requires network access. It installs the current build's tarball and pinned published DSH 0.2 settings services in a temporary directory, then uses real React rendering to verify card state, the bundled save handler, profile file persistence, a fresh form, host restart, and actionable refusal with old schemastery. Image APIs, browser DOM, and RPC transport are outside this test. CI runs it on Windows and Linux.
 
 Feedback is welcome through [Issues](https://github.com/shanliuling/dsh-image-gen/issues). Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a Pull Request.
 
