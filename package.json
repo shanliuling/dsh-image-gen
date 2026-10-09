@@ -33,7 +33,6 @@
     "cordis.patch.yml",
     "README.md",
     "README.en.md",
-    "README.zh-CN.md",
     "docs/assets/readme/*.webp",
     "LICENSE"
   ],
