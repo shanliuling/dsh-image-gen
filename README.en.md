@@ -23,6 +23,10 @@
 </p>
 
 <p>
+  <a href="https://atomgit.com/shanliuling/dsh-image-gen"><img src="https://atomgit.com/shanliuling/dsh-image-gen/star/new_badge.svg" alt="AtomGit" height="55" /></a>
+</p>
+
+<p>
   <a href="#quick-start">Quick Start</a> ·
   <a href="#core-capabilities">Core Capabilities</a> ·
   <a href="#provider-support">Provider Support</a> ·
@@ -409,6 +413,10 @@ Saving settings on modern DSH requires the actually loaded `@deepseek-ai/schemas
 `test:package` requires network access. It installs the current build's tarball and pinned published DSH 0.2 settings services in a temporary directory, then uses real React rendering to verify card state, the bundled save handler, profile file persistence, a fresh form, host restart, and actionable refusal with old schemastery. Image APIs, browser DOM, and RPC transport are outside this test. CI runs it on Windows and Linux.
 
 Feedback is welcome through [Issues](https://github.com/shanliuling/dsh-image-gen/issues). Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a Pull Request.
+
+## Acknowledgements
+
+- [AtomGit](https://atomgit.com/shanliuling/dsh-image-gen): Hosts a copy of the project for users in China to browse and download the source code.
 
 ## License
 
