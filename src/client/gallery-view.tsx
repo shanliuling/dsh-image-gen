@@ -1429,19 +1429,28 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
         {activeTab === 'gallery' || activeTab === 'favorites' ? (
           items.length === 0 ? (
             <div className="dsh-ig-gallery-empty">
-              <div className="dsh-ig-gallery-empty-icon">🖼️</div>
+              <svg className="dsh-ig-gallery-empty-icon" width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                <circle cx="9" cy="9" r="2" />
+                <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
+              </svg>
               <div className="dsh-ig-gallery-empty-title">{t('emptyTitle')}</div>
               <div className="dsh-ig-gallery-empty-desc">{t('emptyDesc')}</div>
             </div>
           ) : activeTab === 'favorites' && filteredItems.length === 0 && search === '' && selectedProvider === 'all' && selectedRatio === 'all' ? (
             <div className="dsh-ig-gallery-empty">
-              <div className="dsh-ig-gallery-empty-icon">🤍</div>
+              <svg className="dsh-ig-gallery-empty-icon" width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z" />
+              </svg>
               <div className="dsh-ig-gallery-empty-title">{t('favEmptyTitle')}</div>
               <div className="dsh-ig-gallery-empty-desc">{t('favEmptyDesc')}</div>
             </div>
           ) : filteredItems.length === 0 ? (
             <div className="dsh-ig-gallery-empty">
-              <div className="dsh-ig-gallery-empty-icon">🔍</div>
+              <svg className="dsh-ig-gallery-empty-icon" width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <circle cx="11" cy="11" r="8" />
+                <path d="m21 21-4.3-4.3" />
+              </svg>
               <div className="dsh-ig-gallery-empty-title">{t('noMatchTitle')}</div>
               <div className="dsh-ig-gallery-empty-desc">{t('noMatchDesc')}</div>
             </div>
