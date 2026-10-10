@@ -123,8 +123,9 @@ async function card(ctx) {
   let renderer
   await act(async () => { renderer = create(React.createElement(client.ImageGenerationSettingsCard, props)) })
   renderers.add(renderer)
-  await act(async () => { renderer.root.findByProps({ className: 'dsh-ig-head' }).props.onClick() })
-  const row = () => renderer.root.findAll(node => node.type === 'div' && node.props.className?.startsWith('dsh-ig-provider-row '))
+  // The card renders open on the plugin's own page now, so only the provider
+  // row still needs a click to expand.
+  const row = () => renderer.root.findAll(node => node.type === 'div' && node.props.className?.startsWith('dsh-ig-provider-row'))
     .find(node => text(node.findByProps({ className: 'dsh-ig-provider-name' })) === 'OpenAI-compatible (relay)')
   await act(async () => { row().findByProps({ className: 'dsh-ig-provider-head' }).props.onClick() })
   const input = type => row().findAllByType('input').find(element => element.props.type === type)

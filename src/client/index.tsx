@@ -491,20 +491,16 @@ const DICT = {
 type DictKey = keyof typeof DICT.zh
 
 const STYLE = `
-.dsh-ig-card{list-style:none;border:1px solid var(--dsw-alias-border-l2,#e5e7eb);border-radius:12px;background:var(--dsw-alias-bg-layer-3,#fff);transition:border-color .16s,background .16s;overflow:hidden}
-.dsh-ig-card:hover{border-color:var(--dsw-alias-label-dimmed,#9ca3af)}
-.dsh-ig-card-open{background:var(--dsw-alias-bg-layer-2,#fff);border-color:var(--dsw-alias-label-dimmed,#9ca3af)}
-.dsh-ig-head{width:100%;appearance:none;border:0;background:none;font:inherit;color:inherit;text-align:left;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-radius:12px}
-.dsh-ig-head:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#4c78ff);outline-offset:-2px}
+.dsh-ig-card{list-style:none;border:0;background:none;padding:0}
+.dsh-ig-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 0 6px}
 .dsh-ig-head-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
 .dsh-ig-title{display:block;font-size:15px;font-weight:600;line-height:1.4;color:var(--dsw-alias-label-primary,inherit)}
 .dsh-ig-desc{display:block;font-size:13px;line-height:1.5;color:var(--dsw-alias-label-tertiary,#7b818b)}
-.dsh-ig-chevron{flex:none;color:var(--dsw-alias-label-tertiary,#7b818b);transition:transform .16s;display:inline-flex;align-items:center}
-.dsh-ig-chevron-open{transform:rotate(180deg)}
-.dsh-ig-body{border-top:1px solid var(--dsw-alias-border-l2,#eee);padding:0 16px 16px}
-.dsh-ig-field{display:grid;gap:6px;margin-top:14px}
+.dsh-ig-body{padding:0}
+.dsh-ig-field{display:flex;flex-direction:column;gap:6px;padding:12px 0}
+.dsh-ig-field + .dsh-ig-field{border-top:0.5px solid var(--dsw-alias-border-l2,#e8ebf0)}
 .dsh-ig-label{font-size:13px;font-weight:500;color:var(--dsw-alias-label-primary,inherit)}
-.dsh-ig-input{box-sizing:border-box;width:100%;padding:8px 12px;font-size:13px;border:1px solid var(--dsw-alias-border-l2,#d7dbe0);border-radius:8px;background:var(--dsw-alias-bg-layer-3,transparent);color:inherit;outline:none;transition:border-color .15s}
+.dsh-ig-input{box-sizing:border-box;width:100%;height:34px;padding:0 12px;font-size:13px;border:0.5px solid var(--dsw-alias-border-l4,#d7dbe0);border-radius:var(--dsw-radius-md,6px);background:var(--dsw-alias-bg-layer-3,transparent);color:inherit;outline:none;transition:border-color .15s}
 .dsh-ig-input:focus{border-color:var(--dsw-alias-brand-primary,#4c78ff)}
 .dsh-ig-textarea{resize:vertical;min-height:56px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;line-height:1.5}
 .dsh-ig-input-group{display:flex;gap:8px;align-items:center}
@@ -520,7 +516,7 @@ const STYLE = `
 .dsh-ig-workflow-active{display:inline-flex;align-items:center;cursor:pointer;flex:none}
 .dsh-ig-workflow-active input[type=radio]{width:15px;height:15px;accent-color:var(--dsw-alias-brand-primary,#4c78ff);margin:0;cursor:pointer}
 .dsh-ig-workflow-name{flex:1;min-width:0}
-.dsh-ig-btn-reset{appearance:none;border:1px solid var(--dsw-alias-border-l2,#d7dbe0);border-radius:8px;padding:7px 12px;background:var(--dsw-alias-bg-layer-3,#f9fafb);color:var(--dsw-alias-label-secondary,inherit);font:inherit;font-size:13px;cursor:pointer;white-space:nowrap;transition:background .15s,border-color .15s}
+.dsh-ig-btn-reset{appearance:none;border:0.5px solid var(--dsw-alias-border-l4,#d7dbe0);border-radius:var(--dsw-radius-md,6px);padding:5px 12px;background:var(--dsw-alias-bg-layer-3,#f9fafb);color:var(--dsw-alias-label-secondary,inherit);font:inherit;font-size:13px;cursor:pointer;white-space:nowrap;transition:background .15s,border-color .15s}
 .dsh-ig-btn-reset:hover{background:var(--dsw-alias-bg-layer-2,#edf0f3);border-color:var(--dsw-alias-label-dimmed,#9ca3af)}
 .dsh-ig-hint,.dsh-ig-status{margin:0;color:var(--dsw-alias-label-tertiary,#7b818b);font-size:12px;line-height:1.4}
 .dsh-ig-hint-error{color:var(--dsw-alias-label-error,#d33)}
@@ -529,19 +525,20 @@ const STYLE = `
 .dsh-ig-check-row{display:flex;align-items:center;gap:8px;cursor:pointer}
 .dsh-ig-check-row input[type=checkbox]{width:15px;height:15px;accent-color:var(--dsw-alias-brand-primary,#4c78ff);margin:0}
 .dsh-ig-savedto{font-size:12px;line-height:1.5;color:var(--dsw-alias-label-tertiary,#7b818b);word-break:break-all}
-.dsh-ig-save{appearance:none;border:0;border-radius:8px;padding:6px 16px;background:var(--dsw-alias-label-primary,#111827);color:var(--dsw-alias-bg-layer-3,#fff);font:inherit;font-size:13px;font-weight:500;cursor:pointer;transition:opacity .15s}
+.dsh-ig-save{appearance:none;border:0;border-radius:var(--dsw-radius-md,6px);padding:5px 14px;background:var(--dsw-alias-label-primary,#111827);color:var(--dsw-alias-bg-layer-3,#fff);font:inherit;font-size:13px;font-weight:400;cursor:pointer;transition:opacity .15s}
 .dsh-ig-save:disabled{opacity:.4;cursor:default}
 
 /* Provider list: one expandable row per provider, each saving independently. */
-.dsh-ig-providers{display:grid;gap:10px;margin-top:14px}
-.dsh-ig-provider-row{border:1px solid var(--dsw-alias-border-l2,#e5e7eb);border-radius:10px;background:var(--dsw-alias-bg-layer-3,transparent);overflow:hidden;transition:border-color .16s}
-.dsh-ig-provider-row-open{border-color:var(--dsw-alias-label-dimmed,#9ca3af)}
-.dsh-ig-provider-head{width:100%;appearance:none;border:0;background:none;font:inherit;color:inherit;text-align:left;cursor:pointer;display:flex;align-items:center;gap:10px;padding:11px 12px}
-.dsh-ig-provider-head:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#4c78ff);outline-offset:-2px}
+.dsh-ig-providers{display:flex;flex-direction:column;margin-top:6px}
+.dsh-ig-provider-row{border:0;background:none;padding:14px 0}
+.dsh-ig-provider-row + .dsh-ig-provider-row{border-top:0.5px solid var(--dsw-alias-border-l2,#e8ebf0)}
+.dsh-ig-provider-head{width:100%;appearance:none;border:0;background:none;font:inherit;color:inherit;text-align:left;cursor:pointer;display:flex;align-items:center;gap:10px;padding:0}
+.dsh-ig-provider-head:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,#4c78ff);outline-offset:2px;border-radius:var(--dsw-radius-sm,4px)}
+.dsh-ig-provider-head:hover .dsh-ig-provider-name{color:var(--dsw-alias-label-secondary,inherit)}
 .dsh-ig-provider-name{flex:1;min-width:0;font-size:13.5px;font-weight:550;color:var(--dsw-alias-label-primary,inherit)}
 .dsh-ig-provider-chevron{flex:none;color:var(--dsw-alias-label-tertiary,#7b818b);transition:transform .16s;display:inline-flex;align-items:center}
 .dsh-ig-provider-chevron-open{transform:rotate(180deg)}
-.dsh-ig-provider-body{border-top:1px solid var(--dsw-alias-border-l2,#eee);padding:2px 12px 14px}
+.dsh-ig-provider-body{border-top:0;padding:8px 0 2px}
 .dsh-ig-badge{flex:none;display:inline-flex;align-items:center;gap:5px;font-size:11.5px;line-height:1.6;padding:2px 9px;border-radius:999px;border:1px solid var(--dsw-alias-border-l2,#d7dbe0);color:var(--dsw-alias-label-secondary,inherit);white-space:nowrap;max-width:60%;overflow:hidden;text-overflow:ellipsis}
 .dsh-ig-badge-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
 .dsh-ig-badge-ok{border-color:rgba(34,197,94,.45);color:#15803d;background:rgba(34,197,94,.08)}
@@ -560,15 +557,15 @@ const STYLE = `
 /* Row-level actions: test connection, clear key, save. */
 .dsh-ig-row-actions{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:14px;flex-wrap:wrap}
 .dsh-ig-row-buttons{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.dsh-ig-btn-secondary{appearance:none;border:1px solid var(--dsw-alias-border-l2,#d7dbe0);border-radius:8px;padding:6px 14px;background:var(--dsw-alias-bg-layer-3,#f9fafb);color:var(--dsw-alias-label-secondary,inherit);font:inherit;font-size:13px;cursor:pointer;white-space:nowrap;transition:background .15s,border-color .15s,opacity .15s}
+.dsh-ig-btn-secondary{appearance:none;border:0.5px solid var(--dsw-alias-border-l4,#d7dbe0);border-radius:var(--dsw-radius-md,6px);padding:5px 14px;background:var(--dsw-alias-bg-layer-3,#f9fafb);color:var(--dsw-alias-label-secondary,inherit);font:inherit;font-size:13px;cursor:pointer;white-space:nowrap;transition:background .15s,border-color .15s,opacity .15s}
 .dsh-ig-btn-secondary:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2,#edf0f3);border-color:var(--dsw-alias-label-dimmed,#9ca3af)}
 .dsh-ig-btn-secondary:disabled{opacity:.45;cursor:default}
 .dsh-ig-btn-danger{color:#b91c1c;border-color:rgba(239,68,68,.4)}
 .dsh-ig-btn-danger:hover:not(:disabled){background:rgba(239,68,68,.08);border-color:rgba(239,68,68,.6)}
 
 /* Workspace section within the settings card. */
-.dsh-ig-section{display:grid;gap:6px;margin-top:16px;padding-top:14px;border-top:1px solid var(--dsw-alias-border-l2,#eee)}
-.dsh-ig-section-title{font-size:12px;font-weight:600;letter-spacing:.02em;color:var(--dsw-alias-label-tertiary,#7b818b);text-transform:uppercase}
+.dsh-ig-section{display:flex;flex-direction:column;gap:6px;margin-top:20px;padding-top:14px;border-top:0.5px solid var(--dsw-alias-border-l2,#e8ebf0)}
+.dsh-ig-section-title{font-size:13px;font-weight:500;line-height:1.5;color:var(--dsw-alias-label-primary,inherit)}
 .dsh-ig-status-readonly{color:var(--dsw-alias-label-tertiary,#7b818b);font-style:italic}
 
 .dsh-ig-result{display:grid;gap:10px;max-width:520px}
@@ -677,7 +674,7 @@ const STYLE = `
 
 /* Empty State */
 .dsh-ig-gallery-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;min-height:360px;text-align:center;color:var(--dsw-alias-label-tertiary,#94a3b8)}
-.dsh-ig-gallery-empty-icon{font-size:44px;margin-bottom:10px}
+.dsh-ig-gallery-empty-icon{display:block;width:44px;height:44px;margin-bottom:10px;color:var(--dsw-alias-label-tertiary,#94a3b8);opacity:.7}
 .dsh-ig-gallery-empty-title{font-size:15px;font-weight:600;color:var(--dsw-alias-label-primary,inherit);margin-bottom:4px}
 .dsh-ig-gallery-empty-desc{font-size:13px;max-width:360px;line-height:1.5}
 
@@ -892,26 +889,24 @@ export function apply(ctx: Context): void {
       return () => { credentialListeners.delete(callback) }
     },
   }
-  // The card is a page inside the Plugins settings section ('settings.plugins.tab')
-  // rather than a top-level settings entry ('settings.plugin.item' on <=0.1.5,
-  // 'settings.section' on 0.1.6+). DSH stacks every external section as another
-  // row in the settings rail, and this card is one provider picker plus a few
-  // switches — a whole rail row is the wrong weight for it. As a tab it sits
-  // beside the shipped plugin list / plugin manager pages, one click from the
-  // plugin list it configures.
+  // The card lives on this plugin's own page in the Plugins manager. DSH's
+  // plugins page renders the keyed list slot 'plugins.bundle.config' inside a
+  // bundle's detail page — keyed by the bundle's package name — so the card is
+  // one click from the plugin row it configures, and the settings rail keeps no
+  // extra row or tab. The page host renders it with view: 'page' and the card
+  // draws its own title, form and save controls.
   //
-  // Both seats are registered so one build stays reachable everywhere: a host
-  // that ships the Plugins tab row mounts the tab, and a host that only knows
-  // the older per-plugin seat keeps the card there instead. On 0.1.6+ the old
-  // seat is gone, so the card lands on the tab and stops taking a rail row.
+  // The older per-plugin seat ('settings.plugin.item', hosts <=0.1.5) stays
+  // registered so one build stays reachable on every host this plugin supports;
+  // a host without that slot never mounts it.
   const injectSettingsItem = (owner: Context): void => {
     const ownerRegister = owner.slots.register.bind(owner.slots) as unknown as (options: object, component: unknown) => () => void
     const injectSettingsFace = (): SettingsFace => ({ scope, credentials: credentialsProxy, credentialsAvailable, locale, credentialEvents })
-    ;(owner.slots.inject as (key: string, factory: () => () => void) => void)('settings.plugins.tab', () => ownerRegister({
-      name: 'settings.plugins.tab',
-      id: IMAGE_GENERATION_NAMESPACE,
-      order: 30,
-      label: () => (locale?.getSnapshot?.()?.active?.startsWith('en') ? 'Image generation' : '图像生成'),
+    ;(owner.slots.inject as (key: string, factory: () => () => void) => void)('plugins.bundle.config', () => ownerRegister({
+      name: 'plugins.bundle.config',
+      // Keyed slots select by bundle package name, and this plugin ships as the
+      // 'dsh-image-gen' bundle.
+      key: 'dsh-image-gen',
       locale,
       inject: injectSettingsFace,
     }, ImageGenerationSettingsCard))
@@ -1240,7 +1235,11 @@ function rowsFromSettings(value: ImageSettings | undefined): Record<Provider, Pr
 
 /** Edit each provider independently, pick an explicit default, and verify keys inline. */
 export function ImageGenerationSettingsCard(props: SettingsCardProps) {
-  const [open, setOpen] = useState(false)
+  // Always open: DSH renders this card inside the plugin's own page, so the
+  // old click-to-expand header (and the card chrome around the fields) is gone
+  // — the fields sit directly on the page. `open` stays as the flag the
+  // health/login effects gate on, and is now simply always true.
+  const [open] = useState(true)
   const [snapshot, setSnapshot] = useState(() => props.scope.getSnapshot())
   const [health, setHealth] = useState<SettingsHealth>()
   const state = settingsState(snapshot, health)
@@ -2053,11 +2052,15 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
     )
   }
 
+  // Providers keep their collapse: the plugin page is the settings surface now,
+  // and a dozen providers expanded at once would make it far too long. The row
+  // carries no card chrome — the header is a plain row and the body sits
+  // directly under it on the page.
   const renderProviderRow = (provider: Provider) => {
     const row = rows[provider]
     const badge = badgeOf(provider)
     return (
-      <div key={provider} className={`dsh-ig-provider-row ${row.expanded ? 'dsh-ig-provider-row-open' : ''}`}>
+      <div key={provider} className="dsh-ig-provider-row">
         <button type="button" className="dsh-ig-provider-head" aria-expanded={row.expanded} onClick={() => { updateRow(provider, { expanded: !row.expanded }) }}>
           <span className="dsh-ig-provider-name">{providerLabels[provider]}</span>
           <span className={badge.className} title={badge.text}><span className="dsh-ig-badge-dot" aria-hidden="true" />{badge.text}</span>
@@ -2071,18 +2074,14 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
   }
 
   return (
-    <li className={`dsh-ig-card ${open ? 'dsh-ig-card-open' : ''}`}>
-      <button type="button" className="dsh-ig-head" aria-expanded={open} onClick={() => { setOpen(value => !value) }}>
+    <li className="dsh-ig-card">
+      <div className="dsh-ig-head">
         <span className="dsh-ig-head-text">
           <span className="dsh-ig-title">{t('title')}</span>
           <span className="dsh-ig-desc">{t('description')}</span>
         </span>
-        <span className={`dsh-ig-chevron ${open ? 'dsh-ig-chevron-open' : ''}`} aria-hidden="true">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6l4 4 4-4"/></svg>
-        </span>
-      </button>
-      {open ? (
-        <div className="dsh-ig-body">
+      </div>
+      <div className="dsh-ig-body">
           {settingsMessage !== undefined ? <p className="dsh-ig-status dsh-ig-status-readonly" role="note">{settingsMessage}</p> : null}
           <div className="dsh-ig-field">
             <span className="dsh-ig-label">{t('defaultProvider')}</span>
@@ -2149,7 +2148,6 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
             </div>
           </div>
         </div>
-      ) : null}
     </li>
   )
 }

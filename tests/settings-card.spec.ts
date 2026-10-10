@@ -58,9 +58,10 @@ function formHarness(lang = 'zh', initialValue: Record<string, unknown> = { open
     return ImageGenerationSettingsCard(props)
   }
   const row = () => elements(render()).find(element => element.key === provider
-    && element.props.className?.startsWith('dsh-ig-provider-row '))!
+    && element.props.className?.startsWith('dsh-ig-provider-row'))!
   const find = (predicate: (element: Element) => boolean) => elements(row()).find(predicate)!
-  elements(render()).find(element => element.props.className === 'dsh-ig-head')!.props.onClick()
+  // The card renders open on the plugin's own page now, so only the provider
+  // row still needs a click to expand.
   find(element => element.props.className === 'dsh-ig-provider-head').props.onClick()
   return {
     setKey, setSetting,
