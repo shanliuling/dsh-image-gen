@@ -12,6 +12,66 @@ function response(body: unknown, init: ResponseInit = {}): Response {
 }
 
 describe('generateGoogleImage', () => {
+  it('keeps native gateway prefixes and query parameters when a per-call model changes', async () => {
+    const fetchMock = vi.fn(async () => response({ candidates: [{ content: { parts: [{ inlineData: { data: image, mimeType: 'image/png' } }] } }] }))
+    vi.stubGlobal('fetch', fetchMock)
+    await generateGoogleImage({ apiKey: 'key', endpoint: 'https://relay.example/proxy/v1beta/models/old:generateContent/?route=image', native: true, model: 'gemini-new', prompt: 'cat', aspectRatio: '1:1', imageSize: '1K', maxBytes: 1024, signal })
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('https://relay.example/proxy/v1beta/models/gemini-new:generateContent?route=image')
+  })
+
+  it.each([
+    { data: Buffer.alloc(1025).toString('base64'), mimeType: 'image/png', message: 'exceeded the 1024 byte image limit' },
+    { data: Buffer.from('<svg/>').toString('base64'), mimeType: 'image/svg+xml', message: 'unsupported media type' },
+  ])('applies the existing image limits and MIME checks to native output: $message', async imageData => {
+    vi.stubGlobal('fetch', vi.fn(async () => response({ candidates: [{ content: { parts: [{ inlineData: imageData }] } }] })))
+    await expect(generateGoogleImage({ apiKey: 'key', endpoint, native: true, model: 'gemini', prompt: 'cat', aspectRatio: '1:1', imageSize: '1K', maxBytes: 1024, signal })).rejects.toThrow(imageData.message)
+  })
+
+  it.each([
+    'https://relay.example/v1beta',
+    'https://relay.example/v1beta/',
+    'https://relay.example/v1beta/interactions',
+    'https://relay.example/v1beta/models',
+    'https://relay.example/v1beta/models/old-model:generateContent',
+  ])('supports the native protocol at %s', async nativeEndpoint => {
+    const fetchMock = vi.fn(async () => response({ candidates: [{ content: { parts: [{ text: 'done' }, { inlineData: { data: image, mimeType: 'image/png' } }] } }] }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(generateGoogleImage({
+      apiKey: 'key', endpoint: nativeEndpoint, native: true, model: 'models/gemini-3-pro-image', prompt: 'cat', aspectRatio: '16:9', imageSize: '2K', maxBytes: 1024, signal,
+    })).resolves.toMatchObject({ mediaType: 'image/png' })
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toBe('https://relay.example/v1beta/models/gemini-3-pro-image:generateContent')
+    expect(init.signal).toBe(signal)
+    expect(init.redirect).toBe('error')
+    expect(JSON.parse(String(init.body))).toEqual({ contents: [{ role: 'user', parts: [{ text: 'cat' }] }], generationConfig: {
+      candidateCount: 1, responseModalities: ['TEXT', 'IMAGE'], imageConfig: { aspectRatio: '16:9', imageSize: '2K' },
+    } })
+  })
+
+  it('sends ordered native reference images before the edit prompt', async () => {
+    const fetchMock = vi.fn(async () => response({ candidates: [{ content: { parts: [{ inlineData: { data: image, mimeType: 'image/png' } }] } }] }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(editGoogleImage({ apiKey: 'key', endpoint, native: true, model: 'gemini-3-pro-image', prompt: 'edit image 2',
+      sourceImages: [{ data: new Uint8Array([1]), mediaType: 'image/png' }, { data: new Uint8Array([2]), mediaType: 'image/jpeg' }],
+      aspectRatio: '1:1', imageSize: '4K', maxBytes: 1024, signal,
+    })).resolves.toMatchObject({ mediaType: 'image/png' })
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(JSON.parse(String(init.body)).contents[0].parts).toEqual([
+      { inlineData: { data: 'AQ==', mimeType: 'image/png' } },
+      { inlineData: { data: 'Ag==', mimeType: 'image/jpeg' } },
+      { text: 'edit image 2' },
+    ])
+  })
+
+  it('skips native thought images and recognizes snake-case relay output', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => response({ candidates: [{ content: { parts: [
+      { thought: true, inlineData: { data: 'dGhvdWdodA==', mimeType: 'image/jpeg' } },
+      { inline_data: { data: image, mime_type: 'image/png' } },
+    ] } }] })))
+    await expect(generateGoogleImage({ apiKey: 'key', endpoint, native: true, model: 'gemini', prompt: 'cat', aspectRatio: '1:1', imageSize: '1K', maxBytes: 1024, signal }))
+      .resolves.toEqual({ data: new Uint8Array(Buffer.from('image bytes')), mediaType: 'image/png' })
+  })
+
   it('requests JPEG with the selected output controls', async () => {
     const fetchMock = vi.fn(async () => response({ output_image: { data: image, mime_type: 'image/jpeg' } }))
     vi.stubGlobal('fetch', fetchMock)

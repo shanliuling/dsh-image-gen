@@ -2,6 +2,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Config, ImageProvider } from './config.js'
 import { redactSecrets } from './redact.js'
+import { googleModelsEndpoint } from './google.js'
 import type { SubscriptionManager } from './subscription.js'
 import {
   DEFAULT_COMFYUI_BASE_URL,
@@ -77,15 +78,7 @@ function googleModelsUrl(config: Config): string {
   const endpoint = config.googleEndpoint
   const fallback = 'https://generativelanguage.googleapis.com/v1beta/models'
   if (typeof endpoint !== 'string' || endpoint.trim().length === 0) return fallback
-  try {
-    const url = new URL(endpoint)
-    const segments = url.pathname.split('/').filter(segment => segment.length > 0)
-    segments[segments.length - 1] = 'models'
-    url.pathname = `/${segments.join('/')}`
-    return url.toString()
-  } catch {
-    throw new Error('Google endpoint must be an absolute URL')
-  }
+  return googleModelsEndpoint(endpoint, config.googleNative === true)
 }
 
 function joinUrl(base: string, path: string): string {

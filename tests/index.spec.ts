@@ -64,6 +64,24 @@ function toolByName(tools: ToolDefinition[], name: string): ToolDefinition {
 }
 
 describe('image tool registration', () => {
+  it('routes native Google generation, batch generation and edits through the configured protocol', async () => {
+    const { ctx, tools } = harnessContext()
+    const fetchMock = vi.fn(async () => Response.json({ candidates: [{ content: { parts: [{ inlineData: { data: 'iVBORw0KGgo=', mimeType: 'image/png' } }] } }] }))
+    vi.stubGlobal('fetch', fetchMock)
+    apply(ctx, { provider: 'google', googleNative: true, googleEndpoint: 'https://relay.example/v1beta', googleModel: 'gemini-3-pro-image', saveToWorkspace: false })
+    const exec = { signal: new AbortController().signal } as never
+    await toolByName(tools, 'generate_image').execute({ prompt: 'one' }, exec)
+    await toolByName(tools, 'generate_images').execute({ prompts: ['two', 'three'], image_size: '2K', aspect_ratio: '16:9' }, exec)
+    vi.mocked(ctx.attachments.readImage).mockResolvedValue({ data: new Uint8Array([137, 80, 78, 71]), ref: attachment('source') } as never)
+    await toolByName(tools, 'edit_image').execute({ prompt: 'edit' }, execWithUserImages('source'))
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+    const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>
+    expect(calls.every(([url]) => url === 'https://relay.example/v1beta/models/gemini-3-pro-image:generateContent')).toBe(true)
+    expect(calls.map(([, init]) => JSON.parse(String(init.body)).contents[0].parts.at(-1))).toEqual([{ text: 'one' }, { text: 'two' }, { text: 'three' }, { text: 'edit' }])
+    expect(JSON.parse(String(calls[1]![1].body)).generationConfig.imageConfig).toEqual({ aspectRatio: '16:9', imageSize: '2K' })
+    expect(JSON.parse(String(calls[3]![1].body)).contents[0].parts[0].inlineData).toBeDefined()
+  })
+
   it('forwards compatible quality and generation extras through single, batch and edit tools', async () => {
     const { ctx, tools } = harnessContext()
     const fetchMock = vi.fn(async (_url: unknown, _init?: RequestInit) => new Response(JSON.stringify({ data: [{ b64_json: 'iVBORw0KGgo=' }] }), { headers: { 'content-type': 'application/json' } }))

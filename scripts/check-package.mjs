@@ -26,12 +26,13 @@ try {
   console.log('Packing the current plugin build for an independent installation...')
   const packed = JSON.parse(execFileSync(process.execPath, [npm, 'pack', '--ignore-scripts', '--json', '--pack-destination', home], {
     cwd: root, encoding: 'utf8', timeout: 60_000,
+    env: { ...process.env, npm_config_foreground_scripts: 'false', npm_config_ignore_scripts: 'true' },
   }))
   const tarball = join(home, packed[0].filename)
   await writeFile(join(home, 'package.json'), JSON.stringify({
     name: 'image-gen-package-verification', private: true, type: 'module', dependencies: {
       'dsh-image-gen': `file:${tarball.replaceAll('\\', '/')}`,
-      '@deepseek-ai/cordis': '4.0.4',
+      '@deepseek-ai/cordis': '4.0.5',
       '@deepseek-ai/schemastery': '3.18.4',
       '@deepseek-ai/dsh-app-boot': '0.2.0-rc.2',
       '@deepseek-ai/dsh-config-editor': '0.2.0-rc.2',

@@ -269,7 +269,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     if (active.provider === 'google') {
       const aspectRatio = (args.aspect_ratio ?? active.aspectRatio) as AspectRatio
       const imageSize = (args.image_size ?? active.imageSize) as ImageSize
-      const generated = await generateGoogleImage({ apiKey: credential, endpoint: active.endpoint, model: active.model, prompt: args.prompt, aspectRatio, imageSize, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal: exec.signal })
+      const generated = await generateGoogleImage({ apiKey: credential, endpoint: active.endpoint, native: active.native, model: active.model, prompt: args.prompt, aspectRatio, imageSize, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal: exec.signal })
       return saveGenerated(ctx, generated, active.provider, active.model, `${aspectRatio}, ${imageSize}`, current(), exec, knownWorkspaceRoots)
     }
     if (active.provider === 'dashscope') {
@@ -471,7 +471,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       if (active.provider === 'google') {
         const aspectRatio = (args.aspect_ratio ?? active.aspectRatio) as AspectRatio
         const imageSize = (args.image_size ?? active.imageSize) as ImageSize
-        const generated = await editGoogleImage({ apiKey: credential, endpoint: active.endpoint, model: active.model, prompt: args.prompt, sourceImages, aspectRatio, imageSize, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal: exec.signal })
+        const generated = await editGoogleImage({ apiKey: credential, endpoint: active.endpoint, native: active.native, model: active.model, prompt: args.prompt, sourceImages, aspectRatio, imageSize, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal: exec.signal })
         return saveGenerated(ctx, generated, active.provider, active.model, `${aspectRatio}, ${imageSize}`, current(), exec, knownWorkspaceRoots)
       }
 

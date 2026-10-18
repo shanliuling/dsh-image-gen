@@ -379,6 +379,15 @@ dsh --profile web --dump-config
 </details>
 
 <details>
+<summary><strong>Gemini 中转只支持 generateContent，如何配置？</strong></summary>
+
+在 Google Gemini 设置中，将“请求协议”改为“原生 generateContent”，接口地址填写中转的 API 基础地址，例如 `https://your-relay.example/v1beta`，保存后即可用于对话生图、图生图和 Studio。已有的 Interactions 完整地址也可以沿用，插件会按所选模型构建原生请求地址。
+
+配置文件对应 `googleNative: true`；默认值为 `false`，现有用户仍使用 Interactions 协议。
+
+</details>
+
+<details>
 <summary><strong>为什么 ComfyUI 没有出现在 Studio 中？</strong></summary>
 
 当前 Studio 与多模型对比仅支持云端 Provider，暂未接入 ComfyUI。ComfyUI 已支持在 Agent 对话中进行文生图、单图编辑以及多个命名工作流。

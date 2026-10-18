@@ -35,7 +35,7 @@ function unwrap<T extends Record<string, unknown>>(value: T): T {
 
 describe('resolveProvider', () => {
   it('resolves the Google defaults', () => {
-    expect(resolveProvider({})).toEqual({ provider: 'google', apiKeyEnv: 'GEMINI_API_KEY', endpoint: DEFAULT_GOOGLE_ENDPOINT, model: DEFAULT_GOOGLE_MODEL, aspectRatio: '1:1', imageSize: '1K' })
+    expect(resolveProvider({})).toEqual({ provider: 'google', apiKeyEnv: 'GEMINI_API_KEY', endpoint: DEFAULT_GOOGLE_ENDPOINT, model: DEFAULT_GOOGLE_MODEL, native: false, aspectRatio: '1:1', imageSize: '1K' })
   })
 
   it('resolves editable OpenAI-compatible profiles independently', () => {
@@ -334,6 +334,13 @@ describe('selectComfyUIWorkflow', () => {
 })
 
 describe('Config Schema validation', () => {
+  it('keeps native Google opt-in and exposes it as a live field', () => {
+    expect(unwrap(Config({})).googleNative).toBe(false)
+    const enabled = Config({ googleNative: true })
+    expect(enabled.googleNative).toHaveProperty('get')
+    expect(resolveProvider(unwrap(enabled))).toMatchObject({ provider: 'google', native: true })
+  })
+
   it('exposes the opt-in composer pill as a live settings field', () => {
     expect(unwrap(Config({})).showProviderPill).toBe(false)
     const enabled = Config({ showProviderPill: true })

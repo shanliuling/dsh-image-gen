@@ -379,6 +379,15 @@ When “Save to workspace” is enabled, chat results are saved to the `dsh-imag
 </details>
 
 <details>
+<summary><strong>How do I use a Gemini relay that only supports generateContent?</strong></summary>
+
+In Google Gemini settings, select “Native generateContent” under “Request protocol”, enter the relay's API base URL (for example, `https://your-relay.example/v1beta`), and save. This applies to conversation generation, editing, and Studio. An existing full Interactions URL can also be kept; the plugin builds the native endpoint using the selected model.
+
+The configuration field is `googleNative: true`. It defaults to `false`, keeping existing users on the Interactions protocol.
+
+</details>
+
+<details>
 <summary><strong>Why is ComfyUI not available in Studio?</strong></summary>
 
 Studio and multi-model comparison currently support cloud Providers only; ComfyUI is not yet integrated. ComfyUI supports text-to-image, single-image editing, and multiple named workflows through Agent chat.

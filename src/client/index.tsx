@@ -51,7 +51,7 @@ import { saveGalleryItem } from './gallery-store.js'
 import { GalleryViewTab, copyImageBlob, type GalleryViewTabProps, type LocaleService } from './gallery-view.js'
 import { fetchAttachmentBlob } from './image-cache.js'
 import { imageRef, type ToolCallBlock } from './image-ref.js'
-import { startConversationLandings, type CanvasSessions } from './tl/conversation-landings.js'
+import { createCanvasSessionSelection, startConversationLandings, type CanvasSessions, type CanvasSessionSelection } from './tl/conversation-landings.js'
 import { STUDIO_STYLE } from './studio-style.js'
 import { TL_CSS } from './tl/tl-css.js'
 import { TL_THEME_CSS } from './tl/tl-theme-css.js'
@@ -90,6 +90,7 @@ interface ImageSettings {
   provider?: Provider
   googleModel?: string
   googleEndpoint?: string
+  googleNative?: boolean
   openaiBaseURL?: string
   openaiModel?: string
   openaiSizes?: Record<string, Record<string, string>>
@@ -258,6 +259,11 @@ const DICT = {
     reset: '重置',
     resetTitle: '重置为默认官方地址',
     endpointHintGoogle: 'Google 官方地址或反代端点（全路径）。',
+    googleProtocol: '请求协议',
+    googleInteractions: 'Interactions（默认）',
+    googleNative: '原生 generateContent',
+    saveGoogleProtocolFirst: '请求协议尚未保存，请先点击保存，再拉取模型或测试连接。',
+    endpointHintGoogleNative: '填写 API 基础地址（如 https://example.com/v1beta）；也兼容 Interactions 或 generateContent 完整地址。',
     endpointHintOpenAI: '官方 api.openai.com 的 /v1 地址；中转站请使用下方「OpenAI 兼容」行。',
     endpointHintOpenAICompat: '中转站/自建服务的 OpenAI 兼容 /v1 地址（必填），例如 https://your-relay.example.com/v1。',
     editFormat: '图生图请求形态',
@@ -423,6 +429,11 @@ const DICT = {
     reset: 'Reset',
     resetTitle: 'Reset to official default URL',
     endpointHintGoogle: 'Official Google endpoint or reverse proxy (full path).',
+    googleProtocol: 'Request protocol',
+    googleInteractions: 'Interactions (default)',
+    googleNative: 'Native generateContent',
+    saveGoogleProtocolFirst: 'Save the request protocol before fetching models or testing the connection.',
+    endpointHintGoogleNative: 'API base URL (e.g. https://example.com/v1beta). Full Interactions or generateContent URLs also work.',
     endpointHintOpenAI: 'Official api.openai.com /v1 base URL; for relays use the "OpenAI-compatible" row below.',
     endpointHintOpenAICompat: 'OpenAI-compatible /v1 base URL of your relay or self-hosted service (required), e.g. https://your-relay.example.com/v1.',
     editFormat: 'Edit request format',
@@ -861,7 +872,16 @@ export function apply(ctx: Context): void {
     owner => {
       const sessions = owner.get('sessions') as CanvasSessions | undefined
       if (typeof sessions?.binding !== 'function' || typeof sessions.list?.subscribe !== 'function') return
-      owner.effect(() => startConversationLandings(sessions), 'dsh-image-gen: live canvas images')
+      const selection = createCanvasSessionSelection()
+      owner.effect(() => startConversationLandings(sessions, selection), 'dsh-image-gen: live canvas images')
+      // Optional injection keeps old hosts working and also handles uiSession
+      // becoming available after the session controller has already started.
+      ;(owner.inject as unknown as (services: string[], callback: (uiOwner: Context) => void) => void)(['uiSession'], uiOwner => {
+        const ui = uiOwner.get('uiSession') as { adapter?: { current?: CanvasSessionSelection } } | undefined
+        const current = ui?.adapter?.current
+        if (typeof current?.getSnapshot !== 'function' || typeof current.subscribe !== 'function') return
+        uiOwner.effect(() => selection.bind(current), 'dsh-image-gen: current canvas session')
+      })
     },
   )
 
@@ -1126,6 +1146,7 @@ interface ProviderRowState {
   expanded: boolean
   model: string
   baseURL: string
+  googleNative: boolean
   keyInput: string
   keyStatus: KeyStatus
   keyInfo: CredentialInfo | undefined
@@ -1161,6 +1182,7 @@ function emptyProviderRow(): ProviderRowState {
     expanded: false,
     model: '',
     baseURL: '',
+    googleNative: false,
     keyInput: '',
     keyStatus: 'checking',
     keyInfo: undefined,
@@ -1257,6 +1279,7 @@ function rowsFromSettings(value: ImageSettings | undefined): Record<Provider, Pr
       ...emptyProviderRow(),
       model: modelOf(provider, value),
       baseURL: baseURLOf(provider, value),
+      ...(provider === 'google' ? { googleNative: value?.googleNative === true } : {}),
       ...(provider === 'openai' ? { sizeTableText: editExtraTextOf(value?.openaiSizes) } : {}),
       ...(provider === 'comfyui' ? {
         workflows: resolveComfyUIWorkflows(value ?? {}),
@@ -1592,6 +1615,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
         if (provider === 'openai') for (const tiers of Object.values(sizeTable)) for (const size of Object.values(tiers)) validateOfficialSize(row.model, size)
         await saveSetting(modelFieldOf(provider), row.model)
         await saveSetting(baseURLFieldOf(provider), row.baseURL)
+        if (provider === 'google') await saveSetting('googleNative', row.googleNative)
         if (provider === 'openai') await saveSetting('openaiSizes', sizeTable)
         if (provider === 'openai-compat') {
           await saveSetting('openaiCompatEditFormat', row.editFormat)
@@ -1635,6 +1659,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
     const address = row.baseURL.trim()
     if (address.length === 0) return t('endpointRequired')
     if (address !== baseURLOf(provider, props.scope.getSnapshot().value).trim()) return t('saveEndpointFirst')
+    if (provider === 'google' && row.googleNative !== (props.scope.getSnapshot().value?.googleNative === true)) return t('saveGoogleProtocolFirst')
     return undefined
   }
 
@@ -1863,8 +1888,17 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
                 <button type="button" className="dsh-ig-btn-reset" title={t('resetTitle')} onClick={() => { updateRow(provider, { baseURL: DEFAULT_BASE_URLS[provider] }) }} disabled={!settingsWritable}>{t('reset')}</button>
               ) : null}
             </div>
-            <span className="dsh-ig-hint">{t(CLOUD_HINT_KEYS[provider])}</span>
+            <span className="dsh-ig-hint">{t(provider === 'google' && row.googleNative ? 'endpointHintGoogleNative' : CLOUD_HINT_KEYS[provider])}</span>
           </label>
+          {provider === 'google' ? (
+            <label className="dsh-ig-field">
+              <span className="dsh-ig-label">{t('googleProtocol')}</span>
+              <select className="dsh-ig-input" value={row.googleNative ? 'native' : 'interactions'} onChange={event => { updateRow(provider, { googleNative: event.target.value === 'native' }) }} disabled={!settingsWritable}>
+                <option value="interactions">{t('googleInteractions')}</option>
+                <option value="native">{t('googleNative')}</option>
+              </select>
+            </label>
+          ) : null}
           <label className="dsh-ig-field">
             <span className="dsh-ig-label">{t('model')}</span>
             {modelPullSupported(provider) ? (

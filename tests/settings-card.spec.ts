@@ -65,6 +65,7 @@ function formHarness(lang = 'zh', initialValue: Record<string, unknown> = { open
   find(element => element.props.className === 'dsh-ig-provider-head').props.onClick()
   return {
     setKey, setSetting,
+    expand: () => find(element => element.props.className === 'dsh-ig-provider-head').props.onClick(),
     cardText: () => text(render()),
     syncScope: () => { for (const setup of hooks.scopeEffects.splice(0)) setup() },
     rowText: () => text(row()),
@@ -85,6 +86,31 @@ beforeEach(() => { hooks.values = []; hooks.cursor = 0; hooks.scopeEffects = [] 
 afterEach(() => { vi.unstubAllGlobals() })
 
 describe('settings card credential actions', () => {
+  it.each(['拉取模型', '测试连接'])('requires saving a changed Google protocol before %s', action => {
+    const fetch = vi.fn()
+    vi.stubGlobal('fetch', fetch)
+    const form = formHarness('zh', {}, 'google')
+    form.field('请求协议', 'native')
+    form.click(action)
+    expect(form.rowText()).toContain('请求协议尚未保存')
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it.each(['zh', 'en'])('saves and reopens the Google native protocol setting in %s', async lang => {
+    const form = formHarness(lang, {}, 'google')
+    form.field(lang === 'zh' ? '请求协议' : 'Request protocol', 'native')
+    form.typeURL('https://relay.example/v1beta')
+    form.save()
+    await vi.waitFor(() => expect(form.setSetting).toHaveBeenCalledWith('googleNative', true))
+    expect(form.setSetting).toHaveBeenCalledWith('googleEndpoint', 'https://relay.example/v1beta')
+    hooks.values = []
+    form.expand()
+    expect(form.rowText()).toContain('https://example.com/v1beta')
+    form.field(lang === 'zh' ? '请求协议' : 'Request protocol', 'interactions')
+    form.save()
+    await vi.waitFor(() => expect(form.setSetting).toHaveBeenCalledWith('googleNative', false))
+  })
+
   it.each([
     { openaiCompatBaseURL: 'https://token.sensenova.cn/v1', openaiCompatModel: 'sensenova-u1.5-lite' },
     { openaiCompatBaseURL: 'https://workspace-123.cn-beijing.maas.aliyuncs.com/compatible-mode/v1', openaiCompatModel: 'qwen-image-3.0' },

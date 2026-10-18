@@ -239,8 +239,8 @@ export async function generateFromStudio(
       const aspectRatio = input.ratio as AspectRatio
       const imageSize = input.quality as ImageSize
       generated = input.mode === 'edit'
-        ? await editGoogleImage({ apiKey: credential, endpoint: wired.endpoint, model: wired.model, prompt: input.prompt, sourceImages, aspectRatio, imageSize, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal })
-        : await generateGoogleImage({ apiKey: credential, endpoint: wired.endpoint, model: wired.model, prompt: input.prompt, aspectRatio, imageSize, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal })
+        ? await editGoogleImage({ apiKey: credential, endpoint: wired.endpoint, native: wired.native, model: wired.model, prompt: input.prompt, sourceImages, aspectRatio, imageSize, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal })
+        : await generateGoogleImage({ apiKey: credential, endpoint: wired.endpoint, native: wired.native, model: wired.model, prompt: input.prompt, aspectRatio, imageSize, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal })
       output = `${aspectRatio}, ${imageSize}`
     } else if (wired.provider === 'openai' || wired.provider === 'openai-compat' || wired.provider === 'xai' || wired.provider === 'zhipu') {
       // openai-compat keeps its configured relay table; the others resolve via

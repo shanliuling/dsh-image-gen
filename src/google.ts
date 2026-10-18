@@ -1,4 +1,4 @@
-/** Google Gemini Interactions API adapter. */
+/** Google Gemini Interactions and opt-in generateContent adapters. */
 import type { ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import type { AspectRatio, ImageSize } from './config.js'
 import { guardedFetch, readResponseBody } from './fetch-diagnostics.js'
@@ -17,6 +17,7 @@ export interface GeneratedImage {
 interface GoogleRequestBase {
   apiKey: string
   endpoint: string
+  native?: boolean
   model: string
   aspectRatio: AspectRatio
   imageSize: ImageSize
@@ -30,6 +31,7 @@ export function generateGoogleImage(input: GoogleRequestBase & { prompt: string 
     ...input,
     operation: 'generation',
     interactionInput: input.prompt,
+    nativeParts: [{ text: input.prompt }],
   })
 }
 
@@ -38,7 +40,7 @@ export function editGoogleImage(input: GoogleRequestBase & {
   prompt: string
   sourceImages: Array<{ data: Uint8Array; mediaType: ImageMediaType }>
 }): Promise<GeneratedImage> {
-  const interactionInput = input.sourceImages.length === 1
+  const interactionInput = input.native ? [] : input.sourceImages.length === 1
     ? [
         {
           type: 'image',
@@ -63,6 +65,10 @@ export function editGoogleImage(input: GoogleRequestBase & {
     ...input,
     operation: 'editing',
     interactionInput,
+    nativeParts: input.native ? [
+      ...input.sourceImages.map(image => ({ inlineData: { mimeType: image.mediaType, data: Buffer.from(image.data).toString('base64') } })),
+      { text: input.prompt },
+    ] : [],
   })
 }
 
@@ -70,23 +76,31 @@ export function editGoogleImage(input: GoogleRequestBase & {
 async function requestGoogleImage(input: GoogleRequestBase & {
   operation: 'generation' | 'editing'
   interactionInput: string | Array<Record<string, string>>
+  nativeParts: Array<Record<string, unknown>>
 }): Promise<GeneratedImage> {
   const label = `Google image ${input.operation}`
-  const response = await guardedFetch(`${label} request`, input.signal, () => fetch(input.endpoint, {
+  const endpoint = input.native ? nativeGoogleUrl(input.endpoint, input.model).toString() : input.endpoint
+  const body = input.native ? {
+    contents: [{ role: 'user', parts: input.nativeParts }],
+    generationConfig: {
+      candidateCount: 1,
+      responseModalities: ['TEXT', 'IMAGE'],
+      imageConfig: { aspectRatio: input.aspectRatio, imageSize: input.imageSize },
+    },
+  } : {
+    model: input.model,
+    input: input.interactionInput,
+    response_format: {
+      type: 'image', mime_type: REQUESTED_MEDIA_TYPE,
+      aspect_ratio: input.aspectRatio, image_size: input.imageSize,
+    },
+  }
+  const response = await guardedFetch(`${label} request`, input.signal, () => fetch(endpoint, {
     method: 'POST',
     redirect: 'error',
     signal: input.signal,
     headers: { 'content-type': 'application/json', 'x-goog-api-key': input.apiKey },
-    body: JSON.stringify({
-      model: input.model,
-      input: input.interactionInput,
-      response_format: {
-        type: 'image',
-        mime_type: REQUESTED_MEDIA_TYPE,
-        aspect_ratio: input.aspectRatio,
-        image_size: input.imageSize,
-      },
-    }),
+    body: JSON.stringify(body),
   }), input.apiKey)
   const text = await readBoundedText(response, Math.ceil(input.maxBytes * 1.4) + ERROR_LIMIT, label)
   if (!response.ok) throw new Error(`${label} failed (${response.status}): ${redactSecrets(text, input.apiKey).slice(0, ERROR_LIMIT)}`)
@@ -96,7 +110,7 @@ async function requestGoogleImage(input: GoogleRequestBase & {
   } catch {
     throw new Error(`${label} returned invalid JSON`)
   }
-  const image = outputImage(payload)
+  const image = input.native ? nativeOutputImage(payload) : outputImage(payload)
   if (image === undefined) throw new Error(`${label} returned no image: ${redactSecrets(text, input.apiKey).slice(0, ERROR_LIMIT)}`)
   const data = decodeBase64(image.data, label)
   if (data.byteLength > input.maxBytes) throw new Error(`${label} exceeded the ${String(input.maxBytes)} byte image limit`)
@@ -106,6 +120,42 @@ async function requestGoogleImage(input: GoogleRequestBase & {
   const mediaType = detectImageMediaType(data) ?? mediaTypeOf(image.mime_type ?? REQUESTED_MEDIA_TYPE)
   if (mediaType === undefined) throw new Error(`${label} returned unsupported media type ${JSON.stringify(image.mime_type)}`)
   return { data, mediaType }
+}
+
+/** Accept a versioned base, the existing interactions URL, or a full native URL. */
+function nativeGoogleUrl(endpoint: string, model?: string): URL {
+  let url: URL
+  try { url = new URL(endpoint) } catch { throw new Error('Google endpoint must be an absolute URL') }
+  const base = url.pathname.replace(/\/+$/, '').replace(/\/(?:interactions|models(?:\/[^/]+:generateContent)?)$/, '')
+  url.pathname = `${base}/models${model === undefined ? '' : `/${encodeURIComponent(model.replace(/^models\//, ''))}:generateContent`}`
+  return url
+}
+
+/** The settings probe and model picker use the same base as image requests. */
+export function googleModelsEndpoint(endpoint: string, native: boolean): string {
+  if (native) return nativeGoogleUrl(endpoint).toString()
+  let url: URL
+  try { url = new URL(endpoint) } catch { throw new Error('Google endpoint must be an absolute URL') }
+  const segments = url.pathname.split('/').filter(Boolean)
+  segments[segments.length - 1] = 'models'
+  url.pathname = `/${segments.join('/')}`
+  return url.toString()
+}
+
+function nativeOutputImage(value: unknown): { data: string; mime_type?: unknown } | undefined {
+  const candidates = record(value)?.candidates
+  if (!Array.isArray(candidates)) return undefined
+  for (const candidate of candidates) {
+    const parts = record(record(candidate)?.content)?.parts
+    if (!Array.isArray(parts)) continue
+    for (const value of parts) {
+      const part = record(value)
+      if (part?.thought === true) continue
+      const image = record(part?.inlineData ?? part?.inline_data)
+      if (typeof image?.data === 'string') return { data: image.data, mime_type: image.mimeType ?? image.mime_type }
+    }
+  }
+  return undefined
 }
 
 function outputImage(value: unknown): { data: string; mime_type?: unknown } | undefined {

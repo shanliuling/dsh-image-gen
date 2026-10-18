@@ -88,6 +88,8 @@ export interface Config {
   provider?: ImageProvider
   googleModel?: string
   googleEndpoint?: string
+  /** Use Gemini generateContent instead of Interactions; opt-in for native-only gateways. */
+  googleNative?: boolean
   openaiBaseURL?: string
   openaiModel?: string
   /** Official model size table: ratio -> resolution tier -> pixels. Empty uses model presets. */
@@ -192,6 +194,7 @@ export const Config = z.object({
   provider: volatile(z.union(IMAGE_PROVIDERS).default('google')),
   googleModel: volatile(z.string().default(DEFAULT_GOOGLE_MODEL)),
   googleEndpoint: volatile(z.string().default(DEFAULT_GOOGLE_ENDPOINT)),
+  googleNative: volatile(z.boolean().default(false)),
   openaiBaseURL: volatile(z.string().default(DEFAULT_OPENAI_BASE_URL)),
   openaiModel: volatile(z.string().default(DEFAULT_OPENAI_MODEL)),
   openaiSizes: volatile(z.dict(z.dict(z.string())).default({})),
@@ -228,7 +231,7 @@ export const Config = z.object({
 
 /** Resolve exactly one provider profile for a tool call. */
 export function resolveProvider(config: Config):
-  | { provider: 'google'; apiKeyEnv: string; model: string; endpoint: string; aspectRatio: AspectRatio; imageSize: ImageSize }
+  | { provider: 'google'; apiKeyEnv: string; model: string; endpoint: string; native: boolean; aspectRatio: AspectRatio; imageSize: ImageSize }
   | { provider: 'openai'; apiKeyEnv: string; model: string; baseURL: string; imageSize: string }
   | { provider: 'openai-compat'; apiKeyEnv: string; model: string; baseURL: string; imageSize: string; editFormat: CompatEditFormat; editExtra: Record<string, unknown> }
   | { provider: 'seedream'; apiKeyEnv: string; model: string; baseURL: string; imageSize: string; arkOptions: ArkOutputOptions }
@@ -288,7 +291,7 @@ export function resolveProvider(config: Config):
     case 'chatgpt-sub': return { provider: 'chatgpt-sub', model: DEFAULT_SUBSCRIPTION_MODELS['chatgpt-sub'] }
     case 'grok-sub': return { provider: 'grok-sub', model: DEFAULT_SUBSCRIPTION_MODELS['grok-sub'] }
     case 'google-sub': return { provider: 'google-sub', model: DEFAULT_SUBSCRIPTION_MODELS['google-sub'] }
-    case 'google': return { provider: 'google', apiKeyEnv: GOOGLE_API_KEY_ENV, model: config.googleModel ?? DEFAULT_GOOGLE_MODEL, endpoint: config.googleEndpoint ?? DEFAULT_GOOGLE_ENDPOINT, aspectRatio: '1:1', imageSize: '1K' }
+    case 'google': return { provider: 'google', apiKeyEnv: GOOGLE_API_KEY_ENV, model: config.googleModel ?? DEFAULT_GOOGLE_MODEL, endpoint: config.googleEndpoint ?? DEFAULT_GOOGLE_ENDPOINT, native: config.googleNative === true, aspectRatio: '1:1', imageSize: '1K' }
   }
 }
 

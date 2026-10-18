@@ -32,6 +32,10 @@ describe('probe targets', () => {
     expect(target.url).toBe('https://generativelanguage.googleapis.com/v1beta/models')
   })
 
+  it.each(['https://relay.example/proxy/v1beta', 'https://relay.example/proxy/v1beta/models/gemini:generateContent'])('pulls models from a native Google base at %s', googleEndpoint => {
+    expect(probeTarget('google', { googleEndpoint, googleNative: true }, 'gem-key').url).toBe('https://relay.example/proxy/v1beta/models')
+  })
+
   it('joins OpenAI relays and official endpoints on /models with Bearer auth', () => {
     expect(probeTarget('openai', {}, 'sk-openai')).toEqual({
       url: 'https://api.openai.com/v1/models',

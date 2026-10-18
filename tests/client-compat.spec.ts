@@ -7,6 +7,36 @@ import * as plugin from '../src/client/index.js'
 import { imageRef } from '../src/client/image-ref.js'
 import { IMAGE_RESULT_NODE_KIND } from '../src/client/image-result-node.js'
 
+function snapshotStore<T>(initial: T) {
+  let value = initial
+  const listeners = new Set<() => void>()
+  return { getSnapshot: () => value, subscribe: (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn) } },
+    set(next: T) { value = next; for (const fn of listeners) fn() }, listeners }
+}
+
+it('connects a late uiSession service and cleans up both session subscriptions on disposal', async () => {
+  const h = clientHarness({ connection: {}, remote: { credentials: { describe: vi.fn(), set: vi.fn() } } })
+  const list = snapshotStore({ current: 's1' })
+  const source = () => snapshotStore({ entries: [], change: { kind: 'append', entries: [] } })
+  const sources = { s1: source(), s2: source() }
+  const binding = vi.fn((id: keyof typeof sources) => ({ eventSource: sources[id] }))
+  h.ctx.provide('sessions', { list, binding })
+  const fiber = h.ctx.plugin(plugin)
+  await fiber.await()
+  await vi.waitFor(() => expect(sources.s1.listeners.size).toBe(1))
+  const current = snapshotStore<{ key?: string }>({ key: 's2' })
+  h.ctx.provide('uiSession', { adapter: { current } })
+  await vi.waitFor(() => expect(binding).toHaveBeenLastCalledWith('s2'))
+  expect(sources.s1.listeners.size).toBe(0)
+  expect(sources.s2.listeners.size).toBe(1)
+  current.set({})
+  expect(sources.s2.listeners.size).toBe(0)
+  await fiber.dispose()
+  expect(list.listeners.size).toBe(0)
+  expect(current.listeners.size).toBe(0)
+  expect(sources.s1.listeners.size).toBe(0)
+})
+
 const imageResultNodeShape = expect.objectContaining({
   kind: IMAGE_RESULT_NODE_KIND,
   target: 'chat',

@@ -17,18 +17,61 @@ interface EventSource {
 /** Small runtime face: older hosts may not expose the modern session feed. */
 export interface CanvasSessions {
   list: {
-    getSnapshot(): { current?: string | undefined }
+    getSnapshot(): {
+      current?: string | undefined
+      byId?: Readonly<Record<string, { id: string; retainedBy?: Readonly<Record<string, number>> }>>
+    }
     subscribe(listener: () => void): () => void
   }
   binding(id: string): { eventSource: EventSource } | undefined
 }
 
+/** Runtime face of uiSession.adapter.current; absent on older hosts. */
+export interface CanvasSessionSelection {
+  getSnapshot(): { readonly key?: string | undefined } | undefined
+  subscribe(listener: () => void): () => void
+}
+
+/** Keep one landing subscription while the optional UI service loads or unloads. */
+export function createCanvasSessionSelection(): CanvasSessionSelection & { bind(source: CanvasSessionSelection): () => void } {
+  let current: CanvasSessionSelection | undefined
+  const listeners = new Set<() => void>()
+  const notify = (): void => { for (const listener of listeners) listener() }
+  return {
+    getSnapshot: () => current?.getSnapshot(),
+    subscribe: listener => { listeners.add(listener); return () => { listeners.delete(listener) } },
+    bind(source) {
+      current = source
+      const stop = source.subscribe(notify)
+      notify()
+      return () => {
+        stop()
+        if (current !== source) return
+        current = undefined
+        notify()
+      }
+    },
+  }
+}
+
+function currentSessionId(sessions: CanvasSessions, selection?: CanvasSessionSelection): string | undefined {
+  const selected = selection?.getSnapshot()
+  // A present UI store with no key means no active conversation, not permission
+  // to land images from a different retained/background session.
+  if (selected !== undefined) return selected.key || undefined
+  const snapshot = sessions.list.getSnapshot()
+  if (snapshot.current) return snapshot.current
+  const mainViews = Object.values(snapshot.byId ?? {}).filter(row => (row.retainedBy?.mainView ?? 0) > 0)
+  // Without the UI authority, ambiguous windows must not cross-deliver images.
+  return mainViews.length === 1 ? mainViews[0]!.id : undefined
+}
+
 /** Subscribe to live additions, never to card rendering or history replay. */
-export function startConversationLandings(sessions: CanvasSessions): () => void {
+export function startConversationLandings(sessions: CanvasSessions, selection?: CanvasSessionSelection): () => void {
   let source: EventSource | undefined
   let stopEvents: (() => void) | undefined
   const followCurrent = (): void => {
-    const id = sessions.list.getSnapshot().current
+    const id = currentSessionId(sessions, selection)
     const next = id === undefined ? undefined : sessions.binding(id)?.eventSource
     if (next === source) return
     stopEvents?.()
@@ -58,6 +101,7 @@ export function startConversationLandings(sessions: CanvasSessions): () => void 
     })
   }
   const stopList = sessions.list.subscribe(followCurrent)
+  const stopSelection = selection?.subscribe(followCurrent)
   followCurrent()
-  return () => { stopList(); stopEvents?.() }
+  return () => { stopList(); stopSelection?.(); stopEvents?.() }
 }

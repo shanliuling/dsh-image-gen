@@ -96,7 +96,7 @@ globalThis.fetch = async (url, options) => {
   return new Response(JSON.stringify(health()))
 }
 const renderers = new Set()
-async function card(ctx) {
+async function card(ctx, providerLabel = 'OpenAI-compatible (relay)') {
   let writes = 0
   const read = () => {
     const section = ctx.settings.describe().find(row => row.ns === 'image-gen')
@@ -126,7 +126,7 @@ async function card(ctx) {
   // The card renders open on the plugin's own page now, so only the provider
   // row still needs a click to expand.
   const row = () => renderer.root.findAll(node => node.type === 'div' && node.props.className?.startsWith('dsh-ig-provider-row'))
-    .find(node => text(node.findByProps({ className: 'dsh-ig-provider-name' })) === 'OpenAI-compatible (relay)')
+    .find(node => text(node.findByProps({ className: 'dsh-ig-provider-name' })) === providerLabel)
   await act(async () => { row().findByProps({ className: 'dsh-ig-provider-head' }).props.onClick() })
   const input = type => row().findAllByType('input').find(element => element.props.type === type)
   const save = async () => { await act(async () => { row().findByType('form').props.onSubmit({ preventDefault() {} }) }) }
@@ -161,11 +161,23 @@ try {
     assert.equal(refreshed.input('url').props.value, 'https://saved.example/v1')
     assert.equal(refreshed.input(undefined).props.value, 'test-image-model')
     await refreshed.close()
+    const google = await card(ctx, 'Google Gemini')
+    await act(async () => { google.row().findByType('select').props.onChange({ target: { value: 'native' } }) })
+    await google.type('url', 'https://native.example/v1beta')
+    await google.save()
+    await waitFor(() => text(google.row()).includes('Saved'))
+    assert.equal(ctx.settings.describe().find(row => row.ns === 'image-gen').value.googleNative, true)
+    await google.close()
     await ctx.fiber.dispose()
     ctx = await start()
     const restarted = await card(ctx)
     assert.equal(restarted.input('url').props.value, 'https://saved.example/v1')
     assert.equal(restarted.input(undefined).props.value, 'test-image-model')
+    await restarted.close()
+    const nativeRestarted = await card(ctx, 'Google Gemini')
+    assert.equal(nativeRestarted.row().findByType('select').props.value, 'native')
+    assert.equal(nativeRestarted.input('url').props.value, 'https://native.example/v1beta')
+    console.log('PASS: native Google protocol persists through the installed card, real DSH settings, and host restart')
     console.log('PASS: installed browser save handler + DSH 0.2 profile/editor persists settings across fresh form and host restart')
   }
 } finally {
