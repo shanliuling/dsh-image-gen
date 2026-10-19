@@ -37,6 +37,8 @@ import {
 } from './gallery-store.js'
 import { StudioView } from './studio-view.js'
 import { deselectStudioTlCanvases } from './tl/studio-tl-canvas.js'
+import { GalleryCanvasButton } from './tl/gallery-canvas-button.js'
+import { startGalleryImageDrag } from './tl/gallery-image-transfer.js'
 import { InspirationView } from './inspiration-view.js'
 import { evictAttachmentCache, fetchAttachmentBlob } from './image-cache.js'
 import { copyImageBlob, createZipBlob, downloadBlobUrl, type ZipFileInput } from './browser-image-utils.js'
@@ -1461,6 +1463,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
             <div className="dsh-ig-gallery-grid">
               {filteredItems.map((item, idx) => (
                 <GalleryCard
+                  lang={lang}
                   key={item.id}
                   item={item}
                   index={idx}
@@ -1880,6 +1883,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
 }
 
 interface GalleryCardProps {
+  lang: 'zh' | 'en'
   item: GalleryItem
   index: number
   isManageMode: boolean
@@ -1894,6 +1898,7 @@ interface GalleryCardProps {
 }
 
 const GalleryCard: FC<GalleryCardProps> = ({
+  lang,
   item,
   index: _index,
   isManageMode,
@@ -2006,11 +2011,17 @@ const GalleryCard: FC<GalleryCardProps> = ({
             src={url}
             alt={item.prompt}
             loading="lazy"
+            draggable={!isManageMode && Boolean(blob?.size)}
+            onDragStart={event => {
+              if (isManageMode) event.preventDefault()
+              else startGalleryImageDrag(event, item, blob)
+            }}
           />
         )}
 
         {/* Hover quick action toolbar */}
         <div className="dsh-ig-card-toolbar">
+          {!isManageMode && <GalleryCanvasButton item={item} lang={lang} disabled={!blob?.size} className="dsh-ig-tool-btn" onToast={onToast} />}
           <button
             type="button"
             className="dsh-ig-tool-btn"

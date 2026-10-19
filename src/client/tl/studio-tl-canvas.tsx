@@ -16,6 +16,7 @@ import { CANVAS_MAX_PROMPT_CHARS } from '../../shared.js'
 import { applyBrandTheme, syncTldrawThemeWithHost } from './tl-brand-theme.js'
 import { startCanvasSync, type CanvasSyncStatus } from './canvas-sync.js'
 import { clearTlLandings, getTlLandingGeneration, registerTlLandingConsumer, type TlLandingItem } from './tl-canvas-bridge.js'
+import { readGalleryImageDrop } from './gallery-image-transfer.js'
 
 /**
  * Infinite canvas surface for the Studio workbench, backed by tldraw.
@@ -91,7 +92,7 @@ function metaPromptOf(prompt: string | undefined): string | undefined {
   return collapsed.length === 0 ? undefined : collapsed.slice(0, CANVAS_MAX_PROMPT_CHARS)
 }
 
-async function landTlItems(editor: Editor, items: readonly TlLandingItem[], isActive: () => boolean): Promise<boolean> {
+export async function landTlItems(editor: Editor, items: readonly TlLandingItem[], isActive: () => boolean, onUnreadable?: () => void): Promise<boolean> {
   // Explicit saves may request an image that is already in the document.
   const landedIds = landedIdsOf(editor)
   const pending = items.filter(item => !landedIds.has(item.galleryId))
@@ -123,6 +124,7 @@ async function landTlItems(editor: Editor, items: readonly TlLandingItem[], isAc
         })
       } catch (error) {
         console.warn('[dsh-image-gen] canvas landing skipped (attachment unreadable):', item.galleryId, error)
+        if (isActive()) onUnreadable?.()
         continue
       }
     }
@@ -237,9 +239,12 @@ export const StudioTlCanvas: FC<{ lang?: 'zh' | 'en' }> = memo(function StudioTl
   // Separate camera/selection state for editors sharing the document.
   const sessionId = useId()
   const [syncStatus, setSyncStatus] = useState<CanvasSyncStatus>({ phase: 'idle', count: 0 })
+  const [landingError, setLandingError] = useState(false)
   const retrySync = useRef<() => void>(() => {})
+  const editorRef = useRef<Editor | null>(null)
   const onMount = useCallback((editor: Editor) => {
           let active = true
+          editorRef.current = editor
           // tldraw restores instance state (including the selection) from the
           // persisted snapshot; every mount starts as fresh interaction state.
           editor.run(() => editor.selectNone())
@@ -259,13 +264,15 @@ export const StudioTlCanvas: FC<{ lang?: 'zh' | 'en' }> = memo(function StudioTl
           // tldraw calls onMount after the local document has loaded.
           const stopLanding = registerTlLandingConsumer(items => {
             const generation = getTlLandingGeneration()
-            return landTlItems(editor, items, () => active && generation === getTlLandingGeneration())
+            setLandingError(false)
+            return landTlItems(editor, items, () => active && generation === getTlLandingGeneration(), () => setLandingError(true))
           })
           // Mirror this canvas into the host so the conversation agent can
           // see it (canvas_state / view_canvas / edit_image canvas_selection).
           let stopSync = startCanvasSync(editor, setSyncStatus)
           retrySync.current = () => stopSync.retry()
           const clear = (): void => {
+            setLandingError(false)
             // Stop outstanding screenshots as well as the old host selection.
             stopSync()
             editor.complete()
@@ -285,6 +292,7 @@ export const StudioTlCanvas: FC<{ lang?: 'zh' | 'en' }> = memo(function StudioTl
           mountedCanvases.add(clear)
           return () => {
             active = false
+            if (editorRef.current === editor) editorRef.current = null
             mountedEditors.delete(editor)
             mountedCanvases.delete(clear)
             stopLanding()
@@ -302,17 +310,32 @@ export const StudioTlCanvas: FC<{ lang?: 'zh' | 'en' }> = memo(function StudioTl
         : '选区同步失败'
 
   return (
-    <div className="dsh-ig-tl-canvas">
+    <div className="dsh-ig-tl-canvas" onDropCapture={event => {
+      const item = readGalleryImageDrop(event.dataTransfer)
+      const editor = editorRef.current
+      if (!item || !editor) return
+      event.preventDefault()
+      event.stopPropagation()
+      setLandingError(false)
+      const generation = getTlLandingGeneration()
+      void landTlItems(editor, [item], () => editorRef.current === editor && generation === getTlLandingGeneration(), () => setLandingError(true))
+        .catch(error => {
+          if (editorRef.current === editor) setLandingError(true)
+          console.warn('[dsh-image-gen] history image drop failed:', error)
+        })
+    }}>
       <Tldraw
         persistenceKey="dsh-image-gen-workbench-v1"
         sessionId={sessionId}
         components={TL_COMPONENTS}
         onMount={onMount}
       />
-      {syncStatus.phase !== 'idle' && (
-        <div className="dsh-ig-canvas-sync-status" data-phase={syncStatus.phase} role="status" aria-live="polite">
-          <span>{statusText}{syncStatus.phase === 'error' ? `：${canvasSyncError(syncStatus.error, lang)}` : ''}</span>
-          {syncStatus.phase === 'error' && <button type="button" onClick={() => retrySync.current()}>{lang === 'en' ? 'Retry' : '重试'}</button>}
+      {(landingError || syncStatus.phase !== 'idle') && (
+        <div className="dsh-ig-canvas-sync-status" data-phase={landingError ? 'error' : syncStatus.phase} role="status" aria-live="polite">
+          <span>{landingError
+            ? lang === 'en' ? 'Could not read the original image. Reload it and try again.' : '无法读取原图，请重新加载图片后重试。'
+            : <>{statusText}{syncStatus.phase === 'error' ? `：${canvasSyncError(syncStatus.error, lang)}` : ''}</>}</span>
+          {!landingError && syncStatus.phase === 'error' && <button type="button" onClick={() => retrySync.current()}>{lang === 'en' ? 'Retry' : '重试'}</button>}
         </div>
       )}
     </div>

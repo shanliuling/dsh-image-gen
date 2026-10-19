@@ -183,6 +183,7 @@ For more precise parameter control, open **Gallery** from the conversation heade
 Express your ideas on an infinite canvas and turn drafts, compositions, and thoughts into real images through conversation.
 
 - Freely sketch, add reference materials, and organize your ideas on the canvas.
+- Drag images from Recent generations or the Gallery onto the canvas, or click Send to canvas on a thumbnail. Open the infinite canvas and wait for the image to load first; repeated imports of the same history item are deduplicated.
 - Talk to the AI in natural language to turn a draft into a finished piece.
 - Keep editing, refining, and exploring new directions from existing results—your creative process is preserved so every exploration stays iterable.
 

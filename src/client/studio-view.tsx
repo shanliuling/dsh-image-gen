@@ -41,6 +41,8 @@ import { PROVIDER_DEFAULT_QUALITY } from '../openai-output.js'
 import { WatermarkControl } from './watermark-control.js'
 import { clearStudioTlCanvases, StudioTlCanvas } from './tl/studio-tl-canvas.js'
 import { pushTlLandings } from './tl/tl-canvas-bridge.js'
+import { GalleryCanvasButton } from './tl/gallery-canvas-button.js'
+import { startGalleryImageDrag } from './tl/gallery-image-transfer.js'
 import type { LocaleService } from './gallery-view.js'
 
 const PAGE_SIZE = 12
@@ -1271,7 +1273,7 @@ export const StudioView: FC<{
             </div>
             {railTab === 'recent' ? (
               <div className="dsh-ig-recent-scroll">
-                {items.length === 0 ? <div className="dsh-ig-recent-empty"><ImagePlus size={22} /><span>{t('empty')}</span></div> : displayItems.map(item => <RecentItem key={item.id} item={item} active={selected?.id === item.id} onClick={() => selectItem(item)} />)}
+                {items.length === 0 ? <div className="dsh-ig-recent-empty"><ImagePlus size={22} /><span>{t('empty')}</span></div> : displayItems.map(item => <RecentItem key={item.id} item={item} active={selected?.id === item.id} lang={lang} onToast={flash} onClick={() => selectItem(item)} />)}
                 {items.length > visibleLimit && (
                   <button type="button" className="dsh-ig-load-more" onClick={() => setVisibleLimit(l => l + 30)}>
                     {t('loadMore', { n: String(items.length - visibleLimit) })}
@@ -1288,7 +1290,7 @@ export const StudioView: FC<{
                   if (list.length === 0) return <div className="dsh-ig-fav-empty"><ImagePlus size={18} /><span>{t('favEmptyImages')}</span></div>
                   return <div className="dsh-ig-fav-grid">
                     {list.map(item => (
-                      <RecentItem key={item.id} item={item} active={false} onClick={() => void applyFavoriteImage(item)} />
+                      <RecentItem key={item.id} item={item} active={false} lang={lang} onToast={flash} onClick={() => void applyFavoriteImage(item)} />
                     ))}
                   </div>
                 })()}
@@ -2036,19 +2038,24 @@ function localizeQualityOptions(options: Array<{ value: string; label: string }>
   }))
 }
 
-const RecentItem: FC<{ item: GalleryItem; active: boolean; onClick(): void }> = ({ item, active, onClick }) => {
+const RecentItem: FC<{ item: GalleryItem; active: boolean; lang: 'zh' | 'en'; onToast(message: string): void; onClick(): void }> = ({ item, active, lang, onToast, onClick }) => {
   const [setRef, inView] = useInView<HTMLButtonElement>()
   const image = useAttachmentImage(item.attachment, inView)
   return (
-    <button
-      ref={setRef}
-      type="button"
-      className={`dsh-ig-recent-item ${active ? 'is-active' : ''}`}
-      onClick={onClick}
-      title={item.prompt}
-    >
-      <div className="dsh-ig-recent-thumb">{image.url !== null ? <img src={image.url} alt="" loading="lazy" /> : <ImagePlus size={18} />}</div>
-    </button>
+    <div className={`dsh-ig-recent-item ${active ? 'is-active' : ''}`}>
+      <button
+        ref={setRef}
+        type="button"
+        className="dsh-ig-recent-select"
+        onClick={onClick}
+        title={item.prompt}
+        draggable={Boolean(image.blob?.size)}
+        onDragStart={event => { startGalleryImageDrag(event, item, image.blob) }}
+      >
+        <div className="dsh-ig-recent-thumb">{image.url !== null ? <img src={image.url} alt="" loading="lazy" draggable={false} /> : <ImagePlus size={18} />}</div>
+      </button>
+      <GalleryCanvasButton item={item} lang={lang} disabled={!image.blob?.size} className="dsh-ig-recent-send" onToast={onToast} />
+    </div>
   )
 }
 
