@@ -12,6 +12,7 @@ export interface GalleryItem {
   prompt: string
   /** Generation provider, or 'import' for user-uploaded images. */
   provider: ImageProvider | 'import'
+  channel?: string | undefined
   model: string
   createdAt: number
   aspectRatio?: string | undefined

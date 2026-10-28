@@ -4,7 +4,7 @@
  * write path is the same `provider` settings field the settings card uses, so
  * the two views can never disagree.
  */
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import {
   CLOUD_IMAGE_PROVIDERS,
   DEFAULT_MODELS,
@@ -14,8 +14,12 @@ import {
   activeComfyUIWorkflow,
   cloudCredentialRef,
   isSubscriptionProvider,
+  resolveOpenAICompatChannel,
+  resolveOpenAICompatChannels,
+  resolveOpenAICompatModels,
   type CloudImageProvider,
   type ComfyUIWorkflowEntry,
+  type OpenAICompatChannel,
   type ImageProvider,
   type SubscriptionProvider,
 } from '../shared.js'
@@ -28,7 +32,11 @@ export interface PillSettings {
   provider?: ImageProvider
   googleModel?: string
   openaiModel?: string
+  openaiCompatLabel?: string
   openaiCompatModel?: string
+  openaiCompatModels?: readonly string[]
+  openaiCompatChannels?: readonly OpenAICompatChannel[]
+  openaiCompatActiveChannel?: string
   seedreamModel?: string
   dashscopeModel?: string
   xaiModel?: string
@@ -145,8 +153,22 @@ export function pillVisible(value: PillSettings | undefined): boolean {
   return value?.showProviderPill === true
 }
 
+const PILL_MODEL_FIELDS: Partial<Record<ImageProvider, keyof PillSettings>> = {
+  google: 'googleModel',
+  openai: 'openaiModel',
+  'openai-compat': 'openaiCompatModel',
+  seedream: 'seedreamModel',
+  dashscope: 'dashscopeModel',
+  xai: 'xaiModel',
+  zhipu: 'zhipuModel',
+}
+
+const PILL_MODEL_OPTIONS_FIELDS: Partial<Record<ImageProvider, keyof PillSettings>> = {
+  'openai-compat': 'openaiCompatModels',
+}
+
 /** Model (or ComfyUI workflow) a provider row will use with the persisted settings. */
-export function pillModelOf(provider: ImageProvider, value: PillSettings | undefined): string {
+export function pillModelOf(provider: ImageProvider, value: PillSettings | undefined, channelId?: string): string {
   if (provider === 'comfyui') {
     const workflow = activeComfyUIWorkflow(value ?? {})
     return workflow === undefined ? '' : workflow.name
@@ -154,11 +176,34 @@ export function pillModelOf(provider: ImageProvider, value: PillSettings | undef
   if ((SUBSCRIPTION_PROVIDERS as readonly string[]).includes(provider)) {
     return DEFAULT_MODELS[provider]
   }
-  const stored = provider === 'google' ? value?.googleModel : provider === 'openai' ? value?.openaiModel
-    : provider === 'openai-compat' ? value?.openaiCompatModel
-    : provider === 'seedream' ? value?.seedreamModel : provider === 'dashscope' ? value?.dashscopeModel
-    : provider === 'xai' ? value?.xaiModel : value?.zhipuModel
+  if (provider === 'openai-compat') {
+    const channel = resolveOpenAICompatChannel(value ?? {}, channelId)
+    return channel.model.trim().length > 0 ? channel.model.trim() : DEFAULT_MODELS[provider]
+  }
+  const field = PILL_MODEL_FIELDS[provider]
+  const stored = field === undefined ? undefined : value?.[field]
   return typeof stored === 'string' && stored.length > 0 ? stored : DEFAULT_MODELS[provider]
+}
+
+/** Optional model choices exposed by a provider; single-model providers return an empty list. */
+export function pillModelOptionsOf(provider: ImageProvider, value: PillSettings | undefined, channelId?: string): string[] {
+  if (provider === 'openai-compat') {
+    const channel = resolveOpenAICompatChannel(value ?? {}, channelId)
+    return resolveOpenAICompatModels({ openaiCompatModel: pillModelOf(provider, value, channel.id), openaiCompatModels: channel.models ?? [] })
+  }
+  const field = PILL_MODEL_OPTIONS_FIELDS[provider]
+  if (field === undefined) return []
+  const configured: unknown = value?.[field]
+  const models = Array.isArray(configured)
+    ? [...new Set(configured.filter((model): model is string => typeof model === 'string').map(model => model.trim()).filter(Boolean))]
+    : []
+  const defaultModel = pillModelOf(provider, value)
+  if (defaultModel.length > 0 && !models.includes(defaultModel)) models.unshift(defaultModel)
+  return models
+}
+
+function pillTargetKey(provider: CloudImageProvider, channelId?: string): string {
+  return provider === 'openai-compat' ? `openai-compat:${channelId ?? 'default'}` : provider
 }
 
 /** One fixed-position provider menu anchored to the pill button. */
@@ -168,7 +213,7 @@ export function ImageProviderPill(props: ProviderPillFace) {
   const [open, setOpen] = useState(false)
   const [pending, setPending] = useState<ImageProvider | undefined>(undefined)
   const [error, setError] = useState('')
-  const [dots, setDots] = useState<Record<CloudImageProvider, KeyDot>>({ google: 'unknown', openai: 'unknown', 'openai-compat': 'unknown', seedream: 'unknown', dashscope: 'unknown', xai: 'unknown', zhipu: 'unknown' })
+  const [dots, setDots] = useState<Record<string, KeyDot>>({})
   const [keyTick, setKeyTick] = useState(0)
   // Subscription login state read from the host status route; the browser sees
   // only state words and the account email, never a token.
@@ -186,25 +231,30 @@ export function ImageProviderPill(props: ProviderPillFace) {
 
   useEffect(() => {
     let active = true
-    const refs: string[] = []
-    for (const provider of CLOUD_IMAGE_PROVIDERS) {
-      const ref = cloudCredentialRef(provider)
-      if (ref !== undefined) refs.push(ref)
-    }
-    void props.credentials.describe(refs).then(response => {
+    const targets = [
+      ...CLOUD_IMAGE_PROVIDERS.filter(provider => provider !== 'openai-compat').map(provider => ({
+        key: provider as string,
+        ref: cloudCredentialRef(provider) as string,
+      })),
+      ...resolveOpenAICompatChannels(snapshot.value ?? {}).map(channel => ({
+        key: pillTargetKey('openai-compat', channel.id),
+        ref: channel.keyRef,
+      })),
+    ]
+    void props.credentials.describe(targets.map(target => target.ref)).then(response => {
       if (!active) return
-      const next = {} as Record<CloudImageProvider, KeyDot>
-      for (const provider of CLOUD_IMAGE_PROVIDERS) {
-        const info = response.ok ? response.value?.[cloudCredentialRef(provider) as string] : undefined
-        next[provider] = response.ok ? (info?.configured ? 'configured' : 'missing') : 'unknown'
+      const next: Record<string, KeyDot> = {}
+      for (const target of targets) {
+        const info = response.ok ? response.value?.[target.ref] : undefined
+        next[target.key] = response.ok ? (info?.configured ? 'configured' : 'missing') : 'unknown'
       }
       setDots(next)
     }).catch(() => {
       if (!active) return
-      setDots({ google: 'unknown', openai: 'unknown', 'openai-compat': 'unknown', seedream: 'unknown', dashscope: 'unknown', xai: 'unknown', zhipu: 'unknown' })
+      setDots({})
     })
     return () => { active = false }
-  }, [props.credentials, keyTick])
+  }, [props.credentials, keyTick, snapshot.value])
 
   // Subscription login badges: probed when the menu opens and re-probed on
   // host credential events (a login/logout in the settings card flips the
@@ -233,6 +283,7 @@ export function ImageProviderPill(props: ProviderPillFace) {
   const t = (keyName: PillDictKey): string => (lang === 'en' ? PILL_DICT.en : PILL_DICT.zh)[keyName]
 
   const current = snapshot.value?.provider ?? 'google'
+  const currentChannel = current === 'openai-compat' ? resolveOpenAICompatChannel(snapshot.value ?? {}) : undefined
   const writable = snapshot.writable
 
   // Anchor the fixed-position menu next to the pill each time it opens, and
@@ -292,12 +343,28 @@ export function ImageProviderPill(props: ProviderPillFace) {
   // enables the pill in settings. Toggling later is a plain re-render.
   if (!pillVisible(snapshot.value)) return null
 
-  /** Same write path as the settings card: one field, one disposer, no implicit side effects. */
-  const select = (provider: ImageProvider): void => {
-    if (pending !== undefined || provider === current) { setOpen(false); return }
+  const select = (provider: ImageProvider, model?: string, channelId?: string): void => {
+    const currentModel = pillModelOf(provider, snapshot.value, channelId)
+    const sameChannel = provider !== 'openai-compat' || currentChannel?.id === (channelId ?? 'default')
+    if (pending !== undefined || (provider === current && sameChannel && (model === undefined || model === currentModel))) {
+      setOpen(false)
+      return
+    }
+    const modelField = model === undefined ? undefined : PILL_MODEL_FIELDS[provider]
     setError('')
     setPending(provider)
-    void writeSetting(props.scope, 'provider', provider, t('writeRejected'))
+    void (async () => {
+      if (model !== undefined && provider === 'openai-compat' && channelId !== undefined && channelId !== 'default') {
+        const channels = (snapshot.value?.openaiCompatChannels ?? []).map(channel => channel.id === channelId ? { ...channel, model } : channel)
+        await writeSetting(props.scope, 'openaiCompatChannels', channels, t('writeRejected'))
+      } else if (model !== undefined && modelField !== undefined) {
+        await writeSetting(props.scope, modelField, model, t('writeRejected'))
+      }
+      if (provider === 'openai-compat' && channelId !== undefined && currentChannel?.id !== channelId) {
+        await writeSetting(props.scope, 'openaiCompatActiveChannel', channelId, t('writeRejected'))
+      }
+      if (provider !== current) await writeSetting(props.scope, 'provider', provider, t('writeRejected'))
+    })()
       .then(() => { setOpen(false) })
       .catch(cause => { setError(cause instanceof Error ? cause.message : String(cause)) })
       .finally(() => { setPending(undefined) })
@@ -306,17 +373,17 @@ export function ImageProviderPill(props: ProviderPillFace) {
   /** Plan A dots: ComfyUI is always fixed blue (theme-independent); each
    * subscription reflects its login state (green in, gray out); cloud rows
    * reflect their API-key state as before. */
-  const dotClassOf = (provider: ImageProvider): string => {
+  const dotClassOf = (provider: ImageProvider, channelId?: string): string => {
     if (provider === 'comfyui') return 'dsh-ig-pill-dot-neutral'
     if (isSubscriptionProvider(provider)) {
       const state = subDots[provider]
       return state === 'logged-in' ? 'dsh-ig-pill-dot-ok' : 'dsh-ig-pill-dot-missing'
     }
-    const dot = dots[provider]
+    const dot = dots[pillTargetKey(provider, channelId)]
     return dot === 'configured' ? 'dsh-ig-pill-dot-ok' : dot === 'missing' ? 'dsh-ig-pill-dot-missing' : 'dsh-ig-pill-dot-neutral'
   }
 
-  const subtitleOf = (provider: ImageProvider): string => {
+  const subtitleOf = (provider: ImageProvider, includeModel = true, channelId?: string): string => {
     if (provider === 'comfyui') {
       const workflow = pillModelOf(provider, snapshot.value)
       return workflow.length > 0 ? `${t('noKeyNeeded')} · ${workflow}` : `${t('noKeyNeeded')} · ${t('noWorkflow')}`
@@ -326,12 +393,19 @@ export function ImageProviderPill(props: ProviderPillFace) {
       const stateText = state === 'logged-in' ? t('subSignedIn') : state === 'logged-out' ? t('subSignedOut') : t('subStatusUnknown')
       return `${t('subNoKey')} · ${stateText} · ${pillModelOf(provider, snapshot.value)}`
     }
-    const dot = dots[provider]
-    const model = pillModelOf(provider, snapshot.value)
-    if (dot === 'configured') return `${t('keyConfigured')} · ${model}`
-    if (dot === 'missing') return `${t('keyMissing')} · ${model}`
-    return model
+    const dot = dots[pillTargetKey(provider, channelId)]
+    const model = pillModelOf(provider, snapshot.value, channelId)
+    const modelSuffix = includeModel ? ` · ${model}` : ''
+    if (dot === 'configured') return `${t('keyConfigured')}${modelSuffix}`
+    if (dot === 'missing') return `${t('keyMissing')}${modelSuffix}`
+    return includeModel ? model : ''
   }
+
+  const menuEntries = IMAGE_PROVIDERS.flatMap<{ provider: ImageProvider; channel?: OpenAICompatChannel }>(provider =>
+    provider === 'openai-compat'
+      ? resolveOpenAICompatChannels(snapshot.value ?? {}).map(channel => ({ provider, channel }))
+      : [{ provider }],
+  )
 
   return (
     <div className="dsh-ig-pill-root">
@@ -348,7 +422,7 @@ export function ImageProviderPill(props: ProviderPillFace) {
         <svg className="dsh-ig-pill-icon" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <rect x="1.5" y="2.5" width="13" height="11" rx="2" /><circle cx="5.5" cy="6.5" r="1.3" /><path d="M14.5 10.5l-3.2-3.2-6.3 6.2" />
         </svg>
-        <span className="dsh-ig-pill-provider">{PILL_PROVIDER_LABELS[lang][current]}</span>
+        <span className="dsh-ig-pill-provider">{currentChannel?.label ?? PILL_PROVIDER_LABELS[lang][current]}</span>
         <span className={`dsh-ig-pill-caret${open ? ' dsh-ig-pill-caret-open' : ''}`} aria-hidden="true">
           <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 10l4-4 4 4" /></svg>
         </span>
@@ -356,26 +430,52 @@ export function ImageProviderPill(props: ProviderPillFace) {
       {open && menuStyle !== null ? (
         <div className="dsh-ig-pill-menu" role="menu" aria-label={t('menuTitle')} style={menuStyle}>
           <div className="dsh-ig-pill-menu-title">{t('menuTitle')}</div>
-          {IMAGE_PROVIDERS.map(provider => (
-            <button
-              type="button"
-              key={provider}
-              role="menuitemradio"
-              aria-checked={provider === current}
-              className={`dsh-ig-pill-option${provider === current ? ' dsh-ig-pill-option-active' : ''}`}
-              disabled={pending !== undefined}
-              onClick={() => { select(provider) }}
-            >
-              <span className={`dsh-ig-pill-dot ${dotClassOf(provider)}`} aria-hidden="true" />
-              <span className="dsh-ig-pill-option-text">
-                <span className="dsh-ig-pill-option-name">{PILL_PROVIDER_LABELS[lang][provider]}</span>
-                <span className="dsh-ig-pill-option-sub">{subtitleOf(provider)}</span>
-              </span>
-              {provider === current ? <span className="dsh-ig-pill-check" aria-hidden="true">
-                <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M2.5 8.5l3.5 3.5 7-8" /></svg>
-              </span> : null}
-            </button>
-          ))}
+          {menuEntries.map(({ provider, channel }) => {
+            const channelId = channel?.id
+            const modelOptions = pillModelOptionsOf(provider, snapshot.value, channelId)
+            const active = provider === current && (provider !== 'openai-compat' || currentChannel?.id === channelId)
+            const currentModel = active ? pillModelOf(provider, snapshot.value, channelId) : ''
+            return (
+              <Fragment key={channelId === undefined ? provider : pillTargetKey('openai-compat', channelId)}>
+                <button
+                  type="button"
+                  role={modelOptions.length > 0 ? 'menuitem' : 'menuitemradio'}
+                  aria-checked={modelOptions.length > 0 ? undefined : active}
+                  className={`dsh-ig-pill-option${active ? ' dsh-ig-pill-option-active' : ''}`}
+                  disabled={pending !== undefined}
+                  onClick={() => { select(provider, undefined, channelId) }}
+                >
+                  <span className={`dsh-ig-pill-dot ${dotClassOf(provider, channelId)}`} aria-hidden="true" />
+                  <span className="dsh-ig-pill-option-text">
+                    <span className="dsh-ig-pill-option-name">{channel?.label ?? PILL_PROVIDER_LABELS[lang][provider]}</span>
+                    <span className="dsh-ig-pill-option-sub">{subtitleOf(provider, modelOptions.length === 0, channelId)}</span>
+                  </span>
+                  {active && modelOptions.length === 0 ? <span className="dsh-ig-pill-check" aria-hidden="true">
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M2.5 8.5l3.5 3.5 7-8" /></svg>
+                  </span> : null}
+                </button>
+                {modelOptions.map(model => {
+                  const selected = active && model === currentModel
+                  return (
+                    <button
+                      type="button"
+                      key={model}
+                      role="menuitemradio"
+                      aria-checked={selected}
+                      className={`dsh-ig-pill-option dsh-ig-pill-model-option${selected ? ' dsh-ig-pill-option-active' : ''}`}
+                      disabled={pending !== undefined}
+                      onClick={() => { select(provider, model, channelId) }}
+                    >
+                      <span className="dsh-ig-pill-model-name">{model}</span>
+                      {selected ? <span className="dsh-ig-pill-check" aria-hidden="true">
+                        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M2.5 8.5l3.5 3.5 7-8" /></svg>
+                      </span> : null}
+                    </button>
+                  )
+                })}
+              </Fragment>
+            )
+          })}
           {error.length > 0 ? <div className="dsh-ig-pill-error" role="alert">{t('switchFailed')}：{error}</div> : null}
         </div>
       ) : null}
@@ -413,6 +513,8 @@ export const PROVIDER_PILL_STYLE = `
 .dsh-ig-pill-option-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
 .dsh-ig-pill-option-name{font-size:12.5px;font-weight:500;color:var(--dsw-alias-label-primary,#111827);line-height:1.2}
 .dsh-ig-pill-option-sub{font-size:11px;color:var(--dsw-alias-label-tertiary,#6b7280);line-height:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsh-ig-pill-model-option{padding-left:24px}
+.dsh-ig-pill-model-name{flex:1;min-width:0;font-size:12px;color:var(--dsw-alias-label-secondary,#4b5563);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dsh-ig-pill-check{flex:none;color:var(--dsw-alias-brand-primary,#4c78ff)}
 .dsh-ig-pill-error{margin-top:4px;padding:6px 8px;border-radius:8px;background:rgba(239,68,68,.08);color:#ef4444;font-size:11.5px;line-height:1.4;word-break:break-all}
 `

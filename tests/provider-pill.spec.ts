@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_MODELS } from '../src/shared.js'
-import { pillModelOf, pillVisible } from '../src/client/provider-pill.js'
+import { pillModelOf, pillModelOptionsOf, pillVisible } from '../src/client/provider-pill.js'
 
 describe('composer provider pill visibility (opt-in)', () => {
   it('stays hidden by default and only appears when explicitly enabled', () => {
@@ -8,6 +8,28 @@ describe('composer provider pill visibility (opt-in)', () => {
     expect(pillVisible({})).toBe(false)
     expect(pillVisible({ showProviderPill: false })).toBe(false)
     expect(pillVisible({ showProviderPill: true })).toBe(true)
+  })
+})
+
+describe('composer provider pill model choices', () => {
+  it('keeps providers without a model list on the single-row provider flow', () => {
+    expect(pillModelOptionsOf('google', { googleModel: 'gemini-3.1-flash-image' })).toEqual([])
+    expect(pillModelOptionsOf('openai', { openaiModel: 'gpt-image-2' })).toEqual([])
+    expect(pillModelOptionsOf('dashscope', { dashscopeModel: 'qwen-image-3.0' })).toEqual([])
+  })
+
+  it('normalizes configured model choices without moving an existing default', () => {
+    expect(pillModelOptionsOf('openai-compat', {
+      openaiCompatModel: 'gpt-image-1.5',
+      openaiCompatModels: ['gpt-image-2', ' gpt-image-1.5 ', 'gpt-image-2', ''],
+    })).toEqual(['gpt-image-2', 'gpt-image-1.5'])
+  })
+
+  it('keeps a legacy default selectable when the saved list omits it', () => {
+    expect(pillModelOptionsOf('openai-compat', {
+      openaiCompatModel: 'gpt-image-1.5',
+      openaiCompatModels: ['gpt-image-2'],
+    })).toEqual(['gpt-image-1.5', 'gpt-image-2'])
   })
 })
 

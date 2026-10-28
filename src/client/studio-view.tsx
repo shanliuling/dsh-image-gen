@@ -32,7 +32,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react'
-import { DELETE_ROUTE, SAVE_WORKSPACE_ROUTE, STUDIO_ROUTE, isSubscriptionProvider, studioWatermarkCapability, studioModelForMode, type CloudImageProvider, type StudioConfigResponse, type StudioGenerateResponse, type StudioGeneratedItem, type StudioProvider, type StudioProviderProfile, type StudioReference, type StudioWatermark } from '../shared.js'
+import { DELETE_ROUTE, SAVE_WORKSPACE_ROUTE, STUDIO_ROUTE, isSubscriptionProvider, studioWatermarkCapability, studioModelForMode, studioModelOptionsForMode, studioTargetKey, type CloudImageProvider, type StudioConfigResponse, type StudioGenerateResponse, type StudioGeneratedItem, type StudioProvider, type StudioProviderProfile, type StudioReference, type StudioWatermark } from '../shared.js'
 import { deleteGalleryItem, getGalleryItems, saveGalleryItem, subscribeGallery, toggleFavoriteGalleryItem, type GalleryItem, saveFavoritePrompt, getFavoritePrompts, deleteFavoritePrompt, subscribeFavorites, addFavoriteFolder, getFavoriteFolders, deleteFavoriteFolder, moveFavoritePrompt, updateFavoritePrompt, type FavoritePrompt, type FavoriteFolder } from './gallery-store.js'
 import { evictAttachmentCache, fetchAttachmentBlob } from './image-cache.js'
 import { copyImageBlob, downloadBlobUrl, formatRelativeTime } from './browser-image-utils.js'
@@ -207,6 +207,7 @@ export const StudioView: FC<{
   const [selected, setSelected] = useState<GalleryItem | null>(null)
   const [mode, setMode] = useState<Mode>('generate')
   const [provider, setProvider] = useState<StudioProvider>('google')
+  const [channel, setChannel] = useState<string | undefined>(undefined)
   const [model, setModel] = useState('')
   const [ratio, setRatio] = useState('1:1')
   const [quality, setQuality] = useState('1K')
@@ -220,7 +221,7 @@ export const StudioView: FC<{
   const [selectedBatchIds, setSelectedBatchIds] = useState<string[]>([])
   const [batchKind, setBatchKind] = useState<BatchKind | null>(null)
   const [comparisonEnabled, setComparisonEnabled] = useState(false)
-  const [comparisonProviders, setComparisonProviders] = useState<StudioProvider[]>([])
+  const [comparisonProviderKeys, setComparisonProviderKeys] = useState<string[]>([])
   const [isGenerating, setIsGenerating] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -305,7 +306,7 @@ export const StudioView: FC<{
   }, [])
 
   const maxReferences = comparisonEnabled
-    ? (comparisonProviders.includes('dashscope') ? 3 : 5)
+    ? (comparisonProviderKeys.includes('dashscope') ? 3 : 5)
     : (provider === 'dashscope' ? 3 : 5)
   const referencesRef = useRef(references)
   referencesRef.current = references
@@ -330,8 +331,8 @@ export const StudioView: FC<{
 
   // Latest form state for the silent refresher, kept in refs so loadConfig's
   // identity stays stable and a refresh never re-runs the initial load.
-  const formStateRef = useRef({ provider, model })
-  formStateRef.current = { provider, model }
+  const formStateRef = useRef({ provider, channel, model })
+  formStateRef.current = { provider, channel, model }
 
   const loadConfig = useCallback(async (options?: { silent?: boolean }) => {
     const silent = options?.silent === true
@@ -350,17 +351,24 @@ export const StudioView: FC<{
         // parameters, selections). Only reconcile the selected provider's
         // model when it changed on the host, and drop comparisons that are
         // no longer signed in / configured.
-        const { provider: currentProvider, model: currentModel } = formStateRef.current
-        const activeProfile = payload.providers.find(item => item.provider === currentProvider)
-        if (activeProfile !== undefined && activeProfile.model !== currentModel) setModel(activeProfile.model)
-        setComparisonProviders(current => current.filter(selectedProvider =>
-          payload.providers.some(item => item.provider === selectedProvider && item.configured)))
+        const { provider: currentProvider, channel: currentChannel, model: currentModel } = formStateRef.current
+        const activeProfile = payload.providers.find(item => item.provider === currentProvider && item.channel === currentChannel)
+        if (activeProfile === undefined) {
+          const fallback = payload.providers.find(item => item.provider === payload.activeProvider && item.channel === payload.activeChannel) ?? payload.providers[0]
+          if (fallback !== undefined) applyProvider(fallback)
+        } else if (!studioModelOptionsForMode(activeProfile, 'generate').some(option => option.value === currentModel)) {
+          setModel(activeProfile.model)
+        }
+        setComparisonProviderKeys(current => current.filter(selectedKey =>
+          payload.providers.some(item => studioTargetKey(item.provider, item.channel) === selectedKey && item.configured)))
         return
       }
-      const initial = payload.providers.find(item => item.provider === payload.activeProvider) ?? payload.providers[0]
+      const initial = payload.providers.find(item => item.provider === payload.activeProvider && item.channel === payload.activeChannel)
+        ?? payload.providers.find(item => item.provider === payload.activeProvider)
+        ?? payload.providers[0]
       if (initial !== undefined) {
         applyProvider(initial)
-        setComparisonProviders(initialComparisonProviders(payload.providers, initial.provider))
+        setComparisonProviderKeys(initialComparisonProviders(payload.providers, initial.provider, initial.channel))
       }
     } catch (fetchError) {
       if (!silent && !controller.signal.aborted) setConfigError(messageOf(fetchError))
@@ -483,7 +491,7 @@ export const StudioView: FC<{
     }
   }, [])
 
-  const activeProfile = useMemo(() => config?.providers.find(item => item.provider === provider), [config, provider])
+  const activeProfile = useMemo(() => config?.providers.find(item => item.provider === provider && item.channel === channel), [config, provider, channel])
   const requestModel = mode === 'edit' && activeProfile?.editModel ? studioModelForMode(activeProfile, mode) : model
   const configuredCount = config?.providers.filter(item => item.configured).length ?? 0
   // Split badge counts: BYOK keys and subscription sign-ins stay separately
@@ -495,14 +503,14 @@ export const StudioView: FC<{
     () => (config?.providers ?? []).filter(item => item.configured && (mode === 'generate' || item.supportsEditing)),
     [config, mode],
   )
-  const selectedComparisonProfiles = useMemo(() => comparisonProfiles.filter(profile => comparisonProviders.includes(profile.provider)), [comparisonProfiles, comparisonProviders])
+  const selectedComparisonProfiles = useMemo(() => comparisonProfiles.filter(profile => comparisonProviderKeys.includes(studioTargetKey(profile.provider, profile.channel))), [comparisonProfiles, comparisonProviderKeys])
   const comparisonResolutionOpts = useMemo(() => comparisonOutputOptions(selectedComparisonProfiles, ratio, 'resolution'), [selectedComparisonProfiles, ratio])
   const comparisonGenerationQualityOpts = useMemo(() => localizeQualityOptions(comparisonOutputOptions(selectedComparisonProfiles, ratio, 'generationQuality'), lang), [selectedComparisonProfiles, ratio, lang])
   const comparisonResolution = comparisonResolutionOpts.some(option => option.value === resolution) ? resolution : comparisonResolutionOpts[0]?.value ?? 'standard'
   const comparisonGenerationQuality = comparisonGenerationQualityOpts.some(option => option.value === generationQuality) ? generationQuality : comparisonGenerationQualityOpts[0]?.value ?? PROVIDER_DEFAULT_QUALITY
   const comparisonTargets = useMemo(
-    () => buildComparisonTargets(comparisonProfiles, comparisonProviders, ratio, quality, { resolution: comparisonResolution, generationQuality: comparisonGenerationQuality }),
-    [comparisonProfiles, comparisonProviders, ratio, quality, comparisonResolution, comparisonGenerationQuality],
+    () => buildComparisonTargets(comparisonProfiles, comparisonProviderKeys, ratio, quality, { resolution: comparisonResolution, generationQuality: comparisonGenerationQuality }),
+    [comparisonProfiles, comparisonProviderKeys, ratio, quality, comparisonResolution, comparisonGenerationQuality],
   )
   const resolutionOpts = provider === 'openai' ? activeProfile?.resolutionOptions?.[ratio] ?? [] : []
   const singleQualityOpts = provider === 'openai-compat' ? activeProfile?.resolutionOptions?.[ratio] ?? activeProfile?.qualityOptions ?? [] : activeProfile?.qualityOptions ?? []
@@ -521,6 +529,7 @@ export const StudioView: FC<{
 
   const applyProvider = (profile: StudioProviderProfile) => {
     setProvider(profile.provider)
+    setChannel(profile.channel)
     setModel(profile.model)
     setRatio(profile.defaultRatio)
     setQuality(profile.defaultQuality)
@@ -530,8 +539,8 @@ export const StudioView: FC<{
     setError(null)
   }
 
-  const changeProvider = (value: string) => {
-    const profile = config?.providers.find(item => item.provider === value)
+  const changeProvider = (value: string, channelId?: string) => {
+    const profile = config?.providers.find(item => item.provider === value && (channelId === undefined || item.channel === channelId))
     if (profile !== undefined) {
       applyProvider(profile)
       const providerMax = value === 'dashscope' ? 3 : 5
@@ -546,6 +555,11 @@ export const StudioView: FC<{
         setError(t('maxReferencesExceeded', { max: String(providerMax) }))
       }
     }
+  }
+
+  const changeProfile = (value: string) => {
+    const profile = config?.providers.find(item => studioTargetKey(item.provider, item.channel) === value)
+    if (profile !== undefined) changeProvider(profile.provider, profile.channel)
   }
 
   const resetFit = () => {
@@ -576,9 +590,10 @@ export const StudioView: FC<{
     setMode('generate')
     setComparisonEnabled(false)
     setPrompt(item.prompt)
-    const profile = config?.providers.find(entry => entry.provider === item.provider)
+    const profile = config?.providers.find(entry => entry.provider === item.provider && (item.channel === undefined || entry.channel === item.channel))
     if (!profile) return
     applyProvider(profile)
+    if (studioModelOptionsForMode(profile, 'generate').some(option => option.value === item.model)) setModel(item.model)
     const nextRatio = profile.ratioOptions.some(option => option.value === item.aspectRatio) ? item.aspectRatio! : profile.defaultRatio
     setRatio(nextRatio)
     if (profile.qualityOptions.some(option => option.value === item.imageSize)) {
@@ -758,7 +773,7 @@ export const StudioView: FC<{
 
     if (referencesRef.current.some(r => r.attachment?.attachmentId === targetAttId)) {
       setMode('edit')
-      changeProvider(targetItem.provider)
+      changeProvider(targetItem.provider, targetItem.channel)
       return
     }
     if (referencesRef.current.length >= targetMax) {
@@ -770,7 +785,7 @@ export const StudioView: FC<{
       const blob = image.blob ?? await fetchAttachmentBlob(targetItem.attachment)
       if (referencesRef.current.some(r => r.attachment?.attachmentId === targetAttId)) {
         setMode('edit')
-        changeProvider(targetItem.provider)
+        changeProvider(targetItem.provider, targetItem.channel)
         return
       }
       if (referencesRef.current.length >= targetMax) {
@@ -789,7 +804,7 @@ export const StudioView: FC<{
       referencesRef.current = nextList
       setError(null)
       setMode('edit')
-      changeProvider(targetItem.provider)
+      changeProvider(targetItem.provider, targetItem.channel)
     } catch {
       setError(t('imageLoadFailed'))
     }
@@ -814,21 +829,21 @@ export const StudioView: FC<{
       return
     }
     if (config === null) return
-    const initial = initialComparisonProviders(comparisonProfiles, provider)
+    const initial = initialComparisonProviders(comparisonProfiles, provider, channel)
       .filter(item => mode !== 'edit' || referencesRef.current.length <= 3 || item !== 'dashscope')
-    setComparisonProviders(initial)
+    setComparisonProviderKeys(initial)
     if (!['1:1', '3:2', '2:3', '16:9', '9:16'].includes(ratio)) setRatio('1:1')
     if (!['standard', '1K', '2K', '4K'].includes(quality)) setQuality('1K')
   }
 
-  const toggleComparisonProvider = (target: StudioProvider) => {
-    if (mode === 'edit' && target === 'dashscope' && referencesRef.current.length > 3 && !comparisonProviders.includes(target)) {
+  const toggleComparisonProvider = (targetKey: string) => {
+    if (mode === 'edit' && targetKey === 'dashscope' && referencesRef.current.length > 3 && !comparisonProviderKeys.includes(targetKey)) {
       setError(t('maxReferencesExceeded', { max: '3' }))
       return
     }
-    setComparisonProviders(current => current.includes(target)
-      ? current.filter(item => item !== target)
-      : [...current, target])
+    setComparisonProviderKeys(current => current.includes(targetKey)
+      ? current.filter(item => item !== targetKey)
+      : [...current, targetKey])
     setError(null)
   }
 
@@ -872,6 +887,7 @@ export const StudioView: FC<{
             body: JSON.stringify({
               mode,
               provider: target.profile.provider,
+              ...(target.profile.channel === undefined ? {} : { channel: target.profile.channel }),
               model: studioModelForMode(target.profile, mode),
               prompt: prompt.trim(),
               ratio: target.ratio,
@@ -903,6 +919,7 @@ export const StudioView: FC<{
           attachment: value.payload.attachment,
           prompt: value.payload.prompt,
           provider: value.payload.provider,
+          ...(value.payload.channel === undefined ? {} : { channel: value.payload.channel }),
           model: value.payload.model,
           createdAt: value.payload.createdAt + idx,
           aspectRatio: value.target.ratio,
@@ -943,6 +960,7 @@ export const StudioView: FC<{
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           mode, provider, model: requestModel, prompt: prompt.trim(), ratio, quality: selectedQuality,
+          ...(activeProfile.channel === undefined ? {} : { channel: activeProfile.channel }),
           ...(selectedResolution === undefined ? {} : { resolution: selectedResolution }),
           ...(provider === 'openai-compat' ? { generationQuality: selectedGenerationQuality } : {}),
           ...(watermarkCapability.status === 'supported' ? { watermark } : {}),
@@ -969,6 +987,7 @@ export const StudioView: FC<{
         attachment: gen.attachment,
         prompt: payload.prompt,
         provider: payload.provider,
+        ...(payload.channel === undefined ? {} : { channel: payload.channel }),
         model: payload.model,
         createdAt: payload.createdAt + idx,
         aspectRatio: ratio,
@@ -1715,9 +1734,10 @@ export const StudioView: FC<{
                   </div>
                   <div className="dsh-ig-model-checks">
                     {comparisonProfiles.map(item => {
-                      const target = comparisonTargets.find(candidate => candidate.profile.provider === item.provider)
+                      const targetKey = studioTargetKey(item.provider, item.channel)
+                      const target = comparisonTargets.find(candidate => studioTargetKey(candidate.profile.provider, candidate.profile.channel) === targetKey)
                       return (
-                        <button key={item.provider} type="button" className={target ? 'is-selected' : ''} aria-pressed={Boolean(target)} onClick={() => toggleComparisonProvider(item.provider)}>
+                        <button key={targetKey} type="button" className={target ? 'is-selected' : ''} aria-pressed={Boolean(target)} onClick={() => toggleComparisonProvider(targetKey)}>
                           <span className="dsh-ig-model-checkmark">{target ? <Check size={12} /> : null}</span>
                           <span className="dsh-ig-model-copy"><strong>{item.label}</strong><small title={studioModelForMode(item, mode)}>{studioModelForMode(item, mode)}</small></span>
                           {target && <span className="dsh-ig-model-settings">{[target.ratio, target.resolution, target.quality === target.resolution ? undefined : target.quality, target.generationQuality === PROVIDER_DEFAULT_QUALITY ? undefined : target.generationQuality].filter(Boolean).join(' · ')}{target.adjusted ? <em>{t('compareAdjusted')}</em> : null}</span>}
@@ -1736,7 +1756,7 @@ export const StudioView: FC<{
                 {comparisonWatermarkCapability.status === 'supported' ? <div className="dsh-ig-inline-note">{lang === 'en' ? 'Watermark applies only to models with confirmed support for this operation.' : '水印选项仅用于已确认支持当前操作的模型。'}</div> : null}
                 {comparisonTargets.some(target => target.profile.provider === 'chatgpt-sub') && <div className="dsh-ig-inline-note">{t('subscriptionParameterHint')}</div>}
               </> : <>
-                <div className="dsh-ig-field-grid"><FieldSelect label={t('provider')} value={provider} onChange={changeProvider} options={config.providers.map(item => ({ value: item.provider, label: `${item.label}${item.configured ? '' : ` · ${t('unconfigured')}`}` }))} /><FieldSelect label={t('model')} value={requestModel} onChange={setModel} options={activeProfile === undefined ? [] : [{ value: studioModelForMode(activeProfile, mode), label: studioModelForMode(activeProfile, mode) }]} /></div>
+                <div className="dsh-ig-field-grid"><FieldSelect label={t('provider')} value={studioTargetKey(provider, channel)} onChange={changeProfile} options={config.providers.map(item => ({ value: studioTargetKey(item.provider, item.channel), label: `${item.label}${item.configured ? '' : ` · ${t('unconfigured')}`}` }))} /><FieldSelect label={t('model')} value={requestModel} onChange={setModel} options={activeProfile === undefined ? [] : studioModelOptionsForMode(activeProfile, mode)} /></div>
                 <div className="dsh-ig-field-grid is-output-grid">
                   <FieldSelect label={t('ratio')} value={ratio} onChange={setRatio} options={localizeRatioOptions(activeProfile?.ratioOptions ?? [], lang)} />
                   {resolutionOpts.length > 0 ? <FieldSelect label={lang === 'en' ? 'Resolution' : '分辨率'} value={selectedResolution ?? ''} onChange={setResolution} options={resolutionOpts} /> : null}

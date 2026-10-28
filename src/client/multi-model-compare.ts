@@ -1,4 +1,4 @@
-import type { StudioOption, StudioProvider, StudioProviderProfile } from '../shared.js'
+import { studioTargetKey, type StudioOption, type StudioProvider, type StudioProviderProfile } from '../shared.js'
 import { PROVIDER_DEFAULT_QUALITY } from '../openai-output.js'
 
 export interface ComparisonTarget {
@@ -13,14 +13,14 @@ export interface ComparisonTarget {
 /** Map one shared output intent to settings accepted by every target model. */
 export function buildComparisonTargets(
   profiles: readonly StudioProviderProfile[],
-  selectedProviders: readonly StudioProvider[],
+  selectedTargets: readonly string[],
   ratio: string,
   quality: string,
   output?: { resolution: string; generationQuality: string },
 ): ComparisonTarget[] {
-  const selected = new Set(selectedProviders)
+  const selected = new Set(selectedTargets)
   return profiles
-    .filter(profile => profile.configured && selected.has(profile.provider))
+    .filter(profile => profile.configured && selected.has(studioTargetKey(profile.provider, profile.channel)))
     .map(profile => {
       const targetRatio = profile.ratioOptions.some(option => option.value === ratio) ? ratio : profile.defaultRatio
       const generationOptions = generationQualityOptions(profile)
@@ -65,13 +65,16 @@ export function comparisonOutputOptions(profiles: readonly StudioProviderProfile
 export function initialComparisonProviders(
   profiles: readonly StudioProviderProfile[],
   activeProvider: StudioProvider,
-): StudioProvider[] {
+  activeChannel?: string,
+): string[] {
   const configured = profiles.filter(profile => profile.configured)
-  const active = configured.find(profile => profile.provider === activeProvider)
+  const active = configured.find(profile => studioTargetKey(profile.provider, profile.channel) === studioTargetKey(activeProvider, activeChannel))
+    ?? configured.find(profile => profile.provider === activeProvider)
+  const activeKey = active === undefined ? undefined : studioTargetKey(active.provider, active.channel)
   const ordered = active === undefined
     ? configured
-    : [active, ...configured.filter(profile => profile.provider !== activeProvider)]
-  return ordered.slice(0, 2).map(profile => profile.provider)
+    : [active, ...configured.filter(profile => studioTargetKey(profile.provider, profile.channel) !== activeKey)]
+  return ordered.slice(0, 2).map(profile => studioTargetKey(profile.provider, profile.channel))
 }
 
 const RATIO_SORT_ORDER = ['auto', '1:1', '3:2', '2:3', '4:3', '3:4', '4:5', '5:4', '16:9', '9:16', '21:9']

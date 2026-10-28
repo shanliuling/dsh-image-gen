@@ -8,6 +8,7 @@ import { officialSizeTable } from '../openai-output.js'
 
 export interface RegeneratableImage {
   provider: string
+  channel?: string | undefined
   model: string
   output?: string | undefined
 }
@@ -26,6 +27,7 @@ export function conversationRegenerateRequest(
   return {
     mode: 'generate',
     provider,
+    ...(provider === 'openai-compat' && image.channel !== undefined ? { channel: image.channel } : {}),
     model: image.model,
     prompt: prompt.trim(),
     ratio: settings.ratio,

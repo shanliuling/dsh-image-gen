@@ -107,6 +107,109 @@ describe('image tool registration', () => {
     expect(editBody).not.toHaveProperty('watermark')
     vi.unstubAllGlobals()
   })
+
+  it('routes a named compat channel with its own credential and returns its channel id', async () => {
+    const { ctx, tools } = harnessContext()
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: [{ b64_json: 'iVBORw0KGgo=' }] }), { headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    apply(ctx, {
+      provider: 'openai-compat',
+      openaiCompatBaseURL: 'https://legacy.example/v1',
+      openaiCompatModel: 'legacy-model',
+      openaiCompatChannels: [{
+        id: 'relay-b', label: 'Relay B', keyRef: '', baseURL: 'https://relay-b.example/v1', model: 'relay-b-model',
+        models: ['relay-b-model'], quality: 'high', extraBody: { watermark: false },
+      }],
+      saveToWorkspace: false,
+    })
+
+    const result = await toolByName(tools, 'generate_image').execute(
+      { prompt: 'one', channel: 'relay-b' },
+      { signal: new AbortController().signal } as never,
+    ) as { channel?: string }
+    expect(result.channel).toBe('relay-b')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toBe('https://relay-b.example/v1/images/generations')
+    expect(init.headers).toMatchObject({ authorization: 'Bearer test-key' })
+    expect(JSON.parse(String(init.body))).toEqual({ model: 'relay-b-model', prompt: 'one', size: '1024x1024', quality: 'high', watermark: false })
+    expect(JSON.stringify(vi.mocked(ctx.credentials.resolve).mock.calls)).toContain('DSH_IMAGE_GEN_OPENAI_COMPAT_KEY_RELAY_B')
+    await expect(toolByName(tools, 'generate_image').execute(
+      { prompt: 'one', channel: 'missing' },
+      { signal: new AbortController().signal } as never,
+    )).rejects.toThrow('Unknown OpenAI-compatible channel')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('applies the configured cloud timeout to conversation generation', async () => {
+    vi.useFakeTimers()
+    try {
+      const { ctx, tools } = harnessContext()
+      let upstreamSignal: AbortSignal | null | undefined
+      let started!: () => void
+      const generating = new Promise<void>(resolve => { started = resolve })
+      vi.stubGlobal('fetch', vi.fn((_url: unknown, init?: RequestInit) => new Promise<Response>((_, reject) => {
+        upstreamSignal = init?.signal
+        started()
+        upstreamSignal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
+      })))
+      apply(ctx, {
+        provider: 'openai-compat', openaiCompatBaseURL: 'https://relay.example/v1', openaiCompatModel: 'relay',
+        cloudTimeoutMs: 5_000, saveToWorkspace: false,
+      })
+
+      const executing = toolByName(tools, 'generate_image').execute(
+        { prompt: 'one' },
+        { signal: new AbortController().signal } as never,
+      )
+      const rejection = expect(executing).rejects.toThrow('生图超时（5 秒未返回），请检查网络或代理后重试；上游可能已扣费或仍在生成，请到服务商后台确认')
+      await generating
+      await vi.advanceTimersByTimeAsync(4_999)
+      expect(upstreamSignal?.aborted).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      await rejection
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not apply the cloud timeout to ComfyUI conversation generation', async () => {
+    vi.useFakeTimers()
+    try {
+      const { ctx, tools } = harnessContext()
+      let historySignal: AbortSignal | null | undefined
+      let started!: () => void
+      const polling = new Promise<void>(resolve => { started = resolve })
+      vi.stubGlobal('fetch', vi.fn()
+        .mockResolvedValueOnce(new Response(JSON.stringify({ prompt_id: 'job-1' }), { status: 200 }))
+        .mockImplementationOnce((_url: unknown, init?: RequestInit) => new Promise<Response>((_, reject) => {
+          historySignal = init?.signal
+          started()
+          historySignal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
+        })))
+      apply(ctx, {
+        provider: 'comfyui',
+        comfyuiWorkflowJson: JSON.stringify({ 6: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}}' } } }),
+        cloudTimeoutMs: 5_000, comfyuiTimeoutMs: 10_000, saveToWorkspace: false,
+      })
+
+      const executing = toolByName(tools, 'generate_image').execute(
+        { prompt: 'a portrait' },
+        { signal: new AbortController().signal } as never,
+      )
+      const rejection = expect(executing).rejects.toThrow('ComfyUI generation timed out after 10000 ms')
+      await polling
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(historySignal?.aborted).toBe(false)
+      await vi.advanceTimersByTimeAsync(5_000)
+      await rejection
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
   beforeEach(() => { vi.clearAllMocks() })
   afterEach(() => { vi.unstubAllGlobals() })
 

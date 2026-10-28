@@ -1,6 +1,6 @@
 /** Same-origin connection probe the settings card runs per provider. */
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { Config, ImageProvider } from './config.js'
+import { withOpenAICompatChannel, type Config, type ImageProvider } from './config.js'
 import { redactSecrets } from './redact.js'
 import { googleModelsEndpoint } from './google.js'
 import type { SubscriptionManager } from './subscription.js'
@@ -340,8 +340,8 @@ export async function probeSubscriptionConnection(
 
 /** Dependencies the test route needs from the plugin entry. */
 export interface TestRouteDeps {
-  /** The credential each cloud provider probes with, when one is stored. */
-  resolveKey(provider: CloudImageProvider): Promise<string | undefined>
+  /** The credential each cloud provider or named relay channel probes with, when one is stored. */
+  resolveKey(provider: CloudImageProvider, channel?: string): Promise<string | undefined>
   /** The currently authoritative config, including unsaved defaults. */
   config(): Config
   /** The internal subscription account manager for the login-state probes. */
@@ -367,6 +367,12 @@ export async function serveTestConnection(req: IncomingMessage, res: ServerRespo
   }
   const active = provider as ImageProvider
   const action = record(body)?.action
+  const rawChannel = record(body)?.channel
+  if (rawChannel !== undefined && (typeof rawChannel !== 'string' || rawChannel.trim().length === 0 || active !== 'openai-compat')) {
+    return jsonError(res, 400, 'invalid-channel')
+  }
+  const channel = typeof rawChannel === 'string' ? rawChannel.trim() : undefined
+  const requestConfig = (): Config => active === 'openai-compat' ? withOpenAICompatChannel(deps.config(), channel) : deps.config()
 
   if (action === 'models') {
     // Model pulling ships for every cloud provider; ComfyUI and the
@@ -374,12 +380,12 @@ export async function serveTestConnection(req: IncomingMessage, res: ServerRespo
     if (active === 'comfyui' || isSubscriptionProvider(active)) return jsonError(res, 400, 'models-unsupported')
     let result: ModelsResult
     try {
-      const apiKey = await deps.resolveKey(active as CloudImageProvider)
+      const apiKey = await deps.resolveKey(active as CloudImageProvider, channel)
       result = active === 'google'
-        ? await fetchGoogleImageModels(deps.config(), apiKey)
+        ? await fetchGoogleImageModels(requestConfig(), apiKey)
         : active === 'dashscope'
-          ? await fetchDashScopeImageModels(deps.config(), apiKey)
-          : await fetchOpenAIImageModels(active as 'openai' | 'openai-compat' | 'seedream' | 'xai' | 'zhipu', deps.config(), apiKey)
+          ? await fetchDashScopeImageModels(requestConfig(), apiKey)
+          : await fetchOpenAIImageModels(active as 'openai' | 'openai-compat' | 'seedream' | 'xai' | 'zhipu', requestConfig(), apiKey)
     } catch (error) {
       result = { ok: false, reason: 'error', message: error instanceof Error ? error.message : String(error) }
     }
@@ -393,8 +399,8 @@ export async function serveTestConnection(req: IncomingMessage, res: ServerRespo
     } else if (isSubscriptionProvider(active)) {
       result = await probeSubscriptionConnection(active, deps.subscriptionManager)
     } else {
-      const apiKey = await deps.resolveKey(active as CloudImageProvider)
-      result = await probeProviderConnection(active as CloudImageProvider, deps.config(), apiKey)
+      const apiKey = await deps.resolveKey(active as CloudImageProvider, channel)
+      result = await probeProviderConnection(active as CloudImageProvider, requestConfig(), apiKey)
     }
   } catch (error) {
     result = { ok: false, reason: 'error', message: error instanceof Error ? error.message : String(error) }

@@ -33,6 +33,8 @@ import {
   ZHIPU_API_KEY_ENV,
   activeComfyUIWorkflow,
   resolveComfyUIWorkflows,
+  resolveOpenAICompatChannel,
+  type OpenAICompatChannel,
   type ArkBackgroundMode,
   type ArkOutputFormat,
   type ArkOutputOptions,
@@ -98,8 +100,14 @@ export interface Config {
   /** Official model size table: ratio -> resolution tier -> pixels. Empty uses model presets. */
   openaiSizes?: Record<string, Record<string, string>>
   /** OpenAI-compatible relay settings; independent from the official OpenAI row. */
+  openaiCompatLabel?: string
   openaiCompatBaseURL?: string
   openaiCompatModel?: string
+  /** Models offered by the workbench for the legacy default channel. */
+  openaiCompatModels?: string[]
+  /** Additional named relay channels; the flat fields above remain the default channel. */
+  openaiCompatChannels?: OpenAICompatChannel[]
+  openaiCompatActiveChannel?: string
   /** Editing model; empty reuses the generation model. */
   openaiCompatEditModel?: string
   /** Default quality; empty preserves the upstream default by omitting the field. */
@@ -204,8 +212,27 @@ export const Config = z.object({
   openaiBaseURL: volatile(z.string().default(DEFAULT_OPENAI_BASE_URL)),
   openaiModel: volatile(z.string().default(DEFAULT_OPENAI_MODEL)),
   openaiSizes: volatile(z.dict(z.dict(z.string())).default({})),
+  openaiCompatLabel: volatile(z.string().default('')),
   openaiCompatBaseURL: volatile(z.string().default('')),
   openaiCompatModel: volatile(z.string().default('')),
+  openaiCompatModels: volatile(z.array(z.string()).default([])),
+  openaiCompatChannels: volatile(z.array(z.object({
+    id: z.string(),
+    label: z.string().default(''),
+    keyRef: z.string(),
+    baseURL: z.string().default(''),
+    model: z.string().default(''),
+    models: z.array(z.string()).default([]),
+    editModel: z.string().default(''),
+    quality: z.string().default(''),
+    qualityOptions: z.array(z.string()).default([]),
+    extraBody: z.dict(z.any()).default({}),
+    editSizeMode: z.union(['auto', 'selected']).default('auto'),
+    editFormat: z.union([z.const('multipart'), z.const('jsonImageUrlArray'), z.const('formReferenceImages'), z.const('siliconflowJson')]).default('multipart'),
+    editExtra: z.dict(z.any()).default({}),
+    sizes: z.dict(z.dict(z.string())).default({}),
+  })).default([])),
+  openaiCompatActiveChannel: volatile(z.string().default('')),
   openaiCompatEditModel: volatile(z.string().default('')),
   openaiCompatQuality: volatile(z.string().default('')),
   openaiCompatQualityOptions: volatile(z.array(z.string()).default(['auto', 'low', 'medium', 'high'])),
@@ -302,6 +329,28 @@ export function resolveProvider(config: Config):
   }
 }
 
+/** Project one named relay channel onto the legacy flat fields used by all provider adapters. */
+export function withOpenAICompatChannel(config: Config, channelId?: string): Config {
+  const channel = resolveOpenAICompatChannel(config, channelId)
+  if (channel.id === 'default') return { ...config, openaiCompatActiveChannel: 'default' }
+  return {
+    ...config,
+    openaiCompatLabel: channel.label,
+    openaiCompatBaseURL: channel.baseURL,
+    openaiCompatModel: channel.model,
+    openaiCompatModels: channel.models ?? [],
+    openaiCompatEditModel: channel.editModel ?? '',
+    openaiCompatQuality: channel.quality ?? '',
+    openaiCompatQualityOptions: channel.qualityOptions ?? [],
+    openaiCompatExtraBody: channel.extraBody ?? {},
+    openaiCompatEditSizeMode: channel.editSizeMode ?? 'auto',
+    openaiCompatEditFormat: channel.editFormat ?? 'multipart',
+    openaiCompatEditExtra: channel.editExtra ?? {},
+    openaiCompatSizes: channel.sizes ?? {},
+    openaiCompatActiveChannel: channel.id,
+  }
+}
+
 /**
  * Apply a per-call provider and/or model override on top of the saved config.
  * `model` is ignored for ComfyUI, whose per-call equivalent is `workflow`.
@@ -342,6 +391,7 @@ export function migrateOpenAICompatConfig(config: Config): Config {
     ...config,
     openaiCompatBaseURL: legacyBase,
     ...(compatModel.length > 0 ? {} : { openaiCompatModel: config.openaiModel }),
+    ...((config.openaiCompatModels?.length ?? 0) > 0 ? {} : { openaiCompatModels: [compatModel || config.openaiModel?.trim() || ''].filter(Boolean) }),
     openaiBaseURL: DEFAULT_OPENAI_BASE_URL,
     ...(config.provider === 'openai' ? { provider: 'openai-compat' as const } : {}),
   }

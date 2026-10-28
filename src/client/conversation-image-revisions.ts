@@ -6,6 +6,7 @@ export interface ConversationImageRevision {
   attachment: ImageAttachmentRef
   prompt: string
   provider: StudioProvider
+  channel?: string
   model: string
   output: string
   createdAt: number
@@ -92,6 +93,7 @@ function isRevision(value: unknown): value is ConversationImageRevision {
   return isAttachment(candidate.attachment)
     && typeof candidate.provider === 'string'
     && (STUDIO_PROVIDERS as readonly string[]).includes(candidate.provider)
+    && (candidate.channel === undefined || typeof candidate.channel === 'string')
     && typeof candidate.prompt === 'string'
     && typeof candidate.model === 'string'
     && typeof candidate.output === 'string'

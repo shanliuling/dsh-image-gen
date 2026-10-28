@@ -161,6 +161,116 @@ export function isSubscriptionProvider(provider: ImageProvider): provider is Sub
 export const CLOUD_IMAGE_PROVIDERS = ['google', 'openai', 'openai-compat', 'seedream', 'dashscope', 'xai', 'zhipu'] as const
 export type CloudImageProvider = typeof CLOUD_IMAGE_PROVIDERS[number]
 
+/** Normalize the relay model list while keeping the legacy default model selectable. */
+export function resolveOpenAICompatModels(config: {
+  openaiCompatModel?: string
+  openaiCompatModels?: readonly string[]
+}): string[] {
+  const defaultModel = config.openaiCompatModel?.trim() ?? ''
+  const models = [...new Set((config.openaiCompatModels ?? []).map(model => model.trim()).filter(Boolean))]
+  if (defaultModel.length > 0 && !models.includes(defaultModel)) models.unshift(defaultModel)
+  return models
+}
+
+export const DEFAULT_OPENAI_COMPAT_CHANNEL_ID = 'default'
+
+export interface OpenAICompatChannel {
+  id: string
+  label: string
+  keyRef: string
+  baseURL: string
+  model: string
+  models?: string[]
+  editModel?: string
+  quality?: string
+  qualityOptions?: string[]
+  extraBody?: Record<string, unknown>
+  editSizeMode?: 'auto' | 'selected'
+  editFormat?: 'multipart' | 'jsonImageUrlArray' | 'formReferenceImages' | 'siliconflowJson'
+  editExtra?: Record<string, unknown>
+  sizes?: Record<string, Record<string, string>>
+}
+
+export interface OpenAICompatChannelSource {
+  openaiCompatLabel?: string
+  openaiCompatBaseURL?: string
+  openaiCompatModel?: string
+  openaiCompatModels?: readonly string[]
+  openaiCompatEditModel?: string
+  openaiCompatQuality?: string
+  openaiCompatQualityOptions?: readonly string[]
+  openaiCompatExtraBody?: Record<string, unknown>
+  openaiCompatEditSizeMode?: 'auto' | 'selected'
+  openaiCompatEditFormat?: 'multipart' | 'jsonImageUrlArray' | 'formReferenceImages' | 'siliconflowJson'
+  openaiCompatEditExtra?: Record<string, unknown>
+  openaiCompatSizes?: Record<string, Record<string, string>>
+  openaiCompatChannels?: readonly OpenAICompatChannel[]
+  openaiCompatActiveChannel?: string
+}
+
+export function openAICompatKeyRef(channelId: string): string {
+  return channelId === DEFAULT_OPENAI_COMPAT_CHANNEL_ID
+    ? OPENAI_COMPAT_API_KEY_ENV
+    : `${OPENAI_COMPAT_API_KEY_ENV}_${channelId.replace(/[^A-Za-z0-9]/g, '_').toUpperCase()}`
+}
+
+/** The legacy flat fields remain the first channel; additional entries are fully independent. */
+export function resolveOpenAICompatChannels(source: OpenAICompatChannelSource): OpenAICompatChannel[] {
+  const legacy: OpenAICompatChannel = {
+    id: DEFAULT_OPENAI_COMPAT_CHANNEL_ID,
+    label: source.openaiCompatLabel?.trim() || 'OpenAI 兼容',
+    keyRef: OPENAI_COMPAT_API_KEY_ENV,
+    baseURL: source.openaiCompatBaseURL ?? '',
+    model: source.openaiCompatModel ?? '',
+    models: [...source.openaiCompatModels ?? []],
+    editModel: source.openaiCompatEditModel ?? '',
+    quality: source.openaiCompatQuality ?? '',
+    qualityOptions: [...source.openaiCompatQualityOptions ?? []],
+    extraBody: source.openaiCompatExtraBody ?? {},
+    editSizeMode: source.openaiCompatEditSizeMode ?? 'auto',
+    editFormat: source.openaiCompatEditFormat ?? 'multipart',
+    editExtra: source.openaiCompatEditExtra ?? {},
+    sizes: source.openaiCompatSizes ?? {},
+  }
+  const channels = [legacy]
+  const seen = new Set([legacy.id])
+  for (const [index, entry] of (source.openaiCompatChannels ?? []).entries()) {
+    const id = typeof entry?.id === 'string' ? entry.id.trim() : ''
+    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(id) || seen.has(id)) continue
+    seen.add(id)
+    const storedKeyRef = typeof entry.keyRef === 'string' ? entry.keyRef.trim() : ''
+    channels.push({
+      id,
+      label: typeof entry.label === 'string' && entry.label.trim().length > 0 ? entry.label.trim() : `OpenAI 兼容 ${index + 2}`,
+      keyRef: /^DSH_IMAGE_GEN_OPENAI_COMPAT_KEY_[A-Z0-9_]+$/.test(storedKeyRef) ? storedKeyRef : openAICompatKeyRef(id),
+      baseURL: typeof entry.baseURL === 'string' ? entry.baseURL : '',
+      model: typeof entry.model === 'string' ? entry.model : '',
+      models: Array.isArray(entry.models) ? entry.models.filter((model): model is string => typeof model === 'string') : [],
+      editModel: typeof entry.editModel === 'string' ? entry.editModel : '',
+      quality: typeof entry.quality === 'string' ? entry.quality : '',
+      qualityOptions: Array.isArray(entry.qualityOptions) ? entry.qualityOptions.filter((quality): quality is string => typeof quality === 'string') : [],
+      extraBody: entry.extraBody ?? {},
+      editSizeMode: entry.editSizeMode === 'selected' ? 'selected' : 'auto',
+      editFormat: entry.editFormat ?? 'multipart',
+      editExtra: entry.editExtra ?? {},
+      sizes: entry.sizes ?? {},
+    })
+  }
+  return channels
+}
+
+export function resolveOpenAICompatChannel(source: OpenAICompatChannelSource, channelId?: string): OpenAICompatChannel {
+  const channels = resolveOpenAICompatChannels(source)
+  const explicit = channelId?.trim() ?? ''
+  if (explicit.length > 0) {
+    const selected = channels.find(channel => channel.id === explicit)
+    if (selected === undefined) throw new Error(`Unknown OpenAI-compatible channel "${explicit}". Available channels: ${channels.map(channel => channel.id).join(', ')}.`)
+    return selected
+  }
+  const active = source.openaiCompatActiveChannel?.trim() ?? ''
+  return channels.find(channel => channel.id === active) ?? channels[0]!
+}
+
 /**
  * Providers the browser workbench can drive: the BYOK cloud set plus the
  * logged-in subscription channels. ComfyUI stays out; it has its own workflow
@@ -168,6 +278,10 @@ export type CloudImageProvider = typeof CLOUD_IMAGE_PROVIDERS[number]
  */
 export const STUDIO_PROVIDERS = [...CLOUD_IMAGE_PROVIDERS, ...SUBSCRIPTION_PROVIDERS] as const
 export type StudioProvider = CloudImageProvider | SubscriptionProvider
+
+export function studioTargetKey(provider: StudioProvider, channel?: string): string {
+  return channel === undefined ? provider : `${provider}:${channel}`
+}
 
 /** True when the provider is selectable in the browser workbench. */
 export function isStudioProvider(provider: ImageProvider): provider is StudioProvider {
@@ -262,10 +376,14 @@ export interface StudioWatermarkCapability {
 /** Browser-safe provider description. Credentials and endpoints never cross this boundary. */
 export interface StudioProviderProfile {
   provider: StudioProvider
+  /** OpenAI-compatible channel id; absent for every other provider. */
+  channel?: string
   label: string
   model: string
   /** Separate configured edit model; absent preserves the generation model. */
   editModel?: string
+  /** Selectable generation models; absent means the single default model. */
+  modelOptions?: StudioOption[]
   configured: boolean
   supportsEditing: boolean
   ratioOptions: StudioOption[]
@@ -288,6 +406,13 @@ export function studioModelForMode(profile: StudioProviderProfile, mode: 'genera
   return mode === 'edit' ? profile.editModel ?? profile.model : profile.model
 }
 
+export function studioModelOptionsForMode(profile: StudioProviderProfile, mode: 'generate' | 'edit'): StudioOption[] {
+  if (mode === 'edit' && profile.editModel !== undefined) {
+    return [{ value: profile.editModel, label: profile.editModel }]
+  }
+  return profile.modelOptions ?? [{ value: profile.model, label: profile.model }]
+}
+
 export function studioWatermarkCapability(profile: StudioProviderProfile | undefined, mode: 'generate' | 'edit'): StudioWatermarkCapability {
   return profile?.watermarkCapabilities?.[mode]
     ?? (mode === 'generate' && profile?.watermarkOptions?.length
@@ -306,6 +431,7 @@ export interface StudioWorkspaceInfo {
 export interface StudioConfigResponse {
   providers: StudioProviderProfile[]
   activeProvider: StudioProvider
+  activeChannel?: string
   workspaceRoot?: string | undefined
   workspaces?: StudioWorkspaceInfo[] | undefined
 }
@@ -328,6 +454,7 @@ export type StudioReference = StudioEncodedReference | StudioAttachmentReference
 export interface StudioGenerateRequest {
   mode: 'generate' | 'edit'
   provider: StudioProvider
+  channel?: string
   model: string
   prompt: string
   ratio: string
@@ -352,6 +479,7 @@ export interface StudioGeneratedItem {
 /** One completed workbench request. */
 export interface StudioGenerateResponse extends StudioGeneratedItem {
   provider: StudioProvider
+  channel?: string
   model: string
   prompt: string
   createdAt: number

@@ -878,6 +878,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
         attachment: payload.attachment,
         prompt: payload.prompt,
         provider: payload.provider,
+        ...(payload.channel === undefined ? {} : { channel: payload.channel }),
         model: payload.model,
         createdAt: payload.createdAt,
         aspectRatio: request.ratio,

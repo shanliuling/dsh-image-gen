@@ -7,6 +7,7 @@ export interface ImageResultPresentation {
   readonly attachment: ImageAttachmentRef
   readonly prompt: string
   readonly provider: string
+  readonly channel?: string
   readonly model: string
   readonly output: string
   readonly savedTo?: string
@@ -150,6 +151,7 @@ export function imageResultFromMeta(value: unknown): ImageResultPresentation | u
     attachment,
     prompt: stringValue(meta.prompt, 'Generated Image'),
     provider: stringValue(meta.provider, 'google'),
+    ...(typeof meta.channel === 'string' ? { channel: meta.channel } : {}),
     model: stringValue(meta.model, ''),
     output: stringValue(meta.output, ''),
     ...(typeof meta.savedTo === 'string' ? { savedTo: meta.savedTo } : {}),

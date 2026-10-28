@@ -2,6 +2,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import { parseImageAttachmentRef } from './reference-image.js'
+import { UPSTREAM_TIMEOUT_HINT } from './generation-timeout.js'
 import {
   DEFAULT_CLOUD_TIMEOUT_MS,
   STUDIO_PROVIDERS,
@@ -92,8 +93,8 @@ export async function serveStudio(req: IncomingMessage, res: ServerResponse, dep
         if (res.destroyed || res.writableEnded) return
         const message = watchdog.signal.aborted
           ? subscriptionChannel
-            ? `上游生成超时（订阅通道 ${String(Math.round(timeoutMs / 1000))} 秒未返回），请稍后重试`
-            : `上游生成超时（${String(Math.round(timeoutMs / 1000))} 秒未返回），请检查网络或代理后重试`
+            ? `上游生成超时（订阅通道 ${String(Math.round(timeoutMs / 1000))} 秒未返回），请稍后重试；${UPSTREAM_TIMEOUT_HINT}`
+            : `上游生成超时（${String(Math.round(timeoutMs / 1000))} 秒未返回），请检查网络或代理后重试；${UPSTREAM_TIMEOUT_HINT}`
           : errorMessage(error, 'generation-failed')
         res.end(JSON.stringify({ error: message }))
       }
@@ -119,6 +120,8 @@ export function parseStudioGenerateRequest(value: unknown): StudioGenerateReques
   if (input === undefined) throw new Error('请求格式无效')
   if (input.mode !== 'generate' && input.mode !== 'edit') throw new Error('请选择生成类型')
   if (!studioProvider(input.provider)) throw new Error('不支持该图像 Provider')
+  if (input.channel !== undefined && input.provider !== 'openai-compat') throw new Error('仅 OpenAI 兼容 Provider 支持选择渠道')
+  const channel = input.channel === undefined ? undefined : requiredText(input.channel, '请选择渠道', 100)
   const prompt = requiredText(input.prompt, '请输入提示词')
   const model = requiredText(input.model, '请选择模型', 200)
   const ratio = requiredText(input.ratio, '请选择比例', 32)
@@ -148,6 +151,7 @@ export function parseStudioGenerateRequest(value: unknown): StudioGenerateReques
   return {
     mode: input.mode,
     provider: input.provider,
+    ...(channel === undefined ? {} : { channel }),
     model,
     prompt,
     ratio,

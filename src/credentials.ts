@@ -8,8 +8,8 @@ import { CLOUD_CREDENTIAL_REFS, PROVIDER_DISPLAY_NAMES, type CloudImageProvider 
  * never count as configured: the host treats an empty stored value as absent,
  * and a whitespace-only key is never sent to a provider.
  */
-export async function resolveApiKey(ctx: Context, provider: CloudImageProvider): Promise<string | undefined> {
-  const credential = await ctx.credentials.resolve(credentialRef(CLOUD_CREDENTIAL_REFS[provider]))
+export async function resolveApiKey(ctx: Context, provider: CloudImageProvider, keyRef?: string): Promise<string | undefined> {
+  const credential = await ctx.credentials.resolve(credentialRef(keyRef ?? CLOUD_CREDENTIAL_REFS[provider]))
   const value = credential?.value.trim() ?? ''
   return value.length > 0 ? value : undefined
 }
@@ -20,8 +20,8 @@ export async function resolveApiKey(ctx: Context, provider: CloudImageProvider):
  * wording; without it the message is the browser-facing Chinese one used by
  * the Studio route.
  */
-export async function requireApiKey(ctx: Context, provider: CloudImageProvider, tool?: string): Promise<string> {
-  const value = await resolveApiKey(ctx, provider)
+export async function requireApiKey(ctx: Context, provider: CloudImageProvider, tool?: string, keyRef?: string): Promise<string> {
+  const value = await resolveApiKey(ctx, provider, keyRef)
   if (value !== undefined) return value
   throw new Error(tool === undefined
     ? `${PROVIDER_DISPLAY_NAMES[provider]} 尚未配置 API Key，请先到 设置 > 插件 > 图像生成 配置`

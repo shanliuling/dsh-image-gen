@@ -39,10 +39,14 @@ import {
   activeComfyUIWorkflow,
   cloudCredentialRef,
   isSubscriptionProvider,
+  openAICompatKeyRef,
   resolveComfyUIWorkflows,
+  resolveOpenAICompatChannels,
+  resolveOpenAICompatModels,
   uniqueComfyUIWorkflowName,
   type CloudImageProvider,
   type ComfyUIWorkflowEntry,
+  type OpenAICompatChannel,
   type ImageProvider,
   type StudioGenerateResponse,
   type SubscriptionProvider,
@@ -87,6 +91,8 @@ if (typeof __CANVAS_BUILD_TS__ !== 'undefined') {
 }
 
 type Provider = ImageProvider
+type ProviderRowTarget = Provider | `openai-compat:${string}`
+type ProviderRows = Record<ProviderRowTarget, ProviderRowState>
 interface ImageSettings {
   provider?: Provider
   cloudTimeoutMs?: number
@@ -96,8 +102,12 @@ interface ImageSettings {
   openaiBaseURL?: string
   openaiModel?: string
   openaiSizes?: Record<string, Record<string, string>>
+  openaiCompatLabel?: string
   openaiCompatBaseURL?: string
   openaiCompatModel?: string
+  openaiCompatModels?: string[]
+  openaiCompatChannels?: OpenAICompatChannel[]
+  openaiCompatActiveChannel?: string
   openaiCompatEditModel?: string
   openaiCompatSizes?: Record<string, Record<string, string>>
   openaiCompatQuality?: string
@@ -206,6 +216,11 @@ const DICT = {
     providerGoogle: 'Google Gemini',
     providerOpenAI: 'OpenAI',
     providerOpenAICompat: 'OpenAI 兼容（中转站）',
+    addCompatChannel: '新增 OpenAI 兼容渠道',
+    channelName: '渠道名称',
+    channelNameRequired: '请填写渠道名称。',
+    removeChannel: '删除渠道',
+    removeChannelConfirm: '确定删除“{label}”吗？该渠道的配置将被移除。',
     providerSeedream: '字节 Seedream',
     providerDashScope: '阿里 DashScope (通义万相 / Qwen)',
     providerXAI: 'xAI Grok Imagine',
@@ -312,6 +327,10 @@ const DICT = {
     endpointHintZhipu: '智谱开放平台 open.bigmodel.cn 的 /api/paas/v4 地址。',
     endpointHintComfyUI: '正在运行且 DSH Host 可以访问的 ComfyUI 地址，默认使用本机 8188 端口。',
     model: '模型',
+    defaultModel: '默认模型',
+    availableModels: '工作台可选模型',
+    availableModelsHint: '勾选后可在工作台切换。手动输入的默认模型会自动加入列表，且不可移除。',
+    defaultModelTag: '默认',
     workflow: 'API Workflow 工作流',
     workflowImport: '导入 JSON 文件',
     workflowMissing: '尚未导入工作流',
@@ -381,7 +400,12 @@ const DICT = {
     settingsIncompatible: 'The loaded settings library cannot save these settings. Update @deepseek-ai/schemastery in the plugin environment to 3.18.4 or a compatible 3.x version, then restart DSH.',
     providerGoogle: 'Google Gemini',
     providerOpenAI: 'OpenAI',
-    providerOpenAICompat: 'OpenAI-compatible (relay)',
+    providerOpenAICompat: 'OpenAI Compatible (relay)',
+    addCompatChannel: 'Add OpenAI-compatible channel',
+    channelName: 'Channel name',
+    channelNameRequired: 'Enter a channel name.',
+    removeChannel: 'Remove channel',
+    removeChannelConfirm: 'Remove "{label}"? Its channel configuration will be deleted.',
     providerSeedream: 'ByteDance Seedream',
     providerDashScope: 'Aliyun DashScope (Wanx / Qwen)',
     providerXAI: 'xAI Grok Imagine',
@@ -488,6 +512,10 @@ const DICT = {
     endpointHintZhipu: 'Zhipu open.bigmodel.cn /api/paas/v4 base URL.',
     endpointHintComfyUI: 'A running ComfyUI server reachable by the DSH Host; the default points to port 8188 on this computer.',
     model: 'Model',
+    defaultModel: 'Default model',
+    availableModels: 'Models available in Studio',
+    availableModelsHint: 'Selected models can be switched in Studio. A manually entered default is added automatically and cannot be removed.',
+    defaultModelTag: 'Default',
     workflow: 'API Workflows',
     workflowImport: 'Import JSON file',
     workflowMissing: 'No workflow imported',
@@ -583,6 +611,10 @@ const STYLE = `
 .dsh-ig-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:16px;padding-top:12px;border-top:1px solid var(--dsw-alias-border-l2,#eee)}
 .dsh-ig-check-row{display:flex;align-items:center;gap:8px;cursor:pointer}
 .dsh-ig-check-row input[type=checkbox]{width:15px;height:15px;accent-color:var(--dsw-alias-brand-primary,#4c78ff);margin:0}
+.dsh-ig-model-picker{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px 12px;max-height:180px;overflow-y:auto;padding:2px 0}
+.dsh-ig-model-picker .dsh-ig-check-row{min-width:0}
+.dsh-ig-model-option{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+.dsh-ig-model-default{flex:none;color:var(--dsw-alias-label-tertiary,#7b818b);font-size:11px}
 .dsh-ig-savedto{font-size:12px;line-height:1.5;color:var(--dsw-alias-label-tertiary,#7b818b);word-break:break-all}
 .dsh-ig-save{appearance:none;border:0;border-radius:var(--dsw-radius-md,6px);padding:5px 14px;background:var(--dsw-alias-label-primary,#111827);color:var(--dsw-alias-bg-layer-3,#fff);font:inherit;font-size:13px;font-weight:400;cursor:pointer;transition:opacity .15s}
 .dsh-ig-save:disabled{opacity:.4;cursor:default}
@@ -591,7 +623,9 @@ const STYLE = `
 .dsh-ig-providers{display:flex;flex-direction:column;margin-top:6px}
 .dsh-ig-provider-row{border:0;background:none;padding:14px 0}
 .dsh-ig-provider-row + .dsh-ig-provider-row{border-top:0.5px solid var(--dsw-alias-border-l2,#e8ebf0)}
-.dsh-ig-provider-head{width:100%;appearance:none;border:0;background:none;font:inherit;color:inherit;text-align:left;cursor:pointer;display:flex;align-items:center;gap:10px;padding:0}
+.dsh-ig-provider-head-row{display:flex;align-items:center;gap:10px}
+.dsh-ig-provider-head{flex:1;min-width:0;width:100%;appearance:none;border:0;background:none;font:inherit;color:inherit;text-align:left;cursor:pointer;display:flex;align-items:center;gap:10px;padding:0}
+.dsh-ig-channel-add{flex:none;width:30px;padding:4px 0;font-size:16px;line-height:20px}
 .dsh-ig-provider-head:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,#4c78ff);outline-offset:2px;border-radius:var(--dsw-radius-sm,4px)}
 .dsh-ig-provider-head:hover .dsh-ig-provider-name{color:var(--dsw-alias-label-secondary,inherit)}
 .dsh-ig-provider-name{flex:1;min-width:0;font-size:13.5px;font-weight:550;color:var(--dsw-alias-label-primary,inherit)}
@@ -1159,7 +1193,9 @@ type KeyStatus = 'checking' | 'configured' | 'missing' | 'unknown' | 'unavailabl
 /** Per-provider editable form state; every provider row saves independently. */
 interface ProviderRowState {
   expanded: boolean
+  label: string
   model: string
+  models: string[]
   editModel: string
   baseURL: string
   googleNative: boolean
@@ -1196,7 +1232,9 @@ interface ProviderRowState {
 function emptyProviderRow(): ProviderRowState {
   return {
     expanded: false,
+    label: '',
     model: '',
+    models: [],
     editModel: '',
     baseURL: '',
     googleNative: false,
@@ -1288,9 +1326,30 @@ function parseEditFormat(value: string | undefined): ProviderRowState['editForma
   return value === 'jsonImageUrlArray' || value === 'formReferenceImages' || value === 'siliconflowJson' ? value : 'multipart'
 }
 
+function compatChannelRowKey(channelId: string): `openai-compat:${string}` {
+  return `openai-compat:${channelId}`
+}
+
+function compatRowFields(channel: OpenAICompatChannel): Partial<ProviderRowState> {
+  return {
+    label: channel.label,
+    model: channel.model,
+    models: resolveOpenAICompatModels({ openaiCompatModel: channel.model, openaiCompatModels: channel.models ?? [] }),
+    editModel: channel.editModel ?? '',
+    baseURL: channel.baseURL,
+    editFormat: parseEditFormat(channel.editFormat),
+    editExtraText: editExtraTextOf(channel.editExtra),
+    sizeTableText: editExtraTextOf(channel.sizes),
+    generationQuality: channel.quality ?? '',
+    qualityOptionsText: (channel.qualityOptions !== undefined && channel.qualityOptions.length > 0 ? channel.qualityOptions : DEFAULT_COMPAT_QUALITIES).join(', '),
+    generateExtraText: editExtraTextOf(channel.extraBody),
+    editSizeMode: channel.editSizeMode === 'selected' ? 'selected' : 'auto',
+  }
+}
+
 /** Build one row per provider from persisted settings, including ComfyUI extras. */
-function rowsFromSettings(value: ImageSettings | undefined): Record<Provider, ProviderRowState> {
-  const rows = {} as Record<Provider, ProviderRowState>
+function rowsFromSettings(value: ImageSettings | undefined): ProviderRows {
+  const rows = {} as ProviderRows
   for (const provider of IMAGE_PROVIDERS) {
     rows[provider] = {
       ...emptyProviderRow(),
@@ -1303,22 +1362,16 @@ function rowsFromSettings(value: ImageSettings | undefined): Record<Provider, Pr
         activeWorkflow: activeComfyUIWorkflow(value ?? {})?.name ?? '',
         timeoutSeconds: Math.max(1, Math.round((value?.comfyuiTimeoutMs ?? DEFAULT_COMFYUI_TIMEOUT_MS) / 1000)),
       } : {}),
-      ...(provider === 'openai-compat' ? {
-        editModel: value?.openaiCompatEditModel ?? '',
-        editFormat: parseEditFormat(value?.openaiCompatEditFormat),
-        editExtraText: editExtraTextOf(value?.openaiCompatEditExtra),
-        sizeTableText: editExtraTextOf(value?.openaiCompatSizes),
-        generationQuality: value?.openaiCompatQuality ?? '',
-        qualityOptionsText: (value?.openaiCompatQualityOptions ?? DEFAULT_COMPAT_QUALITIES).join(', '),
-        generateExtraText: editExtraTextOf(value?.openaiCompatExtraBody),
-        editSizeMode: value?.openaiCompatEditSizeMode === 'selected' ? 'selected' : 'auto',
-      } : {}),
+      ...(provider === 'openai-compat' ? compatRowFields(resolveOpenAICompatChannels(value ?? {})[0]!) : {}),
       ...(provider === 'seedream' ? {
         outputFormat: value?.seedreamOutputFormat === 'png' ? 'png' : 'jpeg',
         watermark: value?.seedreamWatermark !== false,
         background: value?.seedreamBackground === 'transparent' ? 'transparent' : 'opaque',
       } : {}),
     }
+  }
+  for (const channel of resolveOpenAICompatChannels(value ?? {}).slice(1)) {
+    rows[compatChannelRowKey(channel.id)] = { ...emptyProviderRow(), ...compatRowFields(channel) }
   }
   return rows
 }
@@ -1347,7 +1400,8 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
   const [uiMessageIsError, setUiMessageIsError] = useState(false)
   const [workspaceMessage, setWorkspaceMessage] = useState('')
   const [workspaceMessageIsError, setWorkspaceMessageIsError] = useState(false)
-  const [rows, setRows] = useState<Record<Provider, ProviderRowState>>(() => rowsFromSettings(props.scope.getSnapshot().value))
+  const [rows, setRows] = useState<ProviderRows>(() => rowsFromSettings(props.scope.getSnapshot().value))
+  const [compatChannels, setCompatChannels] = useState<OpenAICompatChannel[]>(() => resolveOpenAICompatChannels(props.scope.getSnapshot().value ?? {}).slice(1))
   // Bumped by host credential events so every badge re-checks without remounting.
   const [keyTick, setKeyTick] = useState(0)
   // Subscription login state per provider, read from the host login-status route.
@@ -1532,12 +1586,12 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
     setWorkspaceFolder(value?.workspaceFolder ?? 'dsh-image-gen')
     setShowPill(value?.showProviderPill === true)
     setRows(current => {
-      const next = {} as Record<Provider, ProviderRowState>
+      const next = { ...current }
       for (const provider of IMAGE_PROVIDERS) {
         next[provider] = {
           ...current[provider],
           model: modelOf(provider, value),
-          ...(provider === 'openai-compat' ? { editModel: value?.openaiCompatEditModel ?? '' } : {}),
+          ...(provider === 'openai-compat' ? compatRowFields(resolveOpenAICompatChannels(value ?? {})[0]!) : {}),
           baseURL: baseURLOf(provider, value),
           ...(provider === 'comfyui' ? {
             workflows: resolveComfyUIWorkflows(value ?? {}),
@@ -1551,6 +1605,10 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
           } : {}),
         }
       }
+      for (const channel of resolveOpenAICompatChannels(value ?? {}).slice(1)) {
+        const key = compatChannelRowKey(channel.id)
+        next[key] = { ...(current[key] ?? emptyProviderRow()), ...compatRowFields(channel) }
+      }
       return next
     })
   }, [snapshot])
@@ -1559,38 +1617,37 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
   const credentialsAvailable = props.credentialsAvailable
   useEffect(() => {
     let active = true
+    const targets: Array<{ key: ProviderRowTarget; keyRef: string }> = [
+      ...CLOUD_IMAGE_PROVIDERS.flatMap(provider => {
+        const keyRef = cloudCredentialRef(provider)
+        return keyRef === undefined ? [] : [{ key: provider as ProviderRowTarget, keyRef }]
+      }),
+      ...compatChannels.map(channel => ({ key: compatChannelRowKey(channel.id), keyRef: channel.keyRef })),
+    ]
     if (!credentialsAvailable()) {
-      // No credentials service on this core: degrade the key badges instead
-      // of unmounting the card (#32); a late service re-runs this effect.
       setRows(current => {
-        const next = { ...current } as Record<Provider, ProviderRowState>
-        for (const provider of CLOUD_IMAGE_PROVIDERS) {
-          next[provider] = { ...current[provider], keyStatus: 'unavailable', keyInfo: undefined }
-        }
+        const next = { ...current }
+        for (const target of targets) next[target.key] = { ...(current[target.key] ?? emptyProviderRow()), keyStatus: 'unavailable', keyInfo: undefined }
         return next
       })
       return () => { active = false }
     }
-    for (const provider of CLOUD_IMAGE_PROVIDERS) {
-      const keyRef = cloudCredentialRef(provider)
-      if (keyRef === undefined) continue
-      setRows(current => ({ ...current, [provider]: { ...current[provider], keyStatus: 'checking' } }))
-      void credentials.describe([keyRef]).then(response => {
+    for (const target of targets) {
+      setRows(current => ({ ...current, [target.key]: { ...current[target.key], keyStatus: 'checking' } }))
+      void credentials.describe([target.keyRef]).then(response => {
         if (!active) return
-        // A failed describe previously left the badge stuck on "checking"
-        // forever; surface it as an explicit unknown state instead.
-        const info = response.ok ? response.value?.[keyRef] : undefined
-        setRows(current => ({ ...current, [provider]: { ...current[provider], keyStatus: response.ok ? (info?.configured ? 'configured' : 'missing') : 'unknown', keyInfo: info } }))
+        const info = response.ok ? response.value?.[target.keyRef] : undefined
+        setRows(current => ({ ...current, [target.key]: { ...current[target.key], keyStatus: response.ok ? (info?.configured ? 'configured' : 'missing') : 'unknown', keyInfo: info } }))
       }).catch(() => {
         if (!active) return
-        setRows(current => ({ ...current, [provider]: { ...current[provider], keyStatus: 'unknown' } }))
+        setRows(current => ({ ...current, [target.key]: { ...current[target.key], keyStatus: 'unknown' } }))
       })
     }
     return () => { active = false }
-  }, [credentials, credentialsAvailable, keyTick])
+  }, [credentials, credentialsAvailable, keyTick, compatChannels])
 
-  const updateRow = (provider: Provider, patch: Partial<ProviderRowState>): void => {
-    setRows(current => ({ ...current, [provider]: { ...current[provider], ...patch } }))
+  const updateRow = (target: ProviderRowTarget, patch: Partial<ProviderRowState>): void => {
+    setRows(current => ({ ...current, [target]: { ...current[target], ...patch } }))
   }
 
   /** The only action that ever changes the default provider; saving a key never does. */
@@ -1604,11 +1661,41 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
     })
   }
 
-  const saveProviderRow = async (provider: Provider): Promise<void> => {
-    const row = rows[provider]
-    updateRow(provider, { saving: true, message: '', messageIsError: false })
+  const saveProviderRow = async (provider: Provider, channel?: OpenAICompatChannel): Promise<void> => {
+    const target = channel === undefined ? provider : compatChannelRowKey(channel.id)
+    const row = rows[target]!
+    updateRow(target, { saving: true, message: '', messageIsError: false })
     try {
-      if (provider === 'comfyui') {
+      if (channel !== undefined) {
+        const label = row.label.trim()
+        if (label.length === 0) throw new Error(t('channelNameRequired'))
+        const updated: OpenAICompatChannel = {
+          ...channel,
+          label,
+          baseURL: row.baseURL.trim(),
+          model: row.model.trim(),
+          models: resolveOpenAICompatModels({ openaiCompatModel: row.model, openaiCompatModels: row.models }),
+          editModel: row.editModel.trim(),
+          quality: row.generationQuality.trim(),
+          qualityOptions: [...new Set(row.qualityOptionsText.split(',').map(value => value.trim()).filter(Boolean))],
+          extraBody: parseExtraFields(row.generateExtraText, t('editExtraInvalid')),
+          editSizeMode: row.editSizeMode,
+          editFormat: row.editFormat,
+          editExtra: parseExtraFields(row.editExtraText, t('editExtraInvalid')),
+          sizes: parseSizeTable(row.sizeTableText, t('sizeTableInvalid')),
+        }
+        const nextChannels = compatChannels.some(entry => entry.id === channel.id)
+          ? compatChannels.map(entry => entry.id === channel.id ? updated : entry)
+          : [...compatChannels, updated]
+        await saveSetting('openaiCompatChannels', nextChannels)
+        setCompatChannels(nextChannels)
+        if (row.keyInput.trim().length > 0) {
+          if (!credentialsAvailable()) throw new Error(t('credentialsUnavailable'))
+          const response = await props.credentials.set(channel.keyRef, row.keyInput.trim())
+          if (!response.ok) throw new Error(response.error?.message ?? t('saveKeyFailed'))
+          updateRow(target, { keyInput: '', keyStatus: 'configured' })
+        }
+      } else if (provider === 'comfyui') {
         const entries = row.workflows.map(entry => ({ name: entry.name.trim(), json: entry.json, presetPrompt: (entry.presetPrompt ?? '').trim() }))
         for (const entry of entries) {
           if (entry.name.length === 0) throw new Error(t('workflowNameRequired'))
@@ -1619,18 +1706,12 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
         await saveSetting('comfyuiBaseURL', row.baseURL)
         await saveSetting('comfyuiWorkflows', entries)
         await saveSetting('comfyuiActiveWorkflow', activeEntry === undefined ? '' : activeEntry.name)
-        // Keep the legacy single-workflow fields in sync so older plugin versions keep working.
         await saveSetting('comfyuiWorkflowJson', activeEntry === undefined ? '' : activeEntry.json)
         await saveSetting('comfyuiWorkflowName', activeEntry === undefined ? '' : activeEntry.name)
         await saveSetting('comfyuiTimeoutMs', Math.max(1, Math.round(row.timeoutSeconds)) * 1000)
       } else if (isSubscriptionProvider(provider)) {
-        // Subscription rows persist nothing per-provider: the model is fixed
-        // by the channel and the login lives in the plugin's own credential
-        // store. Saving is a no-op acknowledgement so the button never feels
-        // broken.
         await Promise.resolve()
       } else {
-        // Validate all output controls before writing model, address or extras.
         const editExtra = provider === 'openai-compat' ? parseExtraFields(row.editExtraText, t('editExtraInvalid')) : {}
         const sizeTable = provider === 'openai' || provider === 'openai-compat' ? parseSizeTable(row.sizeTableText, t('sizeTableInvalid')) : {}
         const generateExtra = provider === 'openai-compat' ? parseExtraFields(row.generateExtraText, t('editExtraInvalid')) : {}
@@ -1640,6 +1721,8 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
         if (provider === 'google') await saveSetting('googleNative', row.googleNative)
         if (provider === 'openai') await saveSetting('openaiSizes', sizeTable)
         if (provider === 'openai-compat') {
+          await saveSetting('openaiCompatLabel', row.label.trim())
+          await saveSetting('openaiCompatModels', resolveOpenAICompatModels({ openaiCompatModel: row.model, openaiCompatModels: row.models }))
           await saveSetting('openaiCompatEditModel', row.editModel.trim())
           await saveSetting('openaiCompatEditFormat', row.editFormat)
           await saveSetting('openaiCompatEditExtra', editExtra)
@@ -1660,28 +1743,82 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
           if (!credentialsAvailable()) throw new Error(t('credentialsUnavailable'))
           const response = await props.credentials.set(keyRef, row.keyInput.trim())
           if (!response.ok) throw new Error(response.error?.message ?? t('saveKeyFailed'))
-          updateRow(provider, { keyInput: '', keyStatus: 'configured' })
+          updateRow(target, { keyInput: '', keyStatus: 'configured' })
         }
       }
-      updateRow(provider, {
+      updateRow(target, {
         message: t('saved'), messageIsError: false,
         testResult: undefined, modelFetchMessage: '', modelFetchIsError: false,
       })
     } catch (cause) {
-      updateRow(provider, { message: cause instanceof Error ? cause.message : String(cause), messageIsError: true })
+      updateRow(target, { message: cause instanceof Error ? cause.message : String(cause), messageIsError: true })
     } finally {
-      updateRow(provider, { saving: false })
+      updateRow(target, { saving: false })
+    }
+  }
+
+  const addCompatChannel = (): void => {
+    const id = `channel-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
+    const label = `OpenAI 兼容 ${compatChannels.length + 2}`
+    const channel: OpenAICompatChannel = {
+      id,
+      label,
+      keyRef: openAICompatKeyRef(id),
+      baseURL: '',
+      model: '',
+      models: [],
+      qualityOptions: [...DEFAULT_COMPAT_QUALITIES],
+    }
+    setCompatChannels(current => [...current, channel])
+    setRows(current => ({
+      ...current,
+      [compatChannelRowKey(id)]: { ...emptyProviderRow(), ...compatRowFields(channel), expanded: true },
+    }))
+  }
+
+  const removeCompatChannel = async (channel: OpenAICompatChannel): Promise<void> => {
+    if (!window.confirm(t('removeChannelConfirm', { label: channel.label }))) return
+    const target = compatChannelRowKey(channel.id)
+    const persisted = snapshot.value?.openaiCompatChannels?.some(entry => entry.id === channel.id) === true
+    if (!persisted) {
+      setCompatChannels(current => current.filter(entry => entry.id !== channel.id))
+      setRows(current => {
+        const next = { ...current }
+        delete next[target]
+        return next
+      })
+      return
+    }
+    let removed = false
+    updateRow(target, { saving: true, message: '', messageIsError: false })
+    try {
+      const nextChannels = compatChannels.filter(entry => entry.id !== channel.id)
+      await saveSetting('openaiCompatChannels', nextChannels)
+      if (snapshot.value?.openaiCompatActiveChannel === channel.id) await saveSetting('openaiCompatActiveChannel', 'default')
+      removed = true
+      setCompatChannels(nextChannels)
+      setRows(current => {
+        const next = { ...current }
+        delete next[target]
+        return next
+      })
+    } catch (cause) {
+      updateRow(target, { message: cause instanceof Error ? cause.message : String(cause), messageIsError: true })
+    } finally {
+      if (!removed) updateRow(target, { saving: false })
     }
   }
 
   /** These actions use host settings, so drafts must be saved before making a request. */
-  const providerActionBlockMessage = (provider: Provider): string | undefined => {
-    const row = rows[provider]
+  const providerActionBlockMessage = (provider: Provider, channel?: OpenAICompatChannel): string | undefined => {
+    const target = channel === undefined ? provider : compatChannelRowKey(channel.id)
+    const row = rows[target]!
     if (row.keyInput.trim().length > 0) return t('saveKeyFirst')
     if (isSubscriptionProvider(provider)) return undefined
     const address = row.baseURL.trim()
     if (address.length === 0) return t('endpointRequired')
-    if (address !== baseURLOf(provider, props.scope.getSnapshot().value).trim()) return t('saveEndpointFirst')
+    const savedAddress = channel === undefined ? baseURLOf(provider, props.scope.getSnapshot().value) : channel.baseURL
+    if (address !== savedAddress.trim()) return t('saveEndpointFirst')
     if (provider === 'google' && row.googleNative !== (props.scope.getSnapshot().value?.googleNative === true)) return t('saveGoogleProtocolFirst')
     return undefined
   }
@@ -1691,81 +1828,84 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
     message === 'Base URL is not configured' ? t('savedEndpointMissing') : message ?? t('testFailed')
 
   /** Probe through the host route so the browser side never touches credential values. */
-  const testConnection = async (provider: Provider): Promise<void> => {
-    const blocked = providerActionBlockMessage(provider)
+  const testConnection = async (provider: Provider, channel?: OpenAICompatChannel): Promise<void> => {
+    const target = channel === undefined ? provider : compatChannelRowKey(channel.id)
+    const blocked = providerActionBlockMessage(provider, channel)
     if (blocked !== undefined) {
-      updateRow(provider, { message: blocked, messageIsError: false, testResult: undefined })
+      updateRow(target, { message: blocked, messageIsError: false, testResult: undefined })
       return
     }
-    updateRow(provider, { testing: true, testResult: undefined, message: '', messageIsError: false })
+    updateRow(target, { testing: true, testResult: undefined, message: '', messageIsError: false })
     try {
       const response = await fetch(TEST_CONNECTION_ROUTE, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ provider }),
+        body: JSON.stringify({ provider, ...(channel === undefined ? {} : { channel: channel.id }) }),
       })
       if (!response.ok) throw new Error(`HTTP ${String(response.status)}`)
-      updateRow(provider, { testResult: await response.json() as ProbeOutcome })
+      updateRow(target, { testResult: await response.json() as ProbeOutcome })
     } catch (cause) {
-      updateRow(provider, { testResult: { ok: false, reason: 'error', message: cause instanceof Error ? cause.message : String(cause) } })
+      updateRow(target, { testResult: { ok: false, reason: 'error', message: cause instanceof Error ? cause.message : String(cause) } })
     } finally {
-      updateRow(provider, { testing: false })
+      updateRow(target, { testing: false })
     }
   }
 
   /** Pull the provider's image-capable model ids through the host route (Google and the OpenAI family). */
-  const fetchProviderModels = async (provider: CloudImageProvider): Promise<void> => {
-    const blocked = providerActionBlockMessage(provider)
+  const fetchProviderModels = async (provider: CloudImageProvider, channel?: OpenAICompatChannel): Promise<void> => {
+    const target = channel === undefined ? provider : compatChannelRowKey(channel.id)
+    const blocked = providerActionBlockMessage(provider, channel)
     if (blocked !== undefined) {
-      updateRow(provider, { modelFetchMessage: blocked, modelFetchIsError: false })
+      updateRow(target, { modelFetchMessage: blocked, modelFetchIsError: false })
       return
     }
-    updateRow(provider, { fetchingModels: true, modelFetchMessage: '', modelFetchIsError: false })
+    updateRow(target, { fetchingModels: true, modelFetchMessage: '', modelFetchIsError: false })
     try {
       const response = await fetch(TEST_CONNECTION_ROUTE, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ provider, action: 'models' }),
+        body: JSON.stringify({ provider, action: 'models', ...(channel === undefined ? {} : { channel: channel.id }) }),
       })
       if (!response.ok) throw new Error(`HTTP ${String(response.status)}`)
       const payload = await response.json() as { ok: boolean; models?: unknown; reason?: string; message?: string }
       if (payload.ok && Array.isArray(payload.models)) {
         const models = payload.models.filter((id): id is string => typeof id === 'string')
-        updateRow(provider, {
+        updateRow(target, {
           modelOptions: models,
           modelFetchMessage: models.length > 0 ? t('modelsFound', { n: String(models.length) }) : t('modelsNone'),
           modelFetchIsError: models.length === 0,
         })
       } else if (payload.reason === 'missing-key') {
-        updateRow(provider, { modelFetchMessage: t('badgeMissing'), modelFetchIsError: true })
+        updateRow(target, { modelFetchMessage: t('badgeMissing'), modelFetchIsError: true })
       } else if (payload.reason === 'unauthorized') {
-        updateRow(provider, { modelFetchMessage: t('testUnauthorized'), modelFetchIsError: true })
+        updateRow(target, { modelFetchMessage: t('testUnauthorized'), modelFetchIsError: true })
       } else {
-        updateRow(provider, { modelFetchMessage: providerErrorMessage(payload.message), modelFetchIsError: true })
+        updateRow(target, { modelFetchMessage: providerErrorMessage(payload.message), modelFetchIsError: true })
       }
     } catch (cause) {
-      updateRow(provider, { modelFetchMessage: cause instanceof Error ? cause.message : String(cause), modelFetchIsError: true })
+      updateRow(target, { modelFetchMessage: cause instanceof Error ? cause.message : String(cause), modelFetchIsError: true })
     } finally {
-      updateRow(provider, { fetchingModels: false })
+      updateRow(target, { fetchingModels: false })
     }
   }
 
-  const clearProviderKey = async (provider: CloudImageProvider): Promise<void> => {
-    const keyRef = cloudCredentialRef(provider)
+  const clearProviderKey = async (provider: CloudImageProvider, channel?: OpenAICompatChannel): Promise<void> => {
+    const target = channel === undefined ? provider : compatChannelRowKey(channel.id)
+    const keyRef = channel === undefined ? cloudCredentialRef(provider) : channel.keyRef
     if (keyRef === undefined) return
     if (typeof props.credentials.unset !== 'function') {
-      updateRow(provider, { message: t('clearKeyUnsupported'), messageIsError: true })
+      updateRow(target, { message: t('clearKeyUnsupported'), messageIsError: true })
       return
     }
-    updateRow(provider, { saving: true, message: '', messageIsError: false })
+    updateRow(target, { saving: true, message: '', messageIsError: false })
     try {
       const response = await props.credentials.unset(keyRef)
       if (!response.ok) throw new Error(response.error?.message ?? t('clearKeyFailed'))
-      updateRow(provider, { keyStatus: 'missing', keyInput: '', testResult: undefined, message: t('keyCleared'), messageIsError: false })
+      updateRow(target, { keyStatus: 'missing', keyInput: '', testResult: undefined, message: t('keyCleared'), messageIsError: false })
     } catch (cause) {
-      updateRow(provider, { message: cause instanceof Error ? cause.message : String(cause), messageIsError: true })
+      updateRow(target, { message: cause instanceof Error ? cause.message : String(cause), messageIsError: true })
     } finally {
-      updateRow(provider, { saving: false })
+      updateRow(target, { saving: false })
     }
   }
 
@@ -1777,7 +1917,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
     return `${t('testFailed')}${result.message !== undefined && result.message.length > 0 ? `: ${providerErrorMessage(result.message)}` : ''}`
   }
 
-  const badgeOf = (provider: Provider): { text: string; className: string } => {
+  const badgeOf = (provider: Provider, channel?: OpenAICompatChannel): { text: string; className: string } => {
     if (provider === 'comfyui') return { text: t('comfyuiNoKey'), className: 'dsh-ig-badge dsh-ig-badge-neutral' }
     if (isSubscriptionProvider(provider)) {
       const status = subStatus[provider].state
@@ -1785,7 +1925,8 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
       if (status === 'logged-out') return { text: t('subBadgeLoggedOut'), className: 'dsh-ig-badge dsh-ig-badge-missing' }
       return { text: t('subBadgeUnknown'), className: 'dsh-ig-badge dsh-ig-badge-neutral' }
     }
-    const status = rows[provider].keyStatus
+    const target = channel === undefined ? provider : compatChannelRowKey(channel.id)
+    const status = rows[target]!.keyStatus
     if (status === 'checking') return { text: t('badgeChecking'), className: 'dsh-ig-badge dsh-ig-badge-neutral dsh-ig-badge-checking' }
     if (status === 'configured') return { text: t('badgeConfigured'), className: 'dsh-ig-badge dsh-ig-badge-ok' }
     if (status === 'missing') return { text: t('badgeMissing'), className: 'dsh-ig-badge dsh-ig-badge-missing' }
@@ -1888,26 +2029,39 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
     })
   }
 
-  const renderCloudBody = (provider: CloudImageProvider) => {
-    const row = rows[provider]
+  const renderCloudBody = (provider: CloudImageProvider, channel?: OpenAICompatChannel) => {
+    const target = channel === undefined ? provider : compatChannelRowKey(channel.id)
+    const row = rows[target]!
+    const update = (patch: Partial<ProviderRowState>): void => { updateRow(target, patch) }
+    const modelListId = `dsh-ig-${target.replace(/[^A-Za-z0-9_-]/g, '-')}-model-options`
     const officialEditFormat = provider === 'openai-compat'
       ? compatEditFormat({ openaiCompatBaseURL: row.baseURL, openaiCompatModel: row.editModel.trim() || row.model }) : 'multipart'
     const automaticEditFormat = officialEditFormat !== 'multipart'
     const editFormat = automaticEditFormat ? officialEditFormat : row.editFormat
-    const keyRef = cloudCredentialRef(provider) ?? ''
+    const keyRef = channel === undefined ? cloudCredentialRef(provider) ?? '' : channel.keyRef
     const keyReadOnly = row.keyInfo?.writable === false
     const keyUnavailable = !credentialsAvailable()
+    const providerLabel = provider === 'openai-compat' && row.label.trim().length > 0 ? row.label.trim() : providerLabels[provider]
+    const compatModelChoices = provider === 'openai-compat'
+      ? resolveOpenAICompatModels({ openaiCompatModel: row.model, openaiCompatModels: [...row.models, ...row.modelOptions] })
+      : []
     return (
       <div className="dsh-ig-provider-body">
-        <form onSubmit={(event) => { event.preventDefault(); void saveProviderRow(provider) }}>
+        <form onSubmit={(event) => { event.preventDefault(); void saveProviderRow(provider, channel) }}>
+          {provider === 'openai-compat' ? (
+            <label className="dsh-ig-field">
+              <span className="dsh-ig-label">{t('channelName')}</span>
+              <input className="dsh-ig-input" value={row.label} onChange={event => { update({ label: event.target.value }) }} placeholder={providerLabels[provider]} required={channel !== undefined} disabled={!settingsWritable} />
+            </label>
+          ) : null}
           <label className="dsh-ig-field">
-            <span className="dsh-ig-label">{t('apiKeyLabel', { provider: providerLabels[provider] })}</span>
+            <span className="dsh-ig-label">{t('apiKeyLabel', { provider: providerLabel })}</span>
             <input
               className="dsh-ig-input"
               type="password"
               autoComplete="off"
               value={row.keyInput}
-              onChange={event => { updateRow(provider, { keyInput: event.target.value }) }}
+              onChange={event => { update({ keyInput: event.target.value }) }}
               placeholder={row.keyStatus === 'configured' ? t('apiKeyPlaceholder') : ''}
               disabled={!settingsWritable || keyReadOnly || keyUnavailable}
             />
@@ -1920,9 +2074,9 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
           <label className="dsh-ig-field">
             <span className="dsh-ig-label">{t('endpoint')}</span>
             <div className="dsh-ig-input-group">
-              <input className="dsh-ig-input" type="url" value={row.baseURL} onChange={event => { updateRow(provider, { baseURL: event.target.value }) }} required disabled={!settingsWritable} />
+              <input className="dsh-ig-input" type="url" value={row.baseURL} onChange={event => { update({ baseURL: event.target.value }) }} required disabled={!settingsWritable} />
               {provider !== 'openai-compat' ? (
-                <button type="button" className="dsh-ig-btn-reset" title={t('resetTitle')} onClick={() => { updateRow(provider, { baseURL: DEFAULT_BASE_URLS[provider] }) }} disabled={!settingsWritable}>{t('reset')}</button>
+                <button type="button" className="dsh-ig-btn-reset" title={t('resetTitle')} onClick={() => { update({ baseURL: DEFAULT_BASE_URLS[provider] }) }} disabled={!settingsWritable}>{t('reset')}</button>
               ) : null}
             </div>
             <span className="dsh-ig-hint">{t(provider === 'google' && row.googleNative ? 'endpointHintGoogleNative' : CLOUD_HINT_KEYS[provider])}</span>
@@ -1930,36 +2084,39 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
           {provider === 'google' ? (
             <label className="dsh-ig-field">
               <span className="dsh-ig-label">{t('googleProtocol')}</span>
-              <select className="dsh-ig-input" value={row.googleNative ? 'native' : 'interactions'} onChange={event => { updateRow(provider, { googleNative: event.target.value === 'native' }) }} disabled={!settingsWritable}>
+              <select className="dsh-ig-input" value={row.googleNative ? 'native' : 'interactions'} onChange={event => { update({ googleNative: event.target.value === 'native' }) }} disabled={!settingsWritable}>
                 <option value="interactions">{t('googleInteractions')}</option>
                 <option value="native">{t('googleNative')}</option>
               </select>
             </label>
           ) : null}
           <label className="dsh-ig-field">
-            <span className="dsh-ig-label">{t('model')}</span>
+            <span className="dsh-ig-label">{t(provider === 'openai-compat' ? 'defaultModel' : 'model')}</span>
             {modelPullSupported(provider) ? (
               <div className="dsh-ig-input-group">
                 <input
                   className="dsh-ig-input"
                   value={row.model}
-                  onChange={event => { updateRow(provider, { model: event.target.value }) }}
-                  list={`dsh-ig-${provider}-model-options`}
+                  onChange={event => { update({ model: event.target.value }) }}
+                  onBlur={() => {
+                    if (provider === 'openai-compat') update({ models: resolveOpenAICompatModels({ openaiCompatModel: row.model, openaiCompatModels: row.models }) })
+                  }}
+                  list={modelListId}
                   required={provider !== 'openai-compat'}
                   disabled={!settingsWritable}
                 />
-                <datalist id={`dsh-ig-${provider}-model-options`}>
+                <datalist id={modelListId}>
                   {row.modelOptions.map(id => <option key={id} value={id} />)}
                 </datalist>
                 <button
                   type="button"
                   className="dsh-ig-btn-secondary"
                   disabled={row.fetchingModels || row.saving || !settingsWritable}
-                  onClick={() => { void fetchProviderModels(provider) }}
+                  onClick={() => { void fetchProviderModels(provider, channel) }}
                 >{row.fetchingModels ? t('fetchingModels') : t('fetchModels')}</button>
               </div>
             ) : (
-              <input className="dsh-ig-input" value={row.model} onChange={event => { updateRow(provider, { model: event.target.value }) }} required disabled={!settingsWritable} />
+              <input className="dsh-ig-input" value={row.model} onChange={event => { update({ model: event.target.value }) }} required disabled={!settingsWritable} />
             )}
             {modelPullSupported(provider) ? (
               row.modelFetchMessage.length > 0 ? (
@@ -1969,10 +2126,37 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
               )
             ) : null}
           </label>
+          {provider === 'openai-compat' && compatModelChoices.length > 0 ? (
+            <div className="dsh-ig-field">
+              <span className="dsh-ig-label">{t('availableModels')}</span>
+              <div className="dsh-ig-model-picker">
+                {compatModelChoices.map(id => {
+                  const isDefault = row.model.trim() === id
+                  const checked = isDefault || row.models.includes(id)
+                  return (
+                    <label className="dsh-ig-check-row" key={id} title={id}>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={!settingsWritable || isDefault}
+                        onChange={event => {
+                          const models = event.target.checked ? [...row.models, id] : row.models.filter(model => model !== id)
+                          update({ models: resolveOpenAICompatModels({ openaiCompatModel: row.model, openaiCompatModels: models }) })
+                        }}
+                      />
+                      <span className="dsh-ig-model-option">{id}</span>
+                      {isDefault ? <span className="dsh-ig-model-default">{t('defaultModelTag')}</span> : null}
+                    </label>
+                  )
+                })}
+              </div>
+              <span className="dsh-ig-hint">{t('availableModelsHint')}</span>
+            </div>
+          ) : null}
           {provider === 'openai-compat' ? (
             <label className="dsh-ig-field">
               <span className="dsh-ig-label">{t('editModel')}</span>
-              <input className="dsh-ig-input" value={row.editModel} onChange={event => { updateRow(provider, { editModel: event.target.value }) }} list="dsh-ig-openai-compat-model-options" disabled={!settingsWritable} />
+              <input className="dsh-ig-input" value={row.editModel} onChange={event => { update({ editModel: event.target.value }) }} list={modelListId} disabled={!settingsWritable} />
               <span className="dsh-ig-hint">{t('editModelHint')}</span>
             </label>
           ) : null}
@@ -1982,7 +2166,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
               <select
                 className="dsh-ig-input"
                 value={automaticEditFormat ? '__official__' : row.editFormat}
-                onChange={event => { updateRow(provider, { editFormat: parseEditFormat(event.target.value) }) }}
+                onChange={event => { update({ editFormat: parseEditFormat(event.target.value) }) }}
                 disabled={!settingsWritable || automaticEditFormat}
               >
                 {automaticEditFormat ? <option value="__official__">{t('editFormatAutomatic')}</option> : null}
@@ -2001,7 +2185,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
                 <select
                   className="dsh-ig-input"
                   value={row.outputFormat}
-                  onChange={event => { updateRow(provider, { outputFormat: event.target.value === 'png' ? 'png' : 'jpeg' }) }}
+                  onChange={event => { update({ outputFormat: event.target.value === 'png' ? 'png' : 'jpeg' }) }}
                   disabled={!settingsWritable}
                 >
                   <option value="jpeg">{t('arkOutputFormatJpeg')}</option>
@@ -2014,7 +2198,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
                 <select
                   className="dsh-ig-input"
                   value={row.watermark ? 'on' : 'off'}
-                  onChange={event => { updateRow(provider, { watermark: event.target.value === 'on' }) }}
+                  onChange={event => { update({ watermark: event.target.value === 'on' }) }}
                   disabled={!settingsWritable}
                 >
                   <option value="on">{t('arkWatermarkOn')}</option>
@@ -2027,7 +2211,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
                 <select
                   className="dsh-ig-input"
                   value={row.background}
-                  onChange={event => { updateRow(provider, { background: event.target.value === 'transparent' ? 'transparent' : 'opaque' }) }}
+                  onChange={event => { update({ background: event.target.value === 'transparent' ? 'transparent' : 'opaque' }) }}
                   disabled={!settingsWritable}
                 >
                   <option value="opaque">{t('arkBackgroundOpaque')}</option>
@@ -2040,7 +2224,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
           {provider === 'openai' || provider === 'openai-compat' ? (
             <label className="dsh-ig-field">
               <span className="dsh-ig-label">{t('sizeTable')}</span>
-              <textarea className="dsh-ig-input dsh-ig-textarea" value={row.sizeTableText} onChange={event => { updateRow(provider, { sizeTableText: event.target.value }) }} rows={3} disabled={!settingsWritable} />
+              <textarea className="dsh-ig-input dsh-ig-textarea" value={row.sizeTableText} onChange={event => { update({ sizeTableText: event.target.value }) }} rows={3} disabled={!settingsWritable} />
               <span className="dsh-ig-hint">{t('sizeTableHint')}</span>
             </label>
           ) : null}
@@ -2048,16 +2232,16 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
             <>
               <label className="dsh-ig-field">
                 <span className="dsh-ig-label">{t('defaultQuality')}</span>
-                <input className="dsh-ig-input" value={row.generationQuality} onChange={event => { updateRow(provider, { generationQuality: event.target.value }) }} placeholder="high" disabled={!settingsWritable} />
+                <input className="dsh-ig-input" value={row.generationQuality} onChange={event => { update({ generationQuality: event.target.value }) }} placeholder="high" disabled={!settingsWritable} />
                 <span className="dsh-ig-hint">{t('defaultQualityHint')}</span>
               </label>
               <label className="dsh-ig-field">
                 <span className="dsh-ig-label">{t('qualityOptions')}</span>
-                <input className="dsh-ig-input" value={row.qualityOptionsText} onChange={event => { updateRow(provider, { qualityOptionsText: event.target.value }) }} disabled={!settingsWritable} />
+                <input className="dsh-ig-input" value={row.qualityOptionsText} onChange={event => { update({ qualityOptionsText: event.target.value }) }} disabled={!settingsWritable} />
               </label>
               <label className="dsh-ig-field">
                 <span className="dsh-ig-label">{t('generateExtra')}</span>
-                <textarea className="dsh-ig-input dsh-ig-textarea" value={row.generateExtraText} onChange={event => { updateRow(provider, { generateExtraText: event.target.value }) }} placeholder={'{"watermark":false}'} rows={2} disabled={!settingsWritable} />
+                <textarea className="dsh-ig-input dsh-ig-textarea" value={row.generateExtraText} onChange={event => { update({ generateExtraText: event.target.value }) }} placeholder={'{"watermark":false}'} rows={2} disabled={!settingsWritable} />
                 <span className="dsh-ig-hint">{t('generateExtraHint')}</span>
               </label>
             </>
@@ -2067,7 +2251,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
             {editFormat === 'jsonImageUrlArray' ? (
             <label className="dsh-ig-field">
               <span className="dsh-ig-label">{t('editSizeMode')}</span>
-              <select className="dsh-ig-input" value={row.editSizeMode} onChange={event => { updateRow(provider, { editSizeMode: event.target.value === 'selected' ? 'selected' : 'auto' }) }} disabled={!settingsWritable}>
+              <select className="dsh-ig-input" value={row.editSizeMode} onChange={event => { update({ editSizeMode: event.target.value === 'selected' ? 'selected' : 'auto' }) }} disabled={!settingsWritable}>
                 <option value="auto">{t('editSizeAuto')}</option><option value="selected">{t('editSizeSelected')}</option>
               </select>
             </label>
@@ -2077,7 +2261,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
               <textarea
                 className="dsh-ig-input dsh-ig-textarea"
                 value={row.editExtraText}
-                onChange={event => { updateRow(provider, { editExtraText: event.target.value }) }}
+                onChange={event => { update({ editExtraText: event.target.value }) }}
                 placeholder={t('editExtraPlaceholder')}
                 rows={2}
                 disabled={!settingsWritable}
@@ -2089,9 +2273,9 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
           <div className="dsh-ig-row-actions">
             <p className={`dsh-ig-status${row.messageIsError ? ' dsh-ig-status-error' : ''}`} role="status">{row.message || testResultText(row.testResult)}</p>
             <span className="dsh-ig-row-buttons">
-              <button type="button" className="dsh-ig-btn-secondary" disabled={row.testing || row.saving} onClick={() => { void testConnection(provider) }}>{row.testing ? t('testing') : t('testConnection')}</button>
+              <button type="button" className="dsh-ig-btn-secondary" disabled={row.testing || row.saving} onClick={() => { void testConnection(provider, channel) }}>{row.testing ? t('testing') : t('testConnection')}</button>
               {row.keyStatus === 'configured' && !keyReadOnly ? (
-                <button type="button" className="dsh-ig-btn-secondary dsh-ig-btn-danger" disabled={row.saving} onClick={() => { void clearProviderKey(provider) }}>{t('clearKey')}</button>
+                <button type="button" className="dsh-ig-btn-secondary dsh-ig-btn-danger" disabled={row.saving} onClick={() => { void clearProviderKey(provider, channel) }}>{t('clearKey')}</button>
               ) : null}
               <button className="dsh-ig-save" type="submit" disabled={row.saving || row.testing || row.fetchingModels || !settingsWritable}>{row.saving ? t('saving') : t('save')}</button>
             </span>
@@ -2226,16 +2410,41 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
   const renderProviderRow = (provider: Provider) => {
     const row = rows[provider]
     const badge = badgeOf(provider)
+    const label = provider === 'openai-compat' && row.label.trim().length > 0 ? row.label.trim() : providerLabels[provider]
     return (
       <div key={provider} className="dsh-ig-provider-row">
-        <button type="button" className="dsh-ig-provider-head" aria-expanded={row.expanded} onClick={() => { updateRow(provider, { expanded: !row.expanded }) }}>
-          <span className="dsh-ig-provider-name">{providerLabels[provider]}</span>
-          <span className={badge.className} title={badge.text}><span className="dsh-ig-badge-dot" aria-hidden="true" />{badge.text}</span>
-          <span className={`dsh-ig-provider-chevron ${row.expanded ? 'dsh-ig-provider-chevron-open' : ''}`} aria-hidden="true">
-            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6l4 4 4-4"/></svg>
-          </span>
-        </button>
+        <div className="dsh-ig-provider-head-row">
+          {provider === 'openai-compat' ? <button type="button" className="dsh-ig-btn-secondary dsh-ig-channel-add" title={t('addCompatChannel')} aria-label={t('addCompatChannel')} onClick={addCompatChannel} disabled={!settingsWritable}>+</button> : null}
+          <button type="button" className="dsh-ig-provider-head" aria-expanded={row.expanded} onClick={() => { updateRow(provider, { expanded: !row.expanded }) }}>
+            <span className="dsh-ig-provider-name">{label}</span>
+            <span className={badge.className} title={badge.text}><span className="dsh-ig-badge-dot" aria-hidden="true" />{badge.text}</span>
+            <span className={`dsh-ig-provider-chevron ${row.expanded ? 'dsh-ig-provider-chevron-open' : ''}`} aria-hidden="true">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6l4 4 4-4"/></svg>
+            </span>
+          </button>
+        </div>
         {row.expanded ? (provider === 'comfyui' ? renderComfyUIBody() : isSubscriptionProvider(provider) ? renderSubscriptionBody(provider) : renderCloudBody(provider)) : null}
+      </div>
+    )
+  }
+
+  const renderCompatChannelRow = (channel: OpenAICompatChannel) => {
+    const target = compatChannelRowKey(channel.id)
+    const row = rows[target]!
+    const badge = badgeOf('openai-compat', channel)
+    return (
+      <div key={target} className="dsh-ig-provider-row dsh-ig-compat-channel-row">
+        <div className="dsh-ig-provider-head-row">
+          <button type="button" className="dsh-ig-provider-head" aria-expanded={row.expanded} onClick={() => { updateRow(target, { expanded: !row.expanded }) }}>
+            <span className="dsh-ig-provider-name">{channel.label}</span>
+            <span className={badge.className} title={badge.text}><span className="dsh-ig-badge-dot" aria-hidden="true" />{badge.text}</span>
+            <span className={`dsh-ig-provider-chevron ${row.expanded ? 'dsh-ig-provider-chevron-open' : ''}`} aria-hidden="true">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6l4 4 4-4"/></svg>
+            </span>
+          </button>
+          <button type="button" className="dsh-ig-btn-secondary dsh-ig-btn-danger" disabled={row.saving || !settingsWritable} onClick={() => { void removeCompatChannel(channel) }}>{t('removeChannel')}</button>
+        </div>
+        {row.expanded ? renderCloudBody('openai-compat', channel) : null}
       </div>
     )
   }
@@ -2284,7 +2493,10 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
             {cloudTimeoutMessage.length > 0 ? <span className="dsh-ig-status dsh-ig-status-error" role="status">{cloudTimeoutMessage}</span> : null}
           </label>
           <div className="dsh-ig-providers">
-            {IMAGE_PROVIDERS.map(provider => renderProviderRow(provider))}
+            {IMAGE_PROVIDERS.flatMap(provider => [
+              renderProviderRow(provider),
+              ...(provider === 'openai-compat' ? compatChannels.map(channel => renderCompatChannelRow(channel)) : []),
+            ])}
           </div>
           <div className="dsh-ig-section">
             <span className="dsh-ig-section-title">{t('workspaceSection')}</span>
@@ -2398,6 +2610,7 @@ function ImageResultCard({
   const activeResult = selectedRevision !== undefined ? {
     prompt: selectedRevision.prompt,
     provider: selectedRevision.provider,
+    ...(selectedRevision.channel === undefined ? {} : { channel: selectedRevision.channel }),
     model: selectedRevision.model,
     output: selectedRevision.output,
     createdAt: selectedRevision.createdAt,
@@ -2440,6 +2653,7 @@ function ImageResultCard({
       attachment: result.attachment,
       prompt: result.prompt,
       provider: result.provider as ImageProvider,
+      ...(result.channel === undefined ? {} : { channel: result.channel }),
       model: result.model,
       output: result.output,
       ...(result.savedTo ? { savedTo: result.savedTo } : {}),
@@ -2590,6 +2804,7 @@ function ImageResultCard({
         attachment: payload.attachment,
         prompt: payload.prompt,
         provider: payload.provider,
+        ...(payload.channel === undefined ? {} : { channel: payload.channel }),
         model: payload.model,
         output: payload.output,
         createdAt: payload.createdAt,
@@ -2604,6 +2819,7 @@ function ImageResultCard({
         attachment: revision.attachment,
         prompt: revision.prompt,
         provider: revision.provider,
+        ...(revision.channel === undefined ? {} : { channel: revision.channel }),
         model: revision.model,
         createdAt: revision.createdAt,
         aspectRatio: revision.ratio,
