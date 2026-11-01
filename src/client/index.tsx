@@ -620,23 +620,26 @@ const STYLE = `
 .dsh-ig-save:disabled{opacity:.4;cursor:default}
 
 /* Provider list: one expandable row per provider, each saving independently. */
-.dsh-ig-providers{display:flex;flex-direction:column;margin-top:6px}
-.dsh-ig-provider-row{border:0;background:none;padding:14px 0}
-.dsh-ig-provider-row + .dsh-ig-provider-row{border-top:0.5px solid var(--dsw-alias-border-l2,#e8ebf0)}
-.dsh-ig-provider-head-row{display:flex;align-items:center;gap:10px}
-.dsh-ig-provider-head{flex:1;min-width:0;width:100%;appearance:none;border:0;background:none;font:inherit;color:inherit;text-align:left;cursor:pointer;display:flex;align-items:center;gap:10px;padding:0}
-.dsh-ig-channel-add{flex:none;width:30px;padding:4px 0;font-size:16px;line-height:20px}
+.dsh-ig-providers{display:flex;flex-direction:column;margin-top:12px;overflow:hidden;border:1px solid var(--dsw-alias-border-l2,#e8ebf0);border-radius:10px;background:var(--dsw-alias-bg-layer-3,transparent)}
+.dsh-ig-provider-row{border:0;background:none;padding:0 14px}
+.dsh-ig-provider-row + .dsh-ig-provider-row{border-top:1px solid var(--dsw-alias-border-l2,#e8ebf0)}
+.dsh-ig-provider-head-row{display:flex;align-items:center;gap:8px;min-height:48px}
+.dsh-ig-provider-head{flex:1;min-width:0;width:100%;min-height:48px;appearance:none;border:0;background:none;font:inherit;color:inherit;text-align:left;cursor:pointer;display:flex;align-items:center;gap:10px;padding:0}
+.dsh-ig-channel-add.dsh-ig-btn-secondary{display:inline-flex;align-items:center;justify-content:center;flex:none;box-sizing:border-box;width:26px;height:26px;padding:0;border:0;border-radius:7px;background:var(--dsw-alias-bg-layer-2,#f3f4f6);color:var(--dsw-alias-label-tertiary,#7b818b);line-height:1;transition:background .15s,color .15s}
+.dsh-ig-channel-add.dsh-ig-btn-secondary:hover:not(:disabled){border:0;background:var(--dsw-alias-bg-layer-1,#e5e7eb);color:var(--dsw-alias-label-primary,inherit)}
+.dsh-ig-channel-add svg{width:14px;height:14px}
 .dsh-ig-provider-head:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,#4c78ff);outline-offset:2px;border-radius:var(--dsw-radius-sm,4px)}
-.dsh-ig-provider-head:hover .dsh-ig-provider-name{color:var(--dsw-alias-label-secondary,inherit)}
-.dsh-ig-provider-name{flex:1;min-width:0;font-size:13.5px;font-weight:550;color:var(--dsw-alias-label-primary,inherit)}
-.dsh-ig-provider-chevron{flex:none;color:var(--dsw-alias-label-tertiary,#7b818b);transition:transform .16s;display:inline-flex;align-items:center}
+.dsh-ig-provider-head:hover .dsh-ig-provider-name{color:var(--dsw-alias-label-primary,inherit)}
+.dsh-ig-provider-head:hover .dsh-ig-provider-chevron{color:var(--dsw-alias-label-primary,inherit)}
+.dsh-ig-provider-name{flex:1;min-width:0;font-size:13px;font-weight:550;line-height:20px;color:var(--dsw-alias-label-primary,inherit);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsh-ig-provider-chevron{display:inline-flex;align-items:center;justify-content:center;flex:none;width:20px;height:20px;color:var(--dsw-alias-label-tertiary,#7b818b);transition:transform .16s,color .15s}
 .dsh-ig-provider-chevron-open{transform:rotate(180deg)}
-.dsh-ig-provider-body{border-top:0;padding:8px 0 2px}
-.dsh-ig-badge{flex:none;display:inline-flex;align-items:center;gap:5px;font-size:11.5px;line-height:1.6;padding:2px 9px;border-radius:999px;border:1px solid var(--dsw-alias-border-l2,#d7dbe0);color:var(--dsw-alias-label-secondary,inherit);white-space:nowrap;max-width:60%;overflow:hidden;text-overflow:ellipsis}
-.dsh-ig-badge-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
-.dsh-ig-badge-ok{border-color:rgba(34,197,94,.45);color:#15803d;background:rgba(34,197,94,.08)}
-.dsh-ig-badge-missing{border-color:rgba(239,68,68,.4);color:#b91c1c;background:rgba(239,68,68,.06)}
-.dsh-ig-badge-neutral{color:var(--dsw-alias-label-tertiary,#7b818b)}
+.dsh-ig-provider-body{border-top:0;padding:0 0 14px}
+.dsh-ig-badge{flex:none;display:inline-flex;align-items:center;gap:5px;box-sizing:border-box;min-height:22px;padding:1px 8px;border:1px solid transparent;border-radius:6px;font-size:11px;font-weight:500;line-height:18px;color:var(--dsw-alias-label-secondary,inherit);white-space:nowrap;max-width:60%;overflow:hidden;text-overflow:ellipsis}
+.dsh-ig-badge-dot{width:5px;height:5px;border-radius:50%;background:currentColor;flex:none}
+.dsh-ig-badge-ok{border-color:rgba(34,197,94,.2);color:#15803d;background:rgba(34,197,94,.08)}
+.dsh-ig-badge-missing{border-color:rgba(239,68,68,.18);color:#b91c1c;background:rgba(239,68,68,.06)}
+.dsh-ig-badge-neutral{border-color:var(--dsw-alias-border-l2,#e8ebf0);color:var(--dsw-alias-label-tertiary,#7b818b);background:var(--dsw-alias-bg-layer-2,transparent)}
 .dsh-ig-badge-checking .dsh-ig-badge-dot{animation:dsh-ig-pulse 1s ease-in-out infinite}
 @keyframes dsh-ig-pulse{50%{opacity:.25}}
 
@@ -2414,7 +2417,6 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
     return (
       <div key={provider} className="dsh-ig-provider-row">
         <div className="dsh-ig-provider-head-row">
-          {provider === 'openai-compat' ? <button type="button" className="dsh-ig-btn-secondary dsh-ig-channel-add" title={t('addCompatChannel')} aria-label={t('addCompatChannel')} onClick={addCompatChannel} disabled={!settingsWritable}>+</button> : null}
           <button type="button" className="dsh-ig-provider-head" aria-expanded={row.expanded} onClick={() => { updateRow(provider, { expanded: !row.expanded }) }}>
             <span className="dsh-ig-provider-name">{label}</span>
             <span className={badge.className} title={badge.text}><span className="dsh-ig-badge-dot" aria-hidden="true" />{badge.text}</span>
@@ -2422,6 +2424,9 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
               <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6l4 4 4-4"/></svg>
             </span>
           </button>
+          {provider === 'openai-compat' ? <button type="button" className="dsh-ig-btn-secondary dsh-ig-channel-add" title={t('addCompatChannel')} aria-label={t('addCompatChannel')} onClick={addCompatChannel} disabled={!settingsWritable}>
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>
+          </button> : null}
         </div>
         {row.expanded ? (provider === 'comfyui' ? renderComfyUIBody() : isSubscriptionProvider(provider) ? renderSubscriptionBody(provider) : renderCloudBody(provider)) : null}
       </div>

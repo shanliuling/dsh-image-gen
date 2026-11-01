@@ -136,10 +136,24 @@ export function apply(ctx: Context, config: Config = {}): void {
   // Subscription image accounts: login flows, blob storage, refresh, and the
   // vendor wire calls. One instance per application; tokens stay host-side.
   const subscriptionManager = new SubscriptionManager(ctx)
+  // Prompt contexts are synchronous, while credential and login reads are not.
+  let configuredImageProviders: readonly string[] | undefined
+  let imageContextRevision = 0
+  const refreshImageToolContext = async () => {
+    const revision = ++imageContextRevision
+    const config = current()
+    try {
+      const description = await describeStudio(ctx, config, subscriptionManager)
+      const providers = description.providers.filter(profile => profile.configured).map(profile => profile.provider === 'openai-compat' && profile.channel !== undefined
+        ? `${profile.provider} (channel: ${profile.channel})`
+        : profile.provider)
+      if (revision === imageContextRevision) configuredImageProviders = providers
+    } catch { /* Keep the last credential-free snapshot when status reads fail. */ }
+  }
 
   const settingsHealth = installImageSettings(ctx, current(), {
     setSource: source => { current = () => migrateOpenAICompatConfig(plainConfig(source())) },
-    onChange: () => {},
+    onChange: () => { void refreshImageToolContext() },
   })
   // Every HTTP surface needs webServer, which only the web-app bundle (web,
   // desktop) provides; the headless, acp and sdk profiles have none. Mount the
@@ -224,10 +238,15 @@ export function apply(ctx: Context, config: Config = {}): void {
   // optional dependency: hosts without dsh-system-prompt boot unchanged and
   // the canvas tools remain the model's way to discover the canvas.
   ctx.inject(['systemPrompt'], (promptCtx: Context) => {
+    void refreshImageToolContext()
+    ctx.inject(['credentials'], credentialCtx => {
+      credentialCtx.on('credentials/reference-updated', () => { void refreshImageToolContext() })
+      credentialCtx.on('credentials/record-updated', () => { void refreshImageToolContext() })
+    })
     promptCtx.effect(() => promptCtx.systemPrompt.context({
       name: 'dsh-image-gen:image-defaults',
       order: 59,
-      text: () => imageToolContext(current()),
+      text: () => imageToolContext(current(), configuredImageProviders),
     }), 'dsh-image-gen: image tool context')
     promptCtx.effect(() => promptCtx.systemPrompt.context({
       name: 'dsh-image-gen:canvas',
@@ -340,7 +359,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     parameters: {
       prompt: { type: 'string', required: true, description: 'Complete description of the image to generate.' },
       provider: { type: 'string', enum: ['google', 'openai', 'openai-compat', 'seedream', 'dashscope', 'xai', 'zhipu', 'comfyui', 'chatgpt-sub', 'grok-sub', 'google-sub'], description: 'OMIT unless the user explicitly requests a specific image provider. Omission uses the saved default; never guess a channel or fill this with an empty string. chatgpt-sub, grok-sub, and google-sub use logged-in subscription accounts instead of API keys.' },
-      model: { type: 'string', description: 'Optional model name for this call only, overriding the configured model. Not used by ComfyUI (use workflow instead) nor by the subscription providers (model fixed by the subscription).' },
+      model: { type: 'string', description: 'OMIT unless the user explicitly requests a specific model; omission uses the configured model. Optional override for this call only. Not used by ComfyUI (use workflow instead) nor by the subscription providers (model fixed by the subscription).' },
       channel: { type: 'string', description: 'Optional configured OpenAI-compatible channel id for this call only. Only meaningful with provider=openai-compat; omit to use the active channel.' },
       aspect_ratio: { type: 'string', enum: ['1:1', '3:2', '2:3', '4:3', '3:4', '4:5', '5:4', '16:9', '9:16', '21:9'], description: 'Optional output aspect ratio for Google Gemini, xAI Grok, and subscription channels.' },
       image_size: { type: 'string', enum: ['1K', '2K', '4K'], description: 'Optional output resolution for Google Gemini, xAI Grok, Grok subscription (1K/2K), or Google subscription (1K/4K). NEVER send this for chatgpt-sub; omit unused fields entirely.' },
@@ -361,7 +380,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     parameters: {
       prompts: { type: 'array', items: { type: 'string' }, required: true, description: 'Ordered complete prompts; one image is generated per entry (1-10).' },
       provider: { type: 'string', enum: ['google', 'openai', 'openai-compat', 'seedream', 'dashscope', 'xai', 'zhipu', 'comfyui', 'chatgpt-sub', 'grok-sub', 'google-sub'], description: 'OMIT unless the user explicitly requests a specific image provider. Uses the saved default for all items; never guess a channel or fill unused fields with empty strings.' },
-      model: { type: 'string', description: 'Optional model name for this call only, applied to every item.' },
+      model: { type: 'string', description: 'OMIT unless the user explicitly requests a specific model for every item; omission uses the configured model.' },
       channel: { type: 'string', description: 'Optional configured OpenAI-compatible channel id applied to every item; omit to use the active channel.' },
       aspect_ratio: { type: 'string', enum: ['1:1', '3:2', '2:3', '4:3', '3:4', '4:5', '5:4', '16:9', '9:16', '21:9'], description: 'Optional output aspect ratio for Google Gemini, xAI Grok, and subscription channels.' },
       image_size: { type: 'string', enum: ['1K', '2K', '4K'], description: 'Optional output resolution for Google Gemini, xAI Grok, Grok subscription (1K/2K), or Google subscription (1K/4K). NEVER send this for chatgpt-sub; omit unused fields entirely.' },
@@ -434,7 +453,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     parameters: {
       prompt: { type: 'string', required: true, description: 'Describe the changes to make while preserving everything else that should remain.' },
       provider: { type: 'string', enum: ['google', 'openai', 'openai-compat', 'seedream', 'dashscope', 'xai', 'zhipu', 'comfyui', 'chatgpt-sub', 'grok-sub', 'google-sub'], description: 'OMIT unless the user explicitly requests a specific image provider. Omission uses the saved default; never guess a channel or fill this with an empty string. Subscription providers edit through their logged-in accounts.' },
-      model: { type: 'string', description: 'Optional model name for this call only, overriding the configured model. Not used by ComfyUI (use workflow instead) nor by the subscription providers (model fixed by the subscription).' },
+      model: { type: 'string', description: 'OMIT unless the user explicitly requests a specific model; omission uses the configured model. Optional override for this call only. Not used by ComfyUI (use workflow instead) nor by the subscription providers (model fixed by the subscription).' },
       channel: { type: 'string', description: 'Optional configured OpenAI-compatible channel id for this call only. Only meaningful with provider=openai-compat; omit to use the active channel.' },
       source: { type: 'string', enum: ['canvas_selection'], description: 'Use the current selection on the image-gen workbench infinite canvas as the reference image(s): full-resolution originals when the selection is conversation-generated images, plus a screenshot of the whole selection when it also contains other content (hand-drawn strokes, pasted images). Choose this when the user refers to what they selected or drew on the canvas; combine with no other selector field.' },
       source_attachment_id: { type: 'string', description: 'Optional attachment id of a specific image already present in the current conversation.' },

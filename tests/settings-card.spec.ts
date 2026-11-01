@@ -309,11 +309,11 @@ describe('settings card credential actions', () => {
 })
 
 describe('settings card compat channels', () => {
-  it('places the add button before the default channel disclosure', () => {
+  it('places the add button after the default channel disclosure', () => {
     const form = formHarness()
     const children = form.providerHeadChildren()
-    expect(children[0]!.props['aria-label']).toBe('新增 OpenAI 兼容渠道')
-    expect(children[1]!.props.className).toBe('dsh-ig-provider-head')
+    expect(children[0]!.props.className).toBe('dsh-ig-provider-head')
+    expect(children[1]!.props['aria-label']).toBe('新增 OpenAI 兼容渠道')
   })
 
   it('removes an unsaved draft immediately without writing settings', async () => {

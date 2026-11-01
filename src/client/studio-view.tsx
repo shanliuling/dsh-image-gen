@@ -2094,7 +2094,7 @@ const FavoriteFolderBar: FC<{ folders: FavoriteFolder[]; active: string; onSelec
   )
 }
 
-function useInView<T extends HTMLElement>(): [(node: T | null) => void, boolean] {
+export function useInView<T extends HTMLElement>(): [(node: T | null) => void, boolean] {
   const [inView, setInView] = useState(false)
   const observerRef = useRef<IntersectionObserver | null>(null)
 

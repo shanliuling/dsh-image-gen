@@ -5,7 +5,7 @@
  */
 import { useCallback, useEffect, useState, useMemo, useRef, type FC, type MouseEvent } from 'react'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import { IMAGE_ROUTE, DELETE_ROUTE, IMPORT_ROUTE, type ImageProvider } from '../shared.js'
+import { DELETE_ROUTE, IMPORT_ROUTE, type ImageProvider } from '../shared.js'
 import {
   Image as ImageIcon,
   SlidersHorizontal,
@@ -35,7 +35,7 @@ import {
   isItemInWorkspace,
   type GalleryItem,
 } from './gallery-store.js'
-import { StudioView } from './studio-view.js'
+import { StudioView, useInView } from './studio-view.js'
 import { deselectStudioTlCanvases } from './tl/studio-tl-canvas.js'
 import { GalleryCanvasButton } from './tl/gallery-canvas-button.js'
 import { startGalleryImageDrag } from './tl/gallery-image-transfer.js'
@@ -661,7 +661,6 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   }, [])
 
   const [previewLoading, setPreviewLoading] = useState(false)
-  const blobCache = useMemo(() => new Map<string, Blob>(), [])
   const abortControllerRef = useRef<AbortController | null>(null)
 
   // Multi-dimensional filtering and sorting (Provider, Ratio, Search, and Sort)
@@ -738,20 +737,9 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
     setPreviewItem(item)
 
     if (blob) {
-      blobCache.set(item.id, blob)
       const url = URL.createObjectURL(blob)
       previewUrlRef.current = url
       setPreviewBlob(blob)
-      setPreviewUrl(url)
-      setPreviewLoading(false)
-      return
-    }
-
-    const cached = blobCache.get(item.id)
-    if (cached) {
-      const url = URL.createObjectURL(cached)
-      previewUrlRef.current = url
-      setPreviewBlob(cached)
       setPreviewUrl(url)
       setPreviewLoading(false)
       return
@@ -767,7 +755,6 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
     fetchAttachmentBlob(item.attachment)
       .then((fetchedBlob) => {
         if (controller.signal.aborted) return
-        blobCache.set(item.id, fetchedBlob)
         const url = URL.createObjectURL(fetchedBlob)
         previewUrlRef.current = url
         setPreviewBlob(fetchedBlob)
@@ -1115,11 +1102,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
       if (itemsToDownload.length === 1) {
         const single = itemsToDownload[0]
         if (!single) return
-        let blob = blobCache.get(single.id)
-        if (!blob) {
-          blob = await fetchAttachmentBlob(single.attachment)
-          blobCache.set(single.id, blob)
-        }
+        const blob = await fetchAttachmentBlob(single.attachment)
         const objectUrl = URL.createObjectURL(blob)
         downloadBlobUrl(objectUrl, `dsh-${single.provider}-${single.id}.png`)
         URL.revokeObjectURL(objectUrl)
@@ -1136,12 +1119,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
         if (!it) continue
         setBatchDownloadProgress(`${i + 1}/${itemsToDownload.length}`)
 
-        let blob = blobCache.get(it.id)
-        if (!blob) {
-          blob = await fetchAttachmentBlob(it.attachment)
-          blobCache.set(it.id, blob)
-        }
-
+        const blob = await fetchAttachmentBlob(it.attachment)
         const arrayBuffer = await blob.arrayBuffer()
         const ext = blob.type === 'image/jpeg' ? 'jpg' : blob.type === 'image/webp' ? 'webp' : 'png'
         let baseName = `dsh-${it.provider}-${it.id.slice(0, 8)}.${ext}`
@@ -1475,7 +1453,6 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
                   onToggleSelect={(e) => handleToggleSelect(item.id, idx, e)}
                   onRequestDelete={() => requestSingleDelete(item)}
                   onPreview={(blob) => openPreviewItem(item, blob)}
-                  onBlobLoaded={(b) => blobCache.set(item.id, b)}
                   onToast={showToast}
                 />
               ))}
@@ -1894,7 +1871,6 @@ interface GalleryCardProps {
   onToggleSelect: (e: MouseEvent) => void
   onRequestDelete: () => void
   onPreview: (blob: Blob) => void
-  onBlobLoaded?: (blob: Blob) => void
   onToast: (msg: string) => void
 }
 
@@ -1909,46 +1885,43 @@ const GalleryCard: FC<GalleryCardProps> = ({
   onToggleSelect,
   onRequestDelete,
   onPreview: _onPreview,
-  onBlobLoaded,
   onToast,
 }) => {
+  const [setCardRef, inView] = useInView<HTMLDivElement>()
   const [url, setUrl] = useState<string>()
   const [blob, setBlob] = useState<Blob>()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string>()
 
   useEffect(() => {
-    const controller = new AbortController()
+    if (!inView) return
+    let active = true
     let objectUrl: string | undefined
 
-    void fetch(IMAGE_ROUTE, {
-      method: 'POST',
-      signal: controller.signal,
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ attachment: item.attachment }),
-    })
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`)
-        const resBlob = await response.blob()
-        if (controller.signal.aborted) return
+    setUrl(undefined)
+    setBlob(undefined)
+    setError(undefined)
+    setLoading(true)
+    void fetchAttachmentBlob(item.attachment)
+      .then((resBlob) => {
+        if (!active) return
         setBlob(resBlob)
-        onBlobLoaded?.(resBlob)
         objectUrl = URL.createObjectURL(resBlob)
         setUrl(objectUrl)
         setLoading(false)
       })
       .catch((err) => {
-        if (!controller.signal.aborted) {
+        if (active) {
           setError(err instanceof Error ? err.message : String(err))
           setLoading(false)
         }
       })
 
     return () => {
-      controller.abort()
+      active = false
       if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
-  }, [item.attachment])
+  }, [item.attachment.attachmentId, inView])
 
   const copyPrompt = async (e: MouseEvent) => {
     e.stopPropagation()
@@ -1989,6 +1962,7 @@ const GalleryCard: FC<GalleryCardProps> = ({
 
   return (
     <div
+      ref={setCardRef}
       className={`dsh-ig-gallery-card ${isSelected ? 'is-selected' : ''} ${isManageMode ? 'is-manage-mode' : ''}`}
       onClick={(e) => onClick(e, blob)}
     >
