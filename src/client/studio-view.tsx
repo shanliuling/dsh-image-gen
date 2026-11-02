@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FC } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FC } from 'react'
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import {
   AlertTriangle,
@@ -32,7 +32,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react'
-import { DELETE_ROUTE, SAVE_WORKSPACE_ROUTE, STUDIO_ROUTE, isSubscriptionProvider, studioWatermarkCapability, studioModelForMode, studioModelOptionsForMode, studioTargetKey, type CloudImageProvider, type StudioConfigResponse, type StudioGenerateResponse, type StudioGeneratedItem, type StudioProvider, type StudioProviderProfile, type StudioReference, type StudioWatermark } from '../shared.js'
+import { DELETE_ROUTE, SAVE_WORKSPACE_ROUTE, STUDIO_ROUTE, thumbUrlFor, isSubscriptionProvider, studioWatermarkCapability, studioModelForMode, studioModelOptionsForMode, studioTargetKey, type CloudImageProvider, type StudioConfigResponse, type StudioGenerateResponse, type StudioGeneratedItem, type StudioProvider, type StudioProviderProfile, type StudioReference, type StudioWatermark } from '../shared.js'
 import { deleteGalleryItem, getGalleryItems, saveGalleryItem, subscribeGallery, toggleFavoriteGalleryItem, type GalleryItem, saveFavoritePrompt, getFavoritePrompts, deleteFavoritePrompt, subscribeFavorites, addFavoriteFolder, getFavoriteFolders, deleteFavoriteFolder, moveFavoritePrompt, updateFavoritePrompt, type FavoritePrompt, type FavoriteFolder } from './gallery-store.js'
 import { evictAttachmentCache, fetchAttachmentBlob } from './image-cache.js'
 import { copyImageBlob, downloadBlobUrl, formatRelativeTime } from './browser-image-utils.js'
@@ -204,6 +204,15 @@ export const StudioView: FC<{
   /** Set once the user toggles the rail by hand; auto-folding then stands down for this mount. */
   const railToggledByUserRef = useRef(false)
   const [visibleLimit, setVisibleLimit] = useState(30)
+  const [favoriteLimit, setFavoriteLimit] = useState(60)
+  // Stable dispatchers keep memoized rail tiles from re-rendering on every
+  // parent update (prompt typing, selection, tab switches).
+  const railActionsRef = useRef<RecentItemActions | null>(null)
+  const railActions = useMemo<RecentItemActions>(() => ({
+    select: item => railActionsRef.current?.select(item),
+    favorite: item => railActionsRef.current?.favorite(item),
+    toast: message => railActionsRef.current?.toast(message),
+  }), [])
   const [selected, setSelected] = useState<GalleryItem | null>(null)
   const [mode, setMode] = useState<Mode>('generate')
   const [provider, setProvider] = useState<StudioProvider>('google')
@@ -1256,6 +1265,12 @@ export const StudioView: FC<{
     window.setTimeout(() => setNotice(null), 2_200)
   }
 
+  railActionsRef.current = {
+    select: selectItem,
+    favorite: item => { void applyFavoriteImage(item) },
+    toast: flash,
+  }
+
   return (
     <section ref={workbenchRootRef} className="dsh-ig-workbench" aria-label={t('title')}>
       <div className={`dsh-ig-workbench-grid ${sidebarCollapsed ? 'is-sidebar-collapsed' : ''} ${generateCollapsed ? 'is-generate-collapsed' : ''}`}>
@@ -1293,7 +1308,7 @@ export const StudioView: FC<{
             </div>
             {railTab === 'recent' ? (
               <div className="dsh-ig-recent-scroll">
-                {items.length === 0 ? <div className="dsh-ig-recent-empty"><ImagePlus size={22} /><span>{t('empty')}</span></div> : displayItems.map(item => <RecentItem key={item.id} item={item} active={selected?.id === item.id} lang={lang} onToast={flash} onClick={() => selectItem(item)} />)}
+                {items.length === 0 ? <div className="dsh-ig-recent-empty"><ImagePlus size={22} /><span>{t('empty')}</span></div> : displayItems.map(item => <RecentItem key={item.id} item={item} active={selected?.id === item.id} mode="select" lang={lang} actions={railActions} />)}
                 {items.length > visibleLimit && (
                   <button type="button" className="dsh-ig-load-more" onClick={() => setVisibleLimit(l => l + 30)}>
                     {t('loadMore', { n: String(items.length - visibleLimit) })}
@@ -1308,11 +1323,20 @@ export const StudioView: FC<{
                 {(() => {
                   const list = items.filter(item => item.isFavorite)
                   if (list.length === 0) return <div className="dsh-ig-fav-empty"><ImagePlus size={18} /><span>{t('favEmptyImages')}</span></div>
-                  return <div className="dsh-ig-fav-grid">
-                    {list.map(item => (
-                      <RecentItem key={item.id} item={item} active={false} lang={lang} onToast={flash} onClick={() => void applyFavoriteImage(item)} />
-                    ))}
-                  </div>
+                  return (
+                    <>
+                      <div className="dsh-ig-fav-grid">
+                        {list.slice(0, favoriteLimit).map(item => (
+                          <RecentItem key={item.id} item={item} active={false} mode="favorite" lang={lang} actions={railActions} />
+                        ))}
+                      </div>
+                      {list.length > favoriteLimit && (
+                        <button type="button" className="dsh-ig-load-more" onClick={() => setFavoriteLimit(limit => limit + 60)}>
+                          {t('loadMore', { n: String(list.length - favoriteLimit) })}
+                        </button>
+                      )}
+                    </>
+                  )
                 })()}
                 <div className="dsh-ig-fav-section-label">
                   <span>{t('favPrompts')}</span>
@@ -2059,26 +2083,51 @@ function localizeQualityOptions(options: Array<{ value: string; label: string }>
   }))
 }
 
-const RecentItem: FC<{ item: GalleryItem; active: boolean; lang: 'zh' | 'en'; onToast(message: string): void; onClick(): void }> = ({ item, active, lang, onToast, onClick }) => {
+interface RecentItemActions {
+  select(item: GalleryItem): void
+  favorite(item: GalleryItem): void
+  toast(message: string): void
+}
+
+const RecentItem = memo(function RecentItem({ item, active, mode, lang, actions }: {
+  item: GalleryItem
+  active: boolean
+  mode: 'select' | 'favorite'
+  lang: 'zh' | 'en'
+  actions: RecentItemActions
+}) {
   const [setRef, inView] = useInView<HTMLButtonElement>()
-  const image = useAttachmentImage(item.attachment, inView)
+  const [hovered, setHovered] = useState(false)
+  const [thumbFailed, setThumbFailed] = useState(false)
+  // The tile renders the host 320 px variant; the original is fetched only
+  // while the pointer is over it, for drag-out and canvas handoff.
+  const image = useAttachmentImage(item.attachment, inView && (hovered || active || thumbFailed))
+  const thumbUrl = thumbFailed ? image.url : thumbUrlFor(item.attachment)
   return (
-    <div className={`dsh-ig-recent-item ${active ? 'is-active' : ''}`}>
+    <div
+      className={`dsh-ig-recent-item ${active ? 'is-active' : ''}`}
+      onPointerEnter={() => setHovered(true)}
+      onPointerLeave={() => setHovered(false)}
+    >
       <button
         ref={setRef}
         type="button"
         className="dsh-ig-recent-select"
-        onClick={onClick}
+        onClick={() => { if (mode === 'favorite') actions.favorite(item); else actions.select(item) }}
         title={item.prompt}
         draggable={Boolean(image.blob?.size)}
         onDragStart={event => { startGalleryImageDrag(event, item, image.blob) }}
       >
-        <div className="dsh-ig-recent-thumb">{image.url !== null ? <img src={image.url} alt="" loading="lazy" draggable={false} /> : <ImagePlus size={18} />}</div>
+        <div className="dsh-ig-recent-thumb">
+          {thumbUrl !== null && thumbUrl !== undefined
+            ? <img src={thumbUrl} alt="" loading="lazy" decoding="async" draggable={false} onError={() => setThumbFailed(true)} />
+            : <ImagePlus size={18} />}
+        </div>
       </button>
-      <GalleryCanvasButton item={item} lang={lang} disabled={!image.blob?.size} className="dsh-ig-recent-send" onToast={onToast} />
+      <GalleryCanvasButton item={item} lang={lang} disabled={!image.blob?.size} className="dsh-ig-recent-send" onToast={actions.toast} />
     </div>
   )
-}
+})
 
 const FavoriteFolderBar: FC<{ folders: FavoriteFolder[]; active: string; onSelect(id: string): void; onDelete(id: string): void; deleteLabel: string }> = ({ folders, active, onSelect, onDelete, deleteLabel }) => {
   if (folders.length === 0) return null
