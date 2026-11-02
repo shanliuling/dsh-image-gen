@@ -31,6 +31,7 @@ function installFakeIndexedDB() {
       }),
       delete: (key: string) => request(() => map.delete(key)),
       getAllKeys: () => request(() => [...map.keys()]),
+      getAll: () => request(() => [...map.values()]),
       clear: () => request(() => map.clear()),
     }
   }
@@ -81,6 +82,23 @@ describe('gallery thumbnail cache lifecycle', () => {
     await store.deleteGalleryItem(recordId)
     await new Promise(resolve => setTimeout(resolve, 5))
     expect(stores.get('thumbs')?.has('sha256:abc123@320')).toBe(false)
+  })
+
+  it('evicts the oldest thumbnails once the byte budget is exceeded', async () => {
+    const stores = installFakeIndexedDB()
+    const store = await import('../src/client/gallery-store.js')
+    const blob = () => new Blob([new Uint8Array(10)])
+    await store.putGalleryThumb('sha256:a@320', blob())
+    await new Promise(resolve => setTimeout(resolve, 3))
+    await store.putGalleryThumb('sha256:b@320', blob())
+    await new Promise(resolve => setTimeout(resolve, 3))
+    await store.putGalleryThumb('sha256:c@320', blob())
+
+    const removed = await store.pruneGalleryThumbs(['sha256:a', 'sha256:b', 'sha256:c'], 25)
+    expect(removed).toBe(1)
+    expect(stores.get('thumbs')?.has('sha256:a@320')).toBe(false)
+    expect(stores.get('thumbs')?.has('sha256:b@320')).toBe(true)
+    expect(stores.get('thumbs')?.has('sha256:c@320')).toBe(true)
   })
 
   it('prunes thumbnails whose attachment is no longer in the gallery', async () => {

@@ -257,6 +257,9 @@ export async function getGalleryItems(): Promise<GalleryItem[]> {
 }
 
 /** Width, in CSS pixels, of the thumbnail cached for the grid. */
+/** Byte budget for the disposable thumbnail cache; oldest entries go first. */
+export const GALLERY_THUMB_MAX_BYTES = 256 * 1024 * 1024
+
 export const GALLERY_THUMB_WIDTH = 320
 
 /** Cache key for one attachment thumbnail. */
@@ -346,7 +349,7 @@ async function deleteGalleryThumbs(ids: string[]): Promise<void> {
  * Drop cached thumbnails whose attachment is no longer in the gallery.
  * Returns how many entries were removed.
  */
-export async function pruneGalleryThumbs(validAttachmentIds: Iterable<string>): Promise<number> {
+export async function pruneGalleryThumbs(validAttachmentIds: Iterable<string>, maxBytes = GALLERY_THUMB_MAX_BYTES): Promise<number> {
   try {
     const db = await getThumbDB()
     const valid = new Set(Array.from(validAttachmentIds, String))
@@ -359,15 +362,46 @@ export async function pruneGalleryThumbs(validAttachmentIds: Iterable<string>): 
       const at = key.lastIndexOf('@')
       return !valid.has(at > 0 ? key.slice(0, at) : key)
     })
-    if (stale.length === 0) return 0
-    await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction(THUMB_STORE, 'readwrite')
-      const store = tx.objectStore(THUMB_STORE)
-      for (const key of stale) store.delete(key)
-      tx.oncomplete = () => resolve()
-      tx.onerror = () => reject(tx.error)
+    let removed = 0
+    if (stale.length > 0) {
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(THUMB_STORE, 'readwrite')
+        const store = tx.objectStore(THUMB_STORE)
+        for (const key of stale) store.delete(key)
+        tx.oncomplete = () => resolve()
+        tx.onerror = () => reject(tx.error)
+      })
+      removed += stale.length
+    }
+
+    // Enforce the byte budget oldest-first so the disposable cache cannot grow
+    // without bound on libraries with tens of thousands of images.
+    const records = await new Promise<{ key: string; bytes?: number; createdAt?: number }[]>((resolve, reject) => {
+      const req = db.transaction(THUMB_STORE, 'readonly').objectStore(THUMB_STORE).getAll()
+      req.onsuccess = () => resolve((req.result ?? []) as { key: string; bytes?: number; createdAt?: number }[])
+      req.onerror = () => reject(req.error)
     })
-    return stale.length
+    let total = records.reduce((sum, record) => sum + (typeof record.bytes === 'number' ? record.bytes : 0), 0)
+    if (total > maxBytes) {
+      const oldestFirst = [...records].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))
+      const doomed: string[] = []
+      for (const record of oldestFirst) {
+        if (total <= maxBytes) break
+        doomed.push(String(record.key))
+        total -= typeof record.bytes === 'number' ? record.bytes : 0
+      }
+      if (doomed.length > 0) {
+        await new Promise<void>((resolve, reject) => {
+          const tx = db.transaction(THUMB_STORE, 'readwrite')
+          const store = tx.objectStore(THUMB_STORE)
+          for (const key of doomed) store.delete(key)
+          tx.oncomplete = () => resolve()
+          tx.onerror = () => reject(tx.error)
+        })
+        removed += doomed.length
+      }
+    }
+    return removed
   } catch {
     return 0
   }

@@ -2,7 +2,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ImageAttachmentRef, StoredImageAttachment } from '@deepseek-ai/dsh-attachment'
 import { parseImageAttachmentRef } from './reference-image.js'
-import { IMAGE_ROUTE, DELETE_ROUTE, SAVE_WORKSPACE_ROUTE } from './shared.js'
+import { IMAGE_ROUTE, DELETE_ROUTE, SAVE_WORKSPACE_ROUTE, decodeImageRef } from './shared.js'
 import { assertWorkspaceAllowed } from './workspace-save.js'
 
 export { IMAGE_ROUTE, DELETE_ROUTE, SAVE_WORKSPACE_ROUTE } from './shared.js'
@@ -34,6 +34,7 @@ export interface DeleteRouteDeps {
 
 /** Serve one verified durable image reference to a same-origin browser request. */
 export async function serveImage(req: IncomingMessage, res: ServerResponse, deps: ImageRouteDeps): Promise<void> {
+  if (req.method === 'GET') return serveCachedImage(req, res, deps)
   if (req.method !== 'POST') return jsonError(res, 405, 'method-not-allowed')
   if (!(req.headers['content-type'] ?? '').toLowerCase().startsWith('application/json')) return jsonError(res, 415, 'json-required')
   const origin = req.headers.origin
@@ -56,6 +57,41 @@ export async function serveImage(req: IncomingMessage, res: ServerResponse, deps
       'content-length': String(stored.data.byteLength),
       'cache-control': 'private, no-store',
       'x-content-type-options': 'nosniff',
+    })
+    res.end(stored.data)
+  } catch {
+    jsonError(res, 404, 'image-unavailable')
+  }
+}
+
+/**
+ * Cacheable GET form: attachments are content-addressed, so the response can be
+ * marked immutable and revalidated with a stable ETag. Preview, copy and
+ * download then hit the browser cache instead of re-reading the host.
+ */
+async function serveCachedImage(req: IncomingMessage, res: ServerResponse, deps: ImageRouteDeps): Promise<void> {
+  if (!sameOrigin(req)) return jsonError(res, 403, 'origin-rejected')
+  const raw = new URL(req.url ?? '/', 'http://x').searchParams.get('ref')
+  const attachment = raw === null ? undefined : decodeImageRef(raw, parseImageAttachmentRef)
+  if (attachment === undefined) return jsonError(res, 400, 'invalid-attachment')
+  const etag = '"' + String(attachment.attachmentId) + '"'
+  const cacheHeaders = {
+    'cache-control': 'private, max-age=31536000, immutable',
+    etag,
+  }
+  const ifNoneMatch = req.headers['if-none-match']
+  if (typeof ifNoneMatch === 'string' && ifNoneMatch.split(',').some(value => value.trim() === etag)) {
+    res.writeHead(304, cacheHeaders)
+    res.end()
+    return
+  }
+  try {
+    const stored = await deps.readImage(attachment)
+    res.writeHead(200, {
+      'content-type': stored.ref.mediaType,
+      'content-length': String(stored.data.byteLength),
+      'x-content-type-options': 'nosniff',
+      ...cacheHeaders,
     })
     res.end(stored.data)
   } catch {

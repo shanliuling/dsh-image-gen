@@ -5,7 +5,7 @@
  */
 import { useCallback, useDeferredValue, useEffect, useState, useMemo, useRef, type FC, type MouseEvent } from 'react'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import { DELETE_ROUTE, IMPORT_ROUTE, ZIP_ROUTE, type ImageProvider } from '../shared.js'
+import { DELETE_ROUTE, IMPORT_ROUTE, ZIP_ROUTE, thumbUrlFor, type ImageProvider } from '../shared.js'
 import {
   Image as ImageIcon,
   SlidersHorizontal,
@@ -2006,9 +2006,12 @@ const GalleryCard: FC<GalleryCardProps> = ({
   const [blob, setBlob] = useState<Blob>()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string>()
+  const [thumbFailed, setThumbFailed] = useState(false)
 
-  // The original blob is only needed for drag-out, copy and download; the grid
-  // itself renders a cached 320px thumbnail.
+  // The host renders a cached 320px variant, so tiles never fetch originals;
+  // the in-page pipeline below only runs when that route is unavailable.
+  const serverThumbUrl = thumbUrlFor(item.attachment)
+  const displayUrl = url ?? (thumbFailed ? undefined : serverThumbUrl)
   const originalRef = useRef<Promise<Blob> | undefined>(undefined)
   const ensureOriginal = useCallback(async (): Promise<Blob> => {
     if (blob) return blob
@@ -2023,7 +2026,7 @@ const GalleryCard: FC<GalleryCardProps> = ({
   }, [blob, item.attachment])
 
   useEffect(() => {
-    if (!inView) return
+    if (!inView || !thumbFailed) return
     let active = true
     let objectUrl: string | undefined
 
@@ -2061,7 +2064,7 @@ const GalleryCard: FC<GalleryCardProps> = ({
       active = false
       if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
-  }, [item.attachment.attachmentId, inView])
+  }, [item.attachment.attachmentId, inView, thumbFailed])
 
   const copyPrompt = async (e: MouseEvent) => {
     e.stopPropagation()
@@ -2131,15 +2134,22 @@ const GalleryCard: FC<GalleryCardProps> = ({
           {isSelected && <Check size={11} strokeWidth={3} />}
         </button>
 
-        {loading && <div className="dsh-ig-gallery-card-loading">...</div>}
+        {/* The server thumbnail paints as it arrives, so only the fallback
+            pipeline (no URL yet) needs a placeholder; otherwise the spinner
+            flashes for one frame on every tile. */}
+        {loading && displayUrl === undefined && <div className="dsh-ig-gallery-card-loading">...</div>}
         {error && <div className="dsh-ig-gallery-card-error">⚠️ {error}</div>}
-        {url && (
+        {displayUrl !== undefined && (
           <img
             className="dsh-ig-gallery-card-img"
-            src={url}
+            src={displayUrl}
             alt={item.prompt}
             loading="lazy"
             decoding="async"
+            onLoad={() => setLoading(false)}
+            onError={() => {
+              if (url === undefined) setThumbFailed(true)
+            }}
             draggable={!isManageMode && Boolean(blob?.size)}
             onDragStart={event => {
               if (isManageMode) event.preventDefault()
