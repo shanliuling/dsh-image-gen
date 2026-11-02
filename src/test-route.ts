@@ -195,7 +195,7 @@ async function fetchClassifiedJson(
     method: 'GET',
     headers,
     signal: signal ?? AbortSignal.timeout(PROBE_TIMEOUT_MS),
-    redirect: 'follow',
+    redirect: 'error',
   }).catch((error: unknown) => {
     throw new Error(error instanceof Error ? error.message : String(error))
   })

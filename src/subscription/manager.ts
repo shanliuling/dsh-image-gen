@@ -54,6 +54,7 @@ import {
 } from './vendors/antigravity.js'
 import { SUBSCRIPTION_PROVIDER_DISPLAY_NAMES, type SubscriptionProvider } from '../shared.js'
 import { xaiToolParameters } from '../xai-params.js'
+import { redactSecrets } from '../redact.js'
 
 /** Vendor ids used by the credential refs and the wire calls. */
 export type SubscriptionVendor = 'codex' | 'grok' | 'antigravity'
@@ -305,7 +306,14 @@ export class SubscriptionManager {
     const payload: unknown = await response.json().catch(() => ({}))
     if (!response.ok) {
       const detail = extractErrorMessage(payload)
-      throw new Error(`${vendor} HTTP ${String(response.status)}${detail !== undefined ? `: ${detail.slice(0, 200)}` : ''}`)
+      const safeDetail = detail === undefined ? undefined : redactSecrets(
+        detail,
+        session.accessToken,
+        session.refreshToken,
+        session.accountId,
+        session.email,
+      ).slice(0, 200)
+      throw new Error(`${vendor} HTTP ${String(response.status)}${safeDetail !== undefined ? `: ${safeDetail}` : ''}`)
     }
     return parseImages(payload)
   }

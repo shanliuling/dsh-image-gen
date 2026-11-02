@@ -37,6 +37,24 @@ describe('subscription manager edit wire protocol', () => {
   beforeEach(() => { vi.clearAllMocks() })
   afterEach(() => { vi.unstubAllGlobals() })
 
+  it.each(['codex', 'grok'] as const)('redacts %s subscription credentials echoed in upstream errors', async vendor => {
+    const { manager, fetchMock } = harness()
+    const secrets = freshBlob()
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+      error: { message: [secrets.accessToken, secrets.refreshToken, secrets.accountId, secrets.email].join(' ') },
+    }), { status: 401, headers: { 'content-type': 'application/json' } }))
+
+    const error = await manager.generate({ vendor, prompt: 'a portrait' }).then(
+      () => { throw new Error('expected generation to fail') },
+      (value: unknown) => value as Error,
+    )
+
+    expect(error.message).toContain(`${vendor} HTTP 401`)
+    for (const secret of [secrets.accessToken, secrets.refreshToken, secrets.accountId, secrets.email]) {
+      expect(error.message).not.toContain(secret)
+    }
+  })
+
   it('targets the codex edits endpoint and encodes references as image_url data URLs', async () => {
     const { manager, fetchMock } = harness()
     const reference = { data: new Uint8Array([1, 2, 3, 4]), mediaType: 'image/png' }

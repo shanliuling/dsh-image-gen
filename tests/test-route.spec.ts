@@ -320,6 +320,30 @@ describe('google model pull', () => {
     expect(headers['x-goog-api-key']).toBe('gem-key')
   })
 
+  it('does not forward the Google API key to a redirect target', async () => {
+    let redirectedRequests = 0
+    const target = createServer((req, res) => {
+      redirectedRequests += 1
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end('{"models":[{"name":"models/gemini-3.1-flash-image"}]}')
+    })
+    await new Promise<void>(resolve => target.listen(0, '127.0.0.1', resolve))
+    const targetUrl = `http://127.0.0.1:${(target.address() as AddressInfo).port}/models`
+    const source = createServer((req, res) => {
+      res.writeHead(302, { location: targetUrl })
+      res.end()
+    })
+    await new Promise<void>(resolve => source.listen(0, '127.0.0.1', resolve))
+    const sourceUrl = `http://127.0.0.1:${(source.address() as AddressInfo).port}/v1beta`
+    try {
+      await expect(fetchGoogleImageModels({ googleNative: true, googleEndpoint: sourceUrl }, 'gem-secret')).rejects.toThrow()
+      expect(redirectedRequests).toBe(0)
+    } finally {
+      await new Promise<void>(resolve => source.close(() => resolve()))
+      await new Promise<void>(resolve => target.close(() => resolve()))
+    }
+  })
+
   it('classifies missing keys and auth failures like the probe does', async () => {
     await expect(fetchGoogleImageModels({}, undefined)).resolves.toEqual({ ok: false, reason: 'missing-key' })
     vi.stubGlobal('fetch', vi.fn(async () => new Response('denied', { status: 403 })))

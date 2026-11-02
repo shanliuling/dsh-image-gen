@@ -90,6 +90,26 @@ describe('OpenAI-compatible images', () => {
     await expect(generateOpenAICompatibleImage({ provider: 'seedream', apiKey: 'key', baseURL: 'https://ark.example/api/v3', model: 'seedream', prompt: 'a cat', size: '2K', maxBytes: 1024, signal })).resolves.toEqual({ data: new Uint8Array([1, 2]), mediaType: 'image/jpeg' })
   })
 
+  it('keeps authorization on same-origin image downloads', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ url: 'https://relay.example/assets/result' }] }), { headers: { 'content-type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(new Uint8Array([1, 2]), { headers: { 'content-type': 'image/png' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    await generateOpenAICompatibleImage({ provider: 'openai-compat', apiKey: 'key', baseURL: 'https://relay.example/v1', model: 'image-model', prompt: 'a cat', maxBytes: 1024, signal })
+    const downloadCall = fetchMock.mock.calls[1] as unknown as [string, RequestInit]
+    expect(downloadCall[1]?.headers).toEqual({ authorization: 'Bearer key' })
+  })
+
+  it('never sends the provider key to a cross-origin image URL', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ url: 'https://cdn.example/result' }] }), { headers: { 'content-type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(new Uint8Array([1, 2]), { headers: { 'content-type': 'image/png' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    await generateOpenAICompatibleImage({ provider: 'openai-compat', apiKey: 'key', baseURL: 'https://relay.example/v1', model: 'image-model', prompt: 'a cat', maxBytes: 1024, signal })
+    const downloadCall = fetchMock.mock.calls[1] as unknown as [string, RequestInit]
+    expect(downloadCall[1]?.headers).toBeUndefined()
+  })
+
   // Relays can omit mime_type while returning non-PNG bytes (Ark jpeg): the
   // declared mediaType is sniffed from the bytes, not assumed to be PNG (#61).
   it('sniffs jpeg from base64 bytes when the relay omits mime_type', async () => {
@@ -108,11 +128,11 @@ describe('OpenAI-compatible images', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
-  // Relay CDNs that reject Authorization headers on public image URLs (#37):
+  // Same-origin relays that reject Authorization on public image URLs (#37):
   // the authenticated download gets a 401/403, the retry without the header succeeds.
-  it('retries image download without the auth header after 401', async () => {
+  it('retries a same-origin image download without the auth header after 401', async () => {
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ url: 'https://cdn.example/result' }] }), { headers: { 'content-type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ url: 'https://relay.example/assets/result' }] }), { headers: { 'content-type': 'application/json' } }))
       .mockResolvedValueOnce(new Response(null, { status: 401 }))
       .mockResolvedValueOnce(new Response(new Uint8Array([3, 4]), { headers: { 'content-type': 'image/png' } }))
     vi.stubGlobal('fetch', fetchMock)
@@ -123,9 +143,9 @@ describe('OpenAI-compatible images', () => {
     expect(retryCall[1]?.headers).toBeUndefined()
   })
 
-  it('retries image download without the auth header after 403', async () => {
+  it('retries a same-origin image download without the auth header after 403', async () => {
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ url: 'https://cdn.example/result' }] }), { headers: { 'content-type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ url: 'https://relay.example/assets/result' }] }), { headers: { 'content-type': 'application/json' } }))
       .mockResolvedValueOnce(new Response(null, { status: 403 }))
       .mockResolvedValueOnce(new Response(new Uint8Array([5]), { headers: { 'content-type': 'image/png' } }))
     vi.stubGlobal('fetch', fetchMock)
@@ -134,11 +154,11 @@ describe('OpenAI-compatible images', () => {
   })
 
   // Since #41 the retry is broader: any failed authenticated download retries
-  // once without the header (some CDNs reject it with 400/500, not just 401/403).
+  // once without the header (some relays reject it with 400/500, not just 401/403).
   // A still-failing retry surfaces the same error as before.
-  it('retries a 500 download once without the auth header before failing', async () => {
+  it('retries a same-origin 500 download once without the auth header before failing', async () => {
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ url: 'https://cdn.example/result' }] }), { headers: { 'content-type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ url: 'https://relay.example/assets/result' }] }), { headers: { 'content-type': 'application/json' } }))
       .mockResolvedValueOnce(new Response(null, { status: 500 }))
       .mockResolvedValueOnce(new Response(null, { status: 500 }))
     vi.stubGlobal('fetch', fetchMock)
@@ -148,11 +168,9 @@ describe('OpenAI-compatible images', () => {
     expect(retryCall[1]?.headers).toBeUndefined()
   })
 
-  // SenseNova's OSS answers 400 when the public CDN URL is fetched with an
-  // Authorization header attached (#41).
-  it('retries image download without the auth header after 400', async () => {
+  it('retries a same-origin image download without the auth header after 400', async () => {
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ url: 'https://sensenova-cdn.example/result' }] }), { headers: { 'content-type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ url: 'https://token.sensenova.cn/assets/result' }] }), { headers: { 'content-type': 'application/json' } }))
       .mockResolvedValueOnce(new Response(null, { status: 400 }))
       .mockResolvedValueOnce(new Response(new Uint8Array([9]), { headers: { 'content-type': 'image/png' } }))
     vi.stubGlobal('fetch', fetchMock)
@@ -244,9 +262,9 @@ describe('OpenAI-compatible images', () => {
     await expect(generateOpenAICompatibleImage({ provider: 'openai-compat', apiKey: 'key', baseURL: 'https://relay.example/v1', model: 'model', prompt: 'a cat', size: '1024x1024', maxBytes: 1024, signal })).rejects.toThrow('returned no image')
   })
 
-  it('gives up when the unauthenticated retry also fails', async () => {
+  it('gives up when the same-origin unauthenticated retry also fails', async () => {
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ url: 'https://cdn.example/result' }] }), { headers: { 'content-type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ url: 'https://relay.example/assets/result' }] }), { headers: { 'content-type': 'application/json' } }))
       .mockResolvedValueOnce(new Response(null, { status: 401 }))
       .mockResolvedValueOnce(new Response(null, { status: 401 }))
     vi.stubGlobal('fetch', fetchMock)

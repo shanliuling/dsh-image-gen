@@ -1,7 +1,8 @@
 /** Multi-provider image-generation Bundle for DeepSeek Harness. */
 import type { Context } from '@deepseek-ai/cordis'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import type {} from '@deepseek-ai/dsh-host-webserver'
+import type {} from '@deepseek-ai/dsh-client-connection'
+import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { SettingsForms } from '@deepseek-ai/dsh-settings'
 import { defineTool, type ToolResult } from '@deepseek-ai/dsh-tools'
 import { Config, migrateOpenAICompatConfig, resolveProvider, selectComfyUIWorkflow, withOpenAICompatChannel, withProviderOverrides, type AspectRatio, type ImageSize } from './config.js'
@@ -33,6 +34,7 @@ import { deleteImageFromWorkspace, getDshWorkspaceRoots, getDshWorkspacesFull, s
 import { xaiToolParameters } from './xai-params.js'
 import { compatRequestQuality, officialQualityOptions, validateOfficialSize } from './openai-output.js'
 import { imageToolContext } from './image-tool-context.js'
+import { withWebAdmission, type WebAdmission } from './web-route.js'
 
 export { Config } from './config.js'
 export { IMAGE_ROUTE, DELETE_ROUTE, SAVE_WORKSPACE_ROUTE, imageAttachmentFromMeta } from './image-route.js'
@@ -155,20 +157,25 @@ export function apply(ctx: Context, config: Config = {}): void {
     setSource: source => { current = () => migrateOpenAICompatConfig(plainConfig(source())) },
     onChange: () => { void refreshImageToolContext() },
   })
+  let webAdmission: WebAdmission | undefined
+  ctx.inject(['connection'], (connectionCtx: Context) => {
+    webAdmission = request => connectionCtx.connection.requestRejection(request)
+  })
   // Every HTTP surface needs webServer, which only the web-app bundle (web,
   // desktop) provides; the headless, acp and sdk profiles have none. Mount the
   // routes when it is present so the tools below still activate without it.
   ctx.inject(['webServer'], (webCtx: Context) => {
-    registerSubscriptionRoutes(webCtx, subscriptionManager)
-    webCtx.effect(() => webCtx.webServer.register({
+    const register = (route: WebRoute) => webCtx.webServer.register(withWebAdmission(route, () => webAdmission))
+    registerSubscriptionRoutes(webCtx, subscriptionManager, () => webAdmission)
+    webCtx.effect(() => register({
       kind: 'exact', path: SETTINGS_HEALTH_ROUTE,
       handler: (req, res) => serveSettingsHealth(req, res, settingsHealth()),
     }), 'dsh-image-gen: settings health')
-    webCtx.effect(() => webCtx.webServer.register({
+    webCtx.effect(() => register({
       kind: 'exact', path: IMAGE_ROUTE,
       handler: (req, res) => serveImage(req, res, { readImage: ref => ctx.attachments.readImage(ref) }),
     }), 'dsh-image-gen: image route')
-    webCtx.effect(() => webCtx.webServer.register({
+    webCtx.effect(() => register({
       kind: 'exact', path: IMPORT_ROUTE,
       handler: (req, res) => serveImport(req, res, {
         saveImage: image => ctx.attachments.saveImage(image),
@@ -176,7 +183,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         mediaTypes: ctx.attachments.imageLimits.mediaTypes,
       }),
     }), 'dsh-image-gen: import route')
-    webCtx.effect(() => webCtx.webServer.register({
+    webCtx.effect(() => register({
       kind: 'exact', path: DELETE_ROUTE,
       handler: (req, res) => serveDelete(req, res, {
         deleteWorkspaceImage: async filePath => {
@@ -185,7 +192,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         },
       }),
     }), 'dsh-image-gen: delete route')
-    webCtx.effect(() => webCtx.webServer.register({
+    webCtx.effect(() => register({
       kind: 'exact', path: SAVE_WORKSPACE_ROUTE,
       handler: (req, res) => serveSaveWorkspace(req, res, {
         readImage: ref => ctx.attachments.readImage(ref),
@@ -209,7 +216,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         isSaveEnabled: () => current().saveToWorkspace !== false,
       }),
     }), 'dsh-image-gen: save workspace route')
-    webCtx.effect(() => webCtx.webServer.register({
+    webCtx.effect(() => register({
       kind: 'exact', path: TEST_CONNECTION_ROUTE,
       handler: (req, res) => serveTestConnection(req, res, {
         resolveKey: (provider, channel) => resolveApiKey(ctx, provider, provider === 'openai-compat' ? resolveOpenAICompatChannel(current(), channel).keyRef : undefined),
@@ -217,7 +224,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         subscriptionManager,
       }),
     }), 'dsh-image-gen: test connection route')
-    webCtx.effect(() => webCtx.webServer.register({
+    webCtx.effect(() => register({
       kind: 'exact', path: CANVAS_STATE_ROUTE,
       handler: (req, res) => serveCanvasState(req, res, {
         mirror: canvasMirror,
@@ -226,7 +233,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         maxImageBytes: ctx.attachments.imageLimits.maxImageBytes,
       }),
     }), 'dsh-image-gen: canvas state route')
-    webCtx.effect(() => webCtx.webServer.register({
+    webCtx.effect(() => register({
       kind: 'exact', path: CANVAS_ASSET_ROUTE,
       handler: (req, res) => serveCanvasAsset(req, res, {
         maxImageBytes: ctx.attachments.imageLimits.maxImageBytes,
@@ -261,7 +268,8 @@ export function apply(ctx: Context, config: Config = {}): void {
     persistSelectionImage: image => ctx.attachments.saveImage({ data: image.data, mediaType: image.mediaType, name: 'canvas-selection' }),
   })
   ctx.inject(['webServer'], (webCtx: Context) => {
-    webCtx.effect(() => webCtx.webServer.register({
+    const register = (route: WebRoute) => webCtx.webServer.register(withWebAdmission(route, () => webAdmission))
+    webCtx.effect(() => register({
       kind: 'exact', path: STUDIO_ROUTE,
       handler: (req, res) => serveStudio(req, res, {
         describe: async () => {
@@ -283,7 +291,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       }),
     }), 'dsh-image-gen: studio route')
     const serveInspiration = createInspirationRoute()
-    webCtx.effect(() => webCtx.webServer.register({
+    webCtx.effect(() => register({
       kind: 'prefix', path: INSPIRATION_ROUTE,
       handler: (req, res) => {
         const originalUrl = req.url ?? '/'

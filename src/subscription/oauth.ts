@@ -6,6 +6,7 @@
  * building and the JWT payload reads the vendors need for identity headers.
  */
 import { createHash, randomBytes } from 'node:crypto'
+import { redactSecrets } from '../redact.js'
 
 /** A PKCE pair plus the OAuth state binding the callback to this login. */
 export interface Pkce {
@@ -96,13 +97,17 @@ export async function formTokenRequest(
 ): Promise<Record<string, unknown>> {
   const response = await fetchImpl(url, {
     method: 'POST',
+    redirect: 'error',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
     body: new URLSearchParams(params).toString(),
     signal: AbortSignal.timeout(25_000),
   })
   if (!response.ok) {
     const text = await response.text().catch(() => '')
-    throw new Error(`token endpoint HTTP ${String(response.status)}${text.length > 0 ? `: ${text.slice(0, 200)}` : ''}`)
+    const secrets = Object.entries(params).flatMap(([key, value]) =>
+      ['access_token', 'refresh_token', 'id_token', 'code', 'code_verifier', 'client_secret'].includes(key) ? [value] : [])
+    const detail = redactSecrets(text, ...secrets).slice(0, 200)
+    throw new Error(`token endpoint HTTP ${String(response.status)}${detail.length > 0 ? `: ${detail}` : ''}`)
   }
   try {
     const parsed: unknown = await response.json()

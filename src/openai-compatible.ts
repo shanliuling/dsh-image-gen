@@ -210,7 +210,7 @@ export async function editOpenAICompatibleImage(input: {
 async function parseImageResponse(
   response: Response,
   provider: string,
-  input: { maxBytes: number; signal: AbortSignal; apiKey?: string },
+  input: { baseURL: string; maxBytes: number; signal: AbortSignal; apiKey?: string },
 ): Promise<GeneratedCompatibleImage> {
   const text = await readBoundedText(response, Math.ceil(input.maxBytes * 1.4) + ERROR_LIMIT)
   if (!response.ok) throw new Error(`${provider} image request failed (${response.status}): ${redactSecrets(text, input.apiKey).slice(0, ERROR_LIMIT)}`)
@@ -257,7 +257,7 @@ function firstImage(value: unknown): { b64_json?: string; url?: string; mime_typ
 async function downloadImage(
   url: string | undefined,
   provider: string,
-  input: { maxBytes: number; signal: AbortSignal; apiKey?: string },
+  input: { baseURL: string; maxBytes: number; signal: AbortSignal; apiKey?: string },
 ): Promise<GeneratedCompatibleImage> {
   if (url === undefined) throw new Error(`${provider} image request returned no image data`)
   if (url.startsWith('data:')) {
@@ -266,17 +266,14 @@ async function downloadImage(
     const data = decodeBase64(parsed.base64, provider)
     return { data, mediaType: detectImageMediaType(data) ?? imageMediaType(parsed.mediaType) ?? 'image/png' }
   }
+  const sameOrigin = new URL(url).origin === new URL(input.baseURL).origin
   let response = await guardedFetch(`${provider} image download`, input.signal, () => fetch(url, {
     redirect: 'follow', signal: input.signal,
-    ...(input.apiKey === undefined ? {} : { headers: { authorization: `Bearer ${input.apiKey}` } }),
+    ...(input.apiKey === undefined || !sameOrigin ? {} : { headers: { authorization: `Bearer ${input.apiKey}` } }),
   }), input.apiKey)
-  // Some relay CDNs (e.g. Agnes AI, SenseNova's OSS) reject image downloads
-  // that carry an Authorization header (WAF rules), even though the URL is
-  // public - and not always with 401/403 (SenseNova's OSS answers 400).
-  // Retrying without the header is safe (downgraded request, no secret sent)
-  // and only ever turns a guaranteed failure into a possible success: URLs
-  // that genuinely need auth would have failed anyway.
-  if (!response.ok && input.apiKey !== undefined) {
+  // Some same-origin relays reject Authorization on public image URLs, so the
+  // legacy retry remains available without ever sending the key to another origin.
+  if (!response.ok && input.apiKey !== undefined && sameOrigin) {
     response = await guardedFetch(`${provider} image download`, input.signal, () => fetch(url, { redirect: 'follow', signal: input.signal }), input.apiKey)
   }
   if (!response.ok) throw new Error(`${provider} image download failed (${response.status})`)

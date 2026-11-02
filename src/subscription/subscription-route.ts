@@ -10,6 +10,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { SubscriptionManager, type SubscriptionVendor } from './manager.js'
 import { SUBSCRIPTION_LOGIN_ROUTE, SUBSCRIPTION_STATUS_ROUTE } from '../shared.js'
 import { SUBSCRIPTION_PROVIDERS, type SubscriptionProvider } from '../shared.js'
+import { withWebAdmission, type WebAdmission } from '../web-route.js'
 
 export { SUBSCRIPTION_LOGIN_ROUTE, SUBSCRIPTION_STATUS_ROUTE } from '../shared.js'
 
@@ -23,18 +24,18 @@ function vendorOfProvider(provider: SubscriptionProvider): SubscriptionVendor {
 }
 
 /** Register the login/status routes on the plugin's web server. */
-export function registerSubscriptionRoutes(ctx: Context, manager: SubscriptionManager): void {
-  ctx.effect(() => ctx.webServer.register({
+export function registerSubscriptionRoutes(ctx: Context, manager: SubscriptionManager, admission: () => WebAdmission | undefined = () => undefined): void {
+  ctx.effect(() => ctx.webServer.register(withWebAdmission({
     kind: 'exact',
     path: SUBSCRIPTION_LOGIN_ROUTE,
     handler: (req, res) => { void serveLogin(req, res, manager) },
-  }), 'dsh-image-gen: subscription login route')
+  }, admission)), 'dsh-image-gen: subscription login route')
 
-  ctx.effect(() => ctx.webServer.register({
+  ctx.effect(() => ctx.webServer.register(withWebAdmission({
     kind: 'exact',
     path: SUBSCRIPTION_STATUS_ROUTE,
     handler: (req, res) => { void serveStatus(req, res, manager) },
-  }), 'dsh-image-gen: subscription status route')
+  }, admission)), 'dsh-image-gen: subscription status route')
 }
 
 async function serveLogin(req: IncomingMessage, res: ServerResponse, manager: SubscriptionManager): Promise<void> {
