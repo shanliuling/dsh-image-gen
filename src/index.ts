@@ -19,13 +19,14 @@ import { editGoogleImage, generateGoogleImage } from './google.js'
 import { IMAGE_ROUTE, DELETE_ROUTE, SAVE_WORKSPACE_ROUTE, imageAttachmentFromMeta, serveImage, serveDelete, serveSaveWorkspace } from './image-route.js'
 import { serveImport } from './import-route.js'
 import { serveZip } from './zip-route.js'
+import { serveZipCancel, serveZipProgress } from './zip-progress.js'
 import { servePreview, serveThumb } from './thumb-route.js'
 import { pruneRequestImageCache, resolveRequestImageCacheDir } from './request-cache.js'
 import { editOpenAICompatibleImage, generateOpenAICompatibleImage } from './openai-compatible.js'
 import { type ResolvedReferenceImage, resolveReferenceImages } from './reference-image.js'
 import { editSeedreamImage } from './seedream.js'
 import { generateSubscriptionImage, registerSubscriptionRoutes, subscriptionToolParameters, SubscriptionManager } from './subscription.js'
-import { CANVAS_STATE_ROUTE, DEFAULT_CLOUD_TIMEOUT_MS, IMAGE_GENERATION_NAMESPACE, IMAGE_PROVIDERS, IMPORT_ROUTE, INSPIRATION_ROUTE, PREVIEW_ROUTE, STUDIO_ROUTE, TEST_CONNECTION_ROUTE, THUMB_ROUTE, ZIP_ROUTE, mergeComfyUIPrompt, resolveOpenAICompatChannel, type ImageProvider } from './shared.js'
+import { CANVAS_STATE_ROUTE, DEFAULT_CLOUD_TIMEOUT_MS, IMAGE_GENERATION_NAMESPACE, IMAGE_PROVIDERS, IMPORT_ROUTE, INSPIRATION_ROUTE, PREVIEW_ROUTE, STUDIO_ROUTE, TEST_CONNECTION_ROUTE, THUMB_ROUTE, ZIP_CANCEL_ROUTE, ZIP_PROGRESS_ROUTE, ZIP_ROUTE, mergeComfyUIPrompt, resolveOpenAICompatChannel, type ImageProvider } from './shared.js'
 import { createInspirationRoute } from './inspiration-route.js'
 import { BUNDLED_INSPIRATION_CATALOG, searchInspirationCases } from './inspiration.js'
 import { generateFromStudio, describeStudio } from './studio.js'
@@ -239,6 +240,14 @@ export function apply(ctx: Context, config: Config = {}): void {
         maxEntries: 2000,
       }),
     }), 'dsh-image-gen: zip export route')
+    webCtx.effect(() => register({
+      kind: 'exact', path: ZIP_PROGRESS_ROUTE,
+      handler: (req, res) => serveZipProgress(req, res),
+    }), 'dsh-image-gen: zip progress route')
+    webCtx.effect(() => register({
+      kind: 'exact', path: ZIP_CANCEL_ROUTE,
+      handler: (req, res) => serveZipCancel(req, res),
+    }), 'dsh-image-gen: zip cancel route')
     webCtx.effect(() => register({
       kind: 'exact', path: DELETE_ROUTE,
       handler: (req, res) => serveDelete(req, res, {

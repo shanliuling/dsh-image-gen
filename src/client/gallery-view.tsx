@@ -5,7 +5,7 @@
  */
 import { memo, useCallback, useDeferredValue, useEffect, useState, useMemo, useRef, type FC, type MouseEvent } from 'react'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import { DELETE_ROUTE, IMPORT_ROUTE, ZIP_ROUTE, imageUrlFor, previewUrlFor, thumbUrlFor, type ImageProvider } from '../shared.js'
+import { DELETE_ROUTE, IMPORT_ROUTE, ZIP_CANCEL_ROUTE, ZIP_PROGRESS_ROUTE, ZIP_ROUTE, imageUrlFor, previewUrlFor, thumbUrlFor, type ImageProvider } from '../shared.js'
 import {
   Image as ImageIcon,
   SlidersHorizontal,
@@ -93,7 +93,7 @@ function extensionFor(mediaType: string): string {
  * A real form navigation would replace the SPA, so the response lands in an
  * off-screen iframe and the browser download manager owns the transfer.
  */
-function postZipDownload(items: GalleryItem[]): void {
+function postZipDownload(items: GalleryItem[], token: string): void {
   const payload = items.map(item => ({
     name: `dsh-${item.provider}-${item.id.slice(0, 8)}.${extensionFor(item.attachment.mediaType)}`,
     attachment: item.attachment,
@@ -114,6 +114,13 @@ function postZipDownload(items: GalleryItem[]): void {
   field.name = 'items'
   field.value = JSON.stringify(payload)
   form.appendChild(field)
+  if (token !== '') {
+    const tokenField = document.createElement('input')
+    tokenField.type = 'hidden'
+    tokenField.name = 'token'
+    tokenField.value = token
+    form.appendChild(tokenField)
+  }
   document.body.appendChild(form)
   form.submit()
   form.remove()
@@ -214,6 +221,7 @@ const DICT = {
     batchDownloading: '打包中 ({current}/{total})…',
     batchDownloadSingleToast: '已下载 1 张图片',
     batchDownloadZipToast: '已开始下载 {count} 张图片（ZIP）',
+    batchDownloadComplete: '已下载 {count} 张图片（ZIP）',
     batchDownloadFailed: '批量下载失败，请重试',
     batchDownloadLimit: '选择过大：一次最多导出 2000 张，请分批下载',
     batchDelete: '批量删除',
@@ -326,6 +334,7 @@ const DICT = {
     batchDownloading: 'Packaging ({current}/{total})…',
     batchDownloadSingleToast: 'Downloaded 1 image',
     batchDownloadZipToast: 'Started downloading {count} images (ZIP)',
+    batchDownloadComplete: 'Downloaded {count} images (ZIP)',
     batchDownloadFailed: 'Batch download failed, please retry',
     batchDownloadLimit: 'Selection too large: up to 2000 images per export. Please split it.',
     batchDelete: 'Batch Delete',
@@ -1021,6 +1030,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
     return () => {
       if (regenerateControllerRef.current) regenerateControllerRef.current.abort()
       clearPreviewPrefetch()
+      closeZipProgress()
       if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current)
     }
   }, [])
@@ -1211,6 +1221,95 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   // Batch download state
   const [isDownloadingBatch, setIsDownloadingBatch] = useState(false)
   const [batchDownloadProgress, setBatchDownloadProgress] = useState<string | null>(null)
+  const [batchDownloadStatus, setBatchDownloadStatus] = useState<string | null>(null)
+  const [isZipDownload, setIsZipDownload] = useState(false)
+  const zipEventSourceRef = useRef<EventSource | null>(null)
+  const zipTokenRef = useRef<string | null>(null)
+  const zipWatchdogRef = useRef<number | null>(null)
+
+  const closeZipProgress = (): void => {
+    if (zipWatchdogRef.current !== null) {
+      window.clearTimeout(zipWatchdogRef.current)
+      zipWatchdogRef.current = null
+    }
+    zipEventSourceRef.current?.close()
+    zipEventSourceRef.current = null
+    zipTokenRef.current = null
+    setIsZipDownload(false)
+    setBatchDownloadStatus(null)
+  }
+
+  /**
+   * The iframe path has no error channel of its own: when the host never
+   * reports the job (validation failure, blocked download) the button would
+   * otherwise stay disabled forever, so reset it after a quiet window.
+   */
+  const armZipWatchdog = (): void => {
+    if (zipWatchdogRef.current !== null) window.clearTimeout(zipWatchdogRef.current)
+    zipWatchdogRef.current = window.setTimeout(() => {
+      zipWatchdogRef.current = null
+      showToast(t('batchDownloadFailed'))
+      setIsDownloadingBatch(false)
+      closeZipProgress()
+    }, 30_000)
+  }
+
+  /**
+   * Keep the fast iframe download and still report progress: the host writes
+   * one SSE event per archived entry, then a final state event.
+   */
+  const startZipProgress = (token: string, total: number): void => {
+    const source = new EventSource(ZIP_PROGRESS_ROUTE + '?token=' + encodeURIComponent(token))
+    zipEventSourceRef.current = source
+    armZipWatchdog()
+    source.addEventListener('progress', event => {
+      try {
+        const data = JSON.parse((event as MessageEvent).data) as { done?: number; total?: number; state?: string }
+        if (typeof data.done === 'number' && typeof data.total === 'number' && data.total > 0) {
+          if (zipWatchdogRef.current !== null) {
+            window.clearTimeout(zipWatchdogRef.current)
+            zipWatchdogRef.current = null
+          }
+          setBatchDownloadStatus(String(data.done) + '/' + String(data.total))
+        }
+        if (data.state === 'done') {
+          showToast(t('batchDownloadComplete', { count: String(data.total ?? total) }))
+          setIsDownloadingBatch(false)
+          closeZipProgress()
+        } else if (data.state === 'cancelled') {
+          showToast(t('cancel'))
+          setIsDownloadingBatch(false)
+          closeZipProgress()
+        } else if (data.state === 'error') {
+          showToast(t('batchDownloadFailed'))
+          setIsDownloadingBatch(false)
+          closeZipProgress()
+        }
+      } catch {
+        // Ignore a malformed event; the next one carries the full state.
+      }
+    })
+    source.onerror = () => {
+      if (source.readyState === EventSource.CLOSED) {
+        showToast(t('batchDownloadFailed'))
+        setIsDownloadingBatch(false)
+        closeZipProgress()
+      }
+    }
+  }
+
+  const cancelZipDownload = async (): Promise<void> => {
+    const token = zipTokenRef.current
+    if (token === null) return
+    try {
+      await fetch(ZIP_CANCEL_ROUTE + '?token=' + encodeURIComponent(token), { method: 'POST' })
+    } catch {
+      // The UI still recovers below even if the cancel request failed.
+    }
+    showToast(t('cancel'))
+    setIsDownloadingBatch(false)
+    closeZipProgress()
+  }
 
   // Batch download handler (single PNG or bundled zero-compression ZIP)
   const handleBatchDownload = async () => {
@@ -1219,6 +1318,9 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
     if (itemsToDownload.length === 0) return
 
     setIsDownloadingBatch(true)
+    // The iframe path finishes asynchronously: keep the button busy until the
+    // SSE stream reports done/cancelled instead of clearing it in finally.
+    let awaitingServer = false
 
     try {
       // Single image: direct download
@@ -1245,8 +1347,15 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
       // builds or holds the ZIP. Older hosts without the route fall through to
       // the in-page packer below.
       if (await canUseServerZip()) {
-        postZipDownload(itemsToDownload)
+        const token = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+          ? crypto.randomUUID()
+          : String(Date.now()) + '-' + Math.random().toString(36).slice(2)
+        zipTokenRef.current = token
+        setIsZipDownload(true)
+        startZipProgress(token, itemsToDownload.length)
+        postZipDownload(itemsToDownload, token)
         showToast(t('batchDownloadZipToast', { count: String(itemsToDownload.length) }))
+        awaitingServer = true
         return
       }
 
@@ -1287,8 +1396,11 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
       console.error('[dsh-image-gen] Batch download failed:', err)
       showToast(t('batchDownloadFailed'))
     } finally {
-      setIsDownloadingBatch(false)
-      setBatchDownloadProgress(null)
+      if (!awaitingServer) {
+        closeZipProgress()
+        setIsDownloadingBatch(false)
+        setBatchDownloadProgress(null)
+      }
     }
   }
 
@@ -1670,14 +1782,28 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
             >
               <Download size={13} />
               <span>
-                {isDownloadingBatch && batchDownloadProgress
-                  ? t('batchDownloading', {
-                      current: batchDownloadProgress.split('/')[0] ?? '',
-                      total: batchDownloadProgress.split('/')[1] ?? '',
-                    })
-                  : t('batchDownload')}
+                {isDownloadingBatch && batchDownloadStatus
+                  ? batchDownloadStatus
+                  : isDownloadingBatch && batchDownloadProgress
+                    ? t('batchDownloading', {
+                        current: batchDownloadProgress.split('/')[0] ?? '',
+                        total: batchDownloadProgress.split('/')[1] ?? '',
+                      })
+                    : t('batchDownload')}
               </span>
             </button>
+
+            {isZipDownload && (
+              <button
+                type="button"
+                className="dsh-ig-batch-btn"
+                onClick={() => void cancelZipDownload()}
+                title={t('cancel')}
+              >
+                <X size={13} />
+                <span>{t('cancel')}</span>
+              </button>
+            )}
 
             <span className="dsh-ig-batch-divider" />
 

@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ImageAttachmentRef, StoredImageAttachment } from '@deepseek-ai/dsh-attachment'
 import { parseImageAttachmentRef } from './reference-image.js'
 import { ZipStreamWriter, ZipTooLargeError } from './zip-stream.js'
+import { createZipJob, finishZipJob, isZipJobCancelled, isValidZipToken, updateZipJob } from './zip-progress.js'
 
 /** Dependencies required by the gallery export route. */
 export interface ZipRouteDeps {
@@ -49,15 +50,29 @@ export async function serveZip(req: IncomingMessage, res: ServerResponse, deps: 
     return jsonError(res, 413, 'request-too-large')
   }
 
-  const rawItems = new URLSearchParams(body).get('items')
-  if (rawItems === null) return jsonError(res, 400, 'invalid-request')
+  const params = new URLSearchParams(body)
+  const tokenParam = params.get('token') ?? ''
+  const jobToken = isValidZipToken(tokenParam) ? tokenParam : ''
+  // Finish the matching SSE job before answering an error: otherwise the
+  // progress stream keeps a placeholder alive and the button never recovers.
+  const fail = (status: number, code: string): void => {
+    if (jobToken !== '') {
+      // The SSE stream may not have connected yet; create the job first so a
+      // late subscriber still sees the terminal state instead of a placeholder.
+      createZipJob(jobToken, 0)
+      finishZipJob(jobToken, 'error')
+    }
+    jsonError(res, status, code)
+  }
+  const rawItems = params.get('items')
+  if (rawItems === null) return fail(400, 'invalid-request')
   let parsed: unknown
   try {
     parsed = JSON.parse(rawItems)
   } catch {
-    return jsonError(res, 400, 'invalid-request')
+    return fail(400, 'invalid-request')
   }
-  if (!Array.isArray(parsed)) return jsonError(res, 400, 'invalid-request')
+  if (!Array.isArray(parsed)) return fail(400, 'invalid-request')
 
   const items: ZipExportItem[] = []
   for (const entry of parsed) {
@@ -71,14 +86,16 @@ export async function serveZip(req: IncomingMessage, res: ServerResponse, deps: 
       ...(typeof record?.name === 'string' ? { name: record.name } : {}),
     })
   }
-  if (items.length === 0) return jsonError(res, 400, 'no-attachments')
+  if (items.length === 0) return fail(400, 'no-attachments')
 
   const maxEntries = deps.maxEntries ?? DEFAULT_MAX_ENTRIES
-  if (items.length > maxEntries) return jsonError(res, 413, 'too-many-attachments')
+  if (items.length > maxEntries) return fail(413, 'too-many-attachments')
 
   let declaredBytes = 0
   for (const item of items) declaredBytes += item.attachment.bytes
-  if (declaredBytes > MAX_ARCHIVE_BYTES) return jsonError(res, 413, 'archive-too-large')
+  if (declaredBytes > MAX_ARCHIVE_BYTES) return fail(413, 'archive-too-large')
+
+  if (jobToken !== '') createZipJob(jobToken, items.length)
 
   const filename = 'dsh-gallery-' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '.zip'
   res.writeHead(200, {
@@ -90,11 +107,20 @@ export async function serveZip(req: IncomingMessage, res: ServerResponse, deps: 
 
   const zip = new ZipStreamWriter(res)
   const skipped: string[] = []
-  const onClose = (): void => zip.markClientClosed()
+  const onClose = (): void => {
+    zip.markClientClosed()
+    if (jobToken !== '') finishZipJob(jobToken, 'cancelled')
+  }
   req.on('close', onClose)
 
   try {
-    for (const item of items) {
+    for (let index = 0; index < items.length; index += 1) {
+      if (jobToken !== '' && isZipJobCancelled(jobToken)) {
+        finishZipJob(jobToken, 'cancelled')
+        res.destroy()
+        return
+      }
+      const item = items[index]!
       const extension = IMAGE_EXTENSIONS[item.attachment.mediaType] ?? 'png'
       const fallback = 'dsh-' + String(item.attachment.attachmentId).replace(/^sha256:/, '').slice(0, 8) + '.' + extension
       try {
@@ -104,12 +130,15 @@ export async function serveZip(req: IncomingMessage, res: ServerResponse, deps: 
         if (zip.bytesWritten > 0 && isClosed(zip, err)) break
         skipped.push(String(item.attachment.attachmentId) + '\t' + (err instanceof Error ? err.message : 'unavailable'))
       }
+      if (jobToken !== '') updateZipJob(jobToken, index + 1)
     }
     if (skipped.length > 0) {
       await zip.add('skipped.txt', Buffer.from(skipped.join('\n') + '\n', 'utf8'))
     }
     await zip.finish()
+    if (jobToken !== '') finishZipJob(jobToken, 'done')
   } catch (err) {
+    if (jobToken !== '') finishZipJob(jobToken, 'error')
     if (!res.headersSent) {
       jsonError(res, err instanceof ZipTooLargeError ? 413 : 500, err instanceof ZipTooLargeError ? 'archive-too-large' : 'zip-failed')
       return

@@ -260,6 +260,9 @@ export async function getGalleryItems(): Promise<GalleryItem[]> {
 /** Byte budget for the disposable thumbnail cache; oldest entries go first. */
 export const GALLERY_THUMB_MAX_BYTES = 256 * 1024 * 1024
 
+/** Cached thumbnails unused for this long are dropped on the next sweep. */
+export const GALLERY_THUMB_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000
+
 export const GALLERY_THUMB_WIDTH = 320
 
 /** Cache key for one attachment thumbnail. */
@@ -349,7 +352,11 @@ async function deleteGalleryThumbs(ids: string[]): Promise<void> {
  * Drop cached thumbnails whose attachment is no longer in the gallery.
  * Returns how many entries were removed.
  */
-export async function pruneGalleryThumbs(validAttachmentIds: Iterable<string>, maxBytes = GALLERY_THUMB_MAX_BYTES): Promise<number> {
+export async function pruneGalleryThumbs(
+  validAttachmentIds: Iterable<string>,
+  maxBytes = GALLERY_THUMB_MAX_BYTES,
+  maxAgeMs = GALLERY_THUMB_MAX_AGE_MS,
+): Promise<number> {
   try {
     const db = await getThumbDB()
     const valid = new Set(Array.from(validAttachmentIds, String))
@@ -381,6 +388,28 @@ export async function pruneGalleryThumbs(validAttachmentIds: Iterable<string>, m
       req.onsuccess = () => resolve((req.result ?? []) as { key: string; bytes?: number; createdAt?: number }[])
       req.onerror = () => reject(req.error)
     })
+    // Age out thumbnails nobody has asked for in a while; this keeps the
+    // disposable store from holding a large library forever even when it fits
+    // under the byte budget. maxAgeMs <= 0 disables the age pass.
+    const cutoff = Date.now() - maxAgeMs
+    const expired = maxAgeMs > 0
+      ? records.filter(record => typeof record.createdAt === 'number' && record.createdAt < cutoff)
+      : []
+    if (expired.length > 0) {
+      const expiredKeys = new Set(expired.map(record => String(record.key)))
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(THUMB_STORE, 'readwrite')
+        const store = tx.objectStore(THUMB_STORE)
+        for (const key of expiredKeys) store.delete(key)
+        tx.oncomplete = () => resolve()
+        tx.onerror = () => reject(tx.error)
+      })
+      removed += expired.length
+      for (let i = records.length - 1; i >= 0; i -= 1) {
+        if (expiredKeys.has(String(records[i]?.key))) records.splice(i, 1)
+      }
+    }
+
     let total = records.reduce((sum, record) => sum + (typeof record.bytes === 'number' ? record.bytes : 0), 0)
     if (total > maxBytes) {
       const oldestFirst = [...records].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))

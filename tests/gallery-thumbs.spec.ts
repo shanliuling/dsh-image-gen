@@ -101,6 +101,21 @@ describe('gallery thumbnail cache lifecycle', () => {
     expect(stores.get('thumbs')?.has('sha256:c@320')).toBe(true)
   })
 
+  it('drops thumbnails unused past the age window', async () => {
+    const stores = installFakeIndexedDB()
+    const store = await import('../src/client/gallery-store.js')
+    await store.putGalleryThumb('sha256:old@320', HELLO)
+    await store.putGalleryThumb('sha256:new@320', HELLO)
+    const map = stores.get('thumbs')
+    const old = map?.get('sha256:old@320') as Record<string, unknown> | undefined
+    if (old !== undefined) old.createdAt = Date.now() - 1_000
+
+    const removed = await store.pruneGalleryThumbs(['sha256:old', 'sha256:new'], store.GALLERY_THUMB_MAX_BYTES, 10)
+    expect(removed).toBe(1)
+    expect(map?.has('sha256:old@320')).toBe(false)
+    expect(map?.has('sha256:new@320')).toBe(true)
+  })
+
   it('prunes thumbnails whose attachment is no longer in the gallery', async () => {
     const stores = installFakeIndexedDB()
     const store = await import('../src/client/gallery-store.js')

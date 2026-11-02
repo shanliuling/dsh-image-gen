@@ -54,6 +54,8 @@ export const ZIP_ROUTE = '/plugins/dsh-image-gen/zip'
 /** Browser route that serves host-rendered gallery thumbnails. */
 export const THUMB_ROUTE = '/plugins/dsh-image-gen/thumb'
 export const PREVIEW_ROUTE = '/plugins/dsh-image-gen/preview'
+export const ZIP_PROGRESS_ROUTE = '/plugins/dsh-image-gen/zip/progress'
+export const ZIP_CANCEL_ROUTE = '/plugins/dsh-image-gen/zip/cancel'
 /** Browser route the settings card probes provider connectivity through. */
 export const TEST_CONNECTION_ROUTE = '/plugins/dsh-image-gen/test'
 /** Non-secret settings capability probe, available even when the host cannot serve a form. */
