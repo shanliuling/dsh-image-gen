@@ -90,6 +90,58 @@ describe('zip export writer', () => {
     expect(end.centralOffset + end.centralSize).toBeLessThanOrEqual(zip.length)
   })
 
+  it('emits ZIP64 records when forced past the 32-bit limits', async () => {
+    const res = new FakeResponse()
+    const writer = new ZipStreamWriter(res as unknown as ServerResponse, { zip64: 'always' })
+    const data = Buffer.from('zip64 payload')
+    await writer.add('big.png', data)
+    await writer.finish()
+
+    const zip = res.body()
+    expect(zip.readUInt16LE(4)).toBe(45)
+    expect(zip.readUInt32LE(18)).toBe(0xffff_ffff)
+    expect(zip.readUInt32LE(22)).toBe(0xffff_ffff)
+    const nameLength = zip.readUInt16LE(26)
+    const extraLength = zip.readUInt16LE(28)
+    expect(extraLength).toBe(20)
+    const extraAt = 30 + nameLength
+    expect(zip.readUInt16LE(extraAt)).toBe(0x0001)
+    expect(zip.readUInt16LE(extraAt + 2)).toBe(16)
+    expect(Number(zip.readBigUInt64LE(extraAt + 4))).toBe(data.byteLength)
+    expect(Number(zip.readBigUInt64LE(extraAt + 12))).toBe(data.byteLength)
+
+    const end64 = zip.indexOf(Buffer.from([0x50, 0x4b, 0x06, 0x06]))
+    const locator = zip.indexOf(Buffer.from([0x50, 0x4b, 0x06, 0x07]))
+    expect(end64).toBeGreaterThan(0)
+    expect(locator).toBe(end64 + 56)
+    expect(Number(zip.readBigUInt64LE(end64 + 24))).toBe(1)
+    expect(Number(zip.readBigUInt64LE(locator + 8))).toBe(end64)
+
+    const eocd = zip.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]))
+    expect(zip.readUInt16LE(eocd + 10)).toBe(0xffff)
+    expect(zip.readUInt32LE(eocd + 12)).toBe(0xffff_ffff)
+    expect(zip.readUInt32LE(eocd + 16)).toBe(0xffff_ffff)
+
+    const central = zip.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]))
+    expect(zip.readUInt16LE(central + 6)).toBe(45)
+    expect(zip.readUInt32LE(central + 20)).toBe(0xffff_ffff)
+    expect(zip.readUInt32LE(central + 24)).toBe(0xffff_ffff)
+    expect(zip.readUInt16LE(central + 30)).toBe(28)
+    expect(zip.readUInt32LE(central + 42)).toBe(0xffff_ffff)
+  })
+
+  it('keeps small archives on the ZIP32 layout', async () => {
+    const res = new FakeResponse()
+    const writer = new ZipStreamWriter(res as unknown as ServerResponse)
+    await writer.add('small.png', Buffer.from('x'))
+    await writer.finish()
+    const zip = res.body()
+    expect(zip.readUInt16LE(4)).toBe(20)
+    expect(zip.readUInt16LE(28)).toBe(0)
+    expect(zip.indexOf(Buffer.from([0x50, 0x4b, 0x06, 0x06]))).toBe(-1)
+    expect(zip.readUInt16LE(zip.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06])) + 10)).toBe(1)
+  })
+
   it('deduplicates repeated names', async () => {
     const res = new FakeResponse()
     const writer = new ZipStreamWriter(res as unknown as ServerResponse)
@@ -145,6 +197,16 @@ describe('zip export route', () => {
     const empty = new FakeResponse()
     await serveZip(formRequest([]), empty as unknown as ServerResponse, { readImage: vi.fn() })
     expect(empty.status).toBe(400)
+  })
+
+  it('accepts selections declared past the ZIP32 4 GiB ceiling', async () => {
+    const res = new FakeResponse()
+    const readImage = vi.fn(async (ref: ImageAttachmentRef) => ({ ref, data: Buffer.from('x') }))
+    await serveZip(formRequest([
+      { attachment: attachment('a', 0xffff_ff00) },
+    ]), res as unknown as ServerResponse, { readImage })
+    expect(res.status).toBe(200)
+    expect(endOfCentralDirectory(res.body()).entries).toBe(1)
   })
 
   it('enforces the entry cap', async () => {

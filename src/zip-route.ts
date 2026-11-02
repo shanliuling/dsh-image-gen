@@ -14,8 +14,6 @@ export interface ZipRouteDeps {
 
 const DEFAULT_MAX_ENTRIES = 2000
 const DEFAULT_MAX_BODY_BYTES = 1024 * 1024
-/** Keep a margin below the 4 GiB ZIP32 ceiling before the first byte is sent. */
-const MAX_TOTAL_BYTES = 0xffff_ff00
 const IMAGE_EXTENSIONS: Record<string, string> = {
   'image/png': 'png',
   'image/jpeg': 'jpg',
@@ -75,10 +73,6 @@ export async function serveZip(req: IncomingMessage, res: ServerResponse, deps: 
 
   const maxEntries = deps.maxEntries ?? DEFAULT_MAX_ENTRIES
   if (items.length > maxEntries) return jsonError(res, 413, 'too-many-attachments')
-
-  let declaredBytes = 0
-  for (const item of items) declaredBytes += item.attachment.bytes
-  if (declaredBytes > MAX_TOTAL_BYTES) return jsonError(res, 413, 'archive-too-large')
 
   const filename = 'dsh-gallery-' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '.zip'
   res.writeHead(200, {
