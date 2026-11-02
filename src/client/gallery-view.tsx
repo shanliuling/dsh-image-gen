@@ -50,6 +50,21 @@ import { copyImageBlob, createImageThumbnail, createZipBlob, downloadBlobUrl, ty
 import { conversationRegenerateRequest } from './conversation-regenerate.js'
 import { STUDIO_ROUTE, type StudioWorkspaceInfo, type StudioGenerateResponse } from '../shared.js'
 
+const IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  webp: 'image/webp',
+  gif: 'image/gif',
+}
+
+/** Desktop pickers can omit `File.type` for UNC/temp paths; fall back to the extension. */
+function imageMediaTypeOf(file: File): string | undefined {
+  if (file.type.startsWith('image/')) return file.type
+  const extension = file.name.toLowerCase().split('.').pop() ?? ''
+  return IMAGE_MIME_BY_EXTENSION[extension]
+}
+
 let zipRouteProbe: Promise<boolean> | undefined
 
 /** Probe once whether this host can stream ZIP exports (older hosts 404 the route). */
@@ -617,18 +632,21 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   const importImages = async (files: FileList | null): Promise<void> => {
     if (files === null || files.length === 0 || importing) return
     const all = Array.from(files)
-    const picked = all.filter(file => file.type.startsWith('image/')).slice(0, 8)
+    const picked = all
+      .map(file => ({ file, mediaType: imageMediaTypeOf(file) }))
+      .filter((entry): entry is { file: File; mediaType: string } => entry.mediaType !== undefined)
+      .slice(0, 8)
     if (picked.length === 0) {
       showToast(t('importFailed'))
       return
     }
     setImporting(true)
     try {
-      const reads = await Promise.allSettled(picked.map(file => readFileBase64(file)))
+      const reads = await Promise.allSettled(picked.map(entry => readFileBase64(entry.file)))
       const images = reads.flatMap((read, index) => {
         if (read.status !== 'fulfilled') return []
-        const file = picked[index]!
-        return [{ data: read.value, mediaType: file.type, ...(file.name.length > 0 ? { name: file.name } : {}) }]
+        const entry = picked[index]!
+        return [{ data: read.value, mediaType: entry.mediaType, ...(entry.file.name.length > 0 ? { name: entry.file.name } : {}) }]
       })
       const readFailures = reads.length - images.length
       if (images.length === 0) {
@@ -643,6 +661,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
       })
       if (!response.ok) throw new Error(`HTTP ${String(response.status)}`)
       const payload = await response.json() as { images?: { attachment: ImageAttachmentRef }[]; failures?: unknown[] }
+      if ((payload.failures ?? []).length > 0) console.warn('[dsh-image-gen] import failures', payload.failures)
       const imported = payload.images ?? []
       let added = 0
       let writeFailures = 0
@@ -664,11 +683,15 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
         else writeFailures += 1
       }
       const failCount = (payload.failures ?? []).length + (all.length - picked.length) + readFailures + writeFailures
-      if (added === 0) showToast(t('importFailed'))
-      else if (failCount > 0) showToast(t('importPartial', { count: String(added), fail: String(failCount) }))
+      if (added === 0) {
+        const firstFailure = (payload.failures ?? [])[0] as { error?: unknown } | undefined
+        const reason = typeof firstFailure?.error === 'string' ? firstFailure.error : undefined
+        showToast(reason === undefined ? t('importFailed') : t('importFailed') + ' · ' + reason)
+      } else if (failCount > 0) showToast(t('importPartial', { count: String(added), fail: String(failCount) }))
       else showToast(t('importAdded', { count: String(added) }))
-    } catch {
-      showToast(t('importFailed'))
+    } catch (err) {
+      console.warn('[dsh-image-gen] import failed', err)
+      showToast(t('importFailed') + (err instanceof Error ? ' · ' + err.message : ''))
     } finally {
       setImporting(false)
     }

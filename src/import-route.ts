@@ -19,7 +19,30 @@ interface ImportRequestItem {
 
 const MAX_IMAGES_PER_REQUEST = 8
 
-const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/
+const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+const BASE64_LOOKUP = (() => {
+  const table = new Uint8Array(128)
+  for (let index = 0; index < BASE64_ALPHABET.length; index++) table[BASE64_ALPHABET.charCodeAt(index)] = 1
+  return table
+})()
+
+/**
+ * Validate base64 in linear time. A backtracking regexp looks harmless but V8
+ * throws RangeError ("Maximum call stack size exceeded") once the input passes
+ * a few megabytes, which turned every large import into a bare HTTP 400.
+ */
+function isValidBase64(value: string): boolean {
+  // An empty payload is left to the byte-range check below so its stable
+  // 'size-out-of-range' code is preserved.
+  if (value.length % 4 !== 0) return false
+  const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0
+  const end = value.length - padding
+  for (let index = 0; index < end; index++) {
+    const code = value.charCodeAt(index)
+    if (code > 127 || BASE64_LOOKUP[code] !== 1) return false
+  }
+  return true
+}
 
 /** base64 inflates bytes by 4/3; allow one full batch plus JSON overhead. */
 function bodyLimit(maxImageBytes: number): number {
@@ -47,37 +70,43 @@ export async function serveImport(req: IncomingMessage, res: ServerResponse, dep
   const saved: { attachment: ImageAttachmentRef }[] = []
   const failures: { index: number; error: string }[] = []
   for (const [index, item] of images.entries()) {
-    const record = typeof item === 'object' && item !== null ? item as Partial<ImportRequestItem> : undefined
-    if (record === undefined || typeof record.data !== 'string' || typeof record.mediaType !== 'string') {
-      failures.push({ index, error: 'invalid-item' })
-      continue
-    }
-    if (!deps.mediaTypes.includes(record.mediaType)) {
-      failures.push({ index, error: `unsupported-media-type: ${record.mediaType}` })
-      continue
-    }
-    // Buffer.from silently skips characters outside the base64 alphabet, so the
-    // encoded text is validated up front instead of relying on decode failures.
-    if (!BASE64_PATTERN.test(record.data)) {
-      failures.push({ index, error: 'invalid-base64' })
-      continue
-    }
-    const bytes = Buffer.from(record.data, 'base64')
-    if (bytes.byteLength === 0 || bytes.byteLength > deps.maxImageBytes) {
-      failures.push({ index, error: `size-out-of-range (max ${String(deps.maxImageBytes)} bytes)` })
-      continue
-    }
     try {
-      const attachment = await deps.saveImage({
-        data: bytes,
-        mediaType: record.mediaType as ImageMediaType,
-        ...(typeof record.name === 'string' && record.name.length > 0 ? { name: record.name } : {}),
-      })
-      saved.push({ attachment })
+      const record = typeof item === 'object' && item !== null ? item as Partial<ImportRequestItem> : undefined
+      if (record === undefined || typeof record.data !== 'string' || typeof record.mediaType !== 'string') {
+        failures.push({ index, error: 'invalid-item' })
+        continue
+      }
+      if (!deps.mediaTypes.includes(record.mediaType)) {
+        failures.push({ index, error: `unsupported-media-type: ${record.mediaType}` })
+        continue
+      }
+      // Buffer.from silently skips characters outside the base64 alphabet, so the
+      // encoded text is validated up front instead of relying on decode failures.
+      if (!isValidBase64(record.data)) {
+        failures.push({ index, error: 'invalid-base64' })
+        continue
+      }
+      const bytes = Buffer.from(record.data, 'base64')
+      if (bytes.byteLength === 0 || bytes.byteLength > deps.maxImageBytes) {
+        failures.push({ index, error: `size-out-of-range (max ${String(deps.maxImageBytes)} bytes)` })
+        continue
+      }
+      try {
+        const attachment = await deps.saveImage({
+          data: bytes,
+          mediaType: record.mediaType as ImageMediaType,
+          ...(typeof record.name === 'string' && record.name.length > 0 ? { name: record.name } : {}),
+        })
+        saved.push({ attachment })
+      } catch {
+        // Host save errors may carry internal details; surface a stable code
+        // instead, matching the canvas upload route's generic failure answer.
+        failures.push({ index, error: 'save-failed' })
+      }
     } catch {
-      // Host save errors may carry internal details; surface a stable code
-      // instead, matching the canvas upload route's generic failure answer.
-      failures.push({ index, error: 'save-failed' })
+      // Never let one malformed item reject the whole request: an uncaught
+      // throw reaches the host web server, which answers with a bare HTTP 400.
+      failures.push({ index, error: 'internal-error' })
     }
   }
   res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })

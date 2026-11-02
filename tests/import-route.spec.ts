@@ -171,6 +171,40 @@ describe('import route', () => {
     expect((payload as { failures: { index: number; error: string }[] }).failures).toEqual([{ index: 0, error: 'invalid-base64' }])
   })
 
+  it('accepts multi-megabyte base64 payloads without overflowing the regexp stack', async () => {
+    // V8's backtracking regexp threw RangeError ("Maximum call stack size
+    // exceeded") for base64 strings past a few megabytes, which surfaced as a
+    // bare HTTP 400 from the host web server.
+    const bigSaved: Array<{ data: Uint8Array }> = []
+    const bigServer = createServer((req, res) => {
+      void serveImport(req, res, {
+        saveImage: async image => {
+          bigSaved.push(image)
+          return attachmentRef('att-big')
+        },
+        maxImageBytes: 16 * 1024 * 1024,
+        mediaTypes: ['image/png'],
+      })
+    })
+    await new Promise<void>(resolve => bigServer.listen(0, '127.0.0.1', resolve))
+    try {
+      const port = (bigServer.address() as AddressInfo).port
+      const data = Buffer.alloc(8 * 1024 * 1024).toString('base64')
+      const response = await fetch('http://127.0.0.1:' + String(port) + '/', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ images: [{ data, mediaType: 'image/png' }] }),
+      })
+      const payload = await response.json() as { images: unknown[]; failures: unknown[] }
+      expect(response.status).toBe(200)
+      expect(payload.failures).toEqual([])
+      expect(payload.images).toHaveLength(1)
+      expect(bigSaved).toHaveLength(1)
+    } finally {
+      await new Promise<void>(resolve => { bigServer.close(() => { resolve() }) })
+    }
+  })
+
   it('rejects request bodies above the batch limit', async () => {
     await listen()
     const { status, payload } = await post(JSON.stringify({ images: [{ data: 'A'.repeat(64 * 1024), mediaType: 'image/png' }] }))
