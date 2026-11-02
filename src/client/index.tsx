@@ -1,6 +1,7 @@
 // Must stay the first import: it shims CSS.supports before tldraw's
 // module-scope environment probe runs (#40); see css-supports-shim.ts.
 import './tl/css-supports-shim.js'
+import { installDatalistScrollFix } from './datalist-scroll-fix.js'
 import { compatEditFormat } from '../watermark.js'
 import { useEffect, useState, useRef, type ChangeEvent, type FormEvent } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
@@ -918,6 +919,9 @@ export function apply(ctx: Context): void {
     ?? degradedScope<ImageSettings>()
   const locale = ctx.get('locale') as LocaleService | undefined
   const promotion = { enabled: false }
+  // Chromium keeps a native datalist popup at its original position while the
+  // page or a panel scrolls, so close it on scroll/resize; focusing reopens it.
+  installDatalistScrollFix()
 
   ;(ctx.inject as unknown as (services: string[], callback: (owner: Context) => void) => void)(
     ['sessions'],
