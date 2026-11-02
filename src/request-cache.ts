@@ -39,8 +39,9 @@ interface CacheFile {
 }
 
 /** Resolve the default cache root below DSH_HOME. */
-export function resolveRequestImageCacheDir(home = process.env.DSH_HOME ?? join(homedir(), '.dsh')): string {
-  return join(home, 'cache', 'attachments', 'request-images')
+export function resolveRequestImageCacheDir(home?: string): string {
+  const root = home?.trim() || process.env.DSH_HOME?.trim() || join(homedir(), '.dsh')
+  return join(root, 'cache', 'attachments', 'request-images')
 }
 
 /**

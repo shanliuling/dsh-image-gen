@@ -30,6 +30,8 @@ interface EntryRecord {
   headerOffset: number
   size64: boolean
   offset64: boolean
+  time: number
+  date: number
 }
 
 /**
@@ -111,6 +113,8 @@ export class ZipStreamWriter {
       headerOffset,
       size64,
       offset64,
+      time,
+      date,
     }))
     this.entries += 1
   }
@@ -179,8 +183,8 @@ export class ZipStreamWriter {
     central.writeUInt16LE(entry.size64 || entry.offset64 ? ZIP64_VERSION : ZIP32_VERSION, 6) // version needed
     central.writeUInt16LE(0x0800, 8)
     central.writeUInt16LE(0, 10)
-    central.writeUInt16LE(dosDateTime().time, 12)
-    central.writeUInt16LE(dosDateTime().date, 14)
+    central.writeUInt16LE(entry.time, 12)
+    central.writeUInt16LE(entry.date, 14)
     central.writeUInt32LE(entry.checksum, 16)
     central.writeUInt32LE(entry.size64 ? UINT32_MAX : entry.size, 20)
     central.writeUInt32LE(entry.size64 ? UINT32_MAX : entry.size, 24)

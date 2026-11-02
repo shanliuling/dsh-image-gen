@@ -97,7 +97,9 @@ function postZipDownload(items: GalleryItem[]): void {
     attachment: item.attachment,
   }))
   const sink = document.createElement('iframe')
-  sink.name = 'dsh-ig-zip-sink'
+  // Unique target per export: a reused name would make a second form submit
+  // into the first (possibly still downloading) frame.
+  sink.name = 'dsh-ig-zip-sink-' + String(Date.now())
   sink.hidden = true
   document.body.appendChild(sink)
   const form = document.createElement('form')
@@ -113,7 +115,10 @@ function postZipDownload(items: GalleryItem[]): void {
   document.body.appendChild(form)
   form.submit()
   form.remove()
-  window.setTimeout(() => sink.remove(), 60_000)
+  // The download manager owns the transfer once the attachment headers
+  // arrive; keep the frame well past the slowest large export instead of the
+  // old 60 s timer, which could cancel a still-streaming archive.
+  window.setTimeout(() => sink.remove(), 30 * 60_000)
 }
 
 /** Host-provided locale service; `active` may be missing before the locale loads. */
@@ -770,7 +775,6 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   }, [])
 
   const [previewLoading, setPreviewLoading] = useState(false)
-  const abortControllerRef = useRef<AbortController | null>(null)
 
   // Multi-dimensional filtering and sorting (Provider, Ratio, Search, and Sort)
   const filteredItems = useMemo(() => {
@@ -835,10 +839,6 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
 
   // Safely open or navigate preview item
   const openPreviewItem = (item: GalleryItem, blob?: Blob) => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
-      abortControllerRef.current = null
-    }
     if (previewUrlRef.current) {
       URL.revokeObjectURL(previewUrlRef.current)
       previewUrlRef.current = null
@@ -863,10 +863,6 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
 
   // Close preview and revoke object URL
   const handleClosePreview = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
-      abortControllerRef.current = null
-    }
     if (regenerateControllerRef.current) {
       regenerateControllerRef.current.abort()
       regenerateControllerRef.current = null
@@ -997,7 +993,6 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   // Clean up only on component unmount
   useEffect(() => {
     return () => {
-      if (abortControllerRef.current) abortControllerRef.current.abort()
       if (regenerateControllerRef.current) regenerateControllerRef.current.abort()
       if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current)
     }
@@ -1869,6 +1864,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
                 className="dsh-ig-lightbox-img"
                 src={previewUrl}
                 alt={previewItem.prompt}
+                decoding="async"
                 onLoad={() => setPreviewLoading(false)}
                 onError={() => {
                   fetchAttachmentBlob(previewItem.attachment)
@@ -2024,11 +2020,12 @@ const GalleryCard = memo(function GalleryCard({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string>()
   const [thumbFailed, setThumbFailed] = useState(false)
+  const [thumbAttempt, setThumbAttempt] = useState(0)
 
   // The host renders a cached 320px variant, so tiles never fetch originals;
   // the in-page pipeline below only runs when that route is unavailable.
   const serverThumbUrl = thumbUrlFor(item.attachment)
-  const displayUrl = url ?? (thumbFailed ? undefined : serverThumbUrl)
+  const displayUrl = url ?? (thumbFailed ? undefined : (thumbAttempt === 0 ? serverThumbUrl : serverThumbUrl + '&retry=1'))
   const originalRef = useRef<Promise<Blob> | undefined>(undefined)
   const ensureOriginal = useCallback(async (): Promise<Blob> => {
     if (blob) return blob
@@ -2165,7 +2162,9 @@ const GalleryCard = memo(function GalleryCard({
             decoding="async"
             onLoad={() => setLoading(false)}
             onError={() => {
-              if (url === undefined) setThumbFailed(true)
+              if (url !== undefined) return
+              if (thumbAttempt === 0) setThumbAttempt(1)
+              else setThumbFailed(true)
             }}
             draggable={!isManageMode && Boolean(blob?.size)}
             onDragStart={event => {

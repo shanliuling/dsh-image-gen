@@ -209,6 +209,15 @@ describe('zip export route', () => {
     expect(endOfCentralDirectory(res.body()).entries).toBe(1)
   })
 
+  it('rejects archives declared beyond the sanity ceiling', async () => {
+    const res = new FakeResponse()
+    await serveZip(formRequest([
+      { attachment: attachment('a', 40 * 1024 ** 3) },
+      { attachment: attachment('b', 40 * 1024 ** 3) },
+    ]), res as unknown as ServerResponse, { readImage: vi.fn() })
+    expect(res.status).toBe(413)
+  })
+
   it('enforces the entry cap', async () => {
     const res = new FakeResponse()
     await serveZip(formRequest([

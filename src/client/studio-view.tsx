@@ -2099,14 +2099,17 @@ const RecentItem = memo(function RecentItem({ item, active, mode, lang, actions 
   const [setRef, inView] = useInView<HTMLButtonElement>()
   const [hovered, setHovered] = useState(false)
   const [thumbFailed, setThumbFailed] = useState(false)
+  const [thumbAttempt, setThumbAttempt] = useState(0)
   // The tile renders the host 320 px variant; the original is fetched only
   // while the pointer is over it, for drag-out and canvas handoff.
   const image = useAttachmentImage(item.attachment, inView && (hovered || active || thumbFailed))
-  const thumbUrl = thumbFailed ? image.url : thumbUrlFor(item.attachment)
+  const thumbSource = thumbUrlFor(item.attachment) + (thumbAttempt === 0 ? '' : '&retry=1')
+  const thumbUrl = thumbFailed ? image.url : thumbSource
   return (
     <div
       className={`dsh-ig-recent-item ${active ? 'is-active' : ''}`}
       onPointerEnter={() => setHovered(true)}
+      onPointerDown={() => setHovered(true)}
       onPointerLeave={() => setHovered(false)}
     >
       <button
@@ -2120,7 +2123,14 @@ const RecentItem = memo(function RecentItem({ item, active, mode, lang, actions 
       >
         <div className="dsh-ig-recent-thumb">
           {thumbUrl !== null && thumbUrl !== undefined
-            ? <img src={thumbUrl} alt="" loading="lazy" decoding="async" draggable={false} onError={() => setThumbFailed(true)} />
+            ? <img
+                src={thumbUrl}
+                alt=""
+                loading="lazy"
+                decoding="async"
+                draggable={false}
+                onError={() => { if (thumbAttempt === 0) setThumbAttempt(1); else setThumbFailed(true) }}
+              />
             : <ImagePlus size={18} />}
         </div>
       </button>
