@@ -34,6 +34,11 @@ export function imageUrlFor(ref: ImageAttachmentRef): string {
 export function thumbUrlFor(ref: ImageAttachmentRef, width = 320): string {
   return THUMB_ROUTE + '?w=' + String(width) + '&ref=' + encodeImageRef(ref)
 }
+
+/** Mid-size preview used by the lightbox; originals stay for copy/download/drag. */
+export function previewUrlFor(ref: ImageAttachmentRef): string {
+  return PREVIEW_ROUTE + '?ref=' + encodeImageRef(ref)
+}
 /** Browser route that uploads user-picked images as DSH attachments. */
 export const IMPORT_ROUTE = '/plugins/dsh-image-gen/import'
 /** Browser route used for deleting generated images and workspace files. */
@@ -48,6 +53,7 @@ export const SAVE_WORKSPACE_ROUTE = '/plugins/dsh-image-gen/save-workspace'
 export const ZIP_ROUTE = '/plugins/dsh-image-gen/zip'
 /** Browser route that serves host-rendered gallery thumbnails. */
 export const THUMB_ROUTE = '/plugins/dsh-image-gen/thumb'
+export const PREVIEW_ROUTE = '/plugins/dsh-image-gen/preview'
 /** Browser route the settings card probes provider connectivity through. */
 export const TEST_CONNECTION_ROUTE = '/plugins/dsh-image-gen/test'
 /** Non-secret settings capability probe, available even when the host cannot serve a form. */

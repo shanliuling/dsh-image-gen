@@ -19,13 +19,13 @@ import { editGoogleImage, generateGoogleImage } from './google.js'
 import { IMAGE_ROUTE, DELETE_ROUTE, SAVE_WORKSPACE_ROUTE, imageAttachmentFromMeta, serveImage, serveDelete, serveSaveWorkspace } from './image-route.js'
 import { serveImport } from './import-route.js'
 import { serveZip } from './zip-route.js'
-import { serveThumb } from './thumb-route.js'
+import { servePreview, serveThumb } from './thumb-route.js'
 import { pruneRequestImageCache, resolveRequestImageCacheDir } from './request-cache.js'
 import { editOpenAICompatibleImage, generateOpenAICompatibleImage } from './openai-compatible.js'
 import { type ResolvedReferenceImage, resolveReferenceImages } from './reference-image.js'
 import { editSeedreamImage } from './seedream.js'
 import { generateSubscriptionImage, registerSubscriptionRoutes, subscriptionToolParameters, SubscriptionManager } from './subscription.js'
-import { CANVAS_STATE_ROUTE, DEFAULT_CLOUD_TIMEOUT_MS, IMAGE_GENERATION_NAMESPACE, IMAGE_PROVIDERS, IMPORT_ROUTE, INSPIRATION_ROUTE, STUDIO_ROUTE, TEST_CONNECTION_ROUTE, THUMB_ROUTE, ZIP_ROUTE, mergeComfyUIPrompt, resolveOpenAICompatChannel, type ImageProvider } from './shared.js'
+import { CANVAS_STATE_ROUTE, DEFAULT_CLOUD_TIMEOUT_MS, IMAGE_GENERATION_NAMESPACE, IMAGE_PROVIDERS, IMPORT_ROUTE, INSPIRATION_ROUTE, PREVIEW_ROUTE, STUDIO_ROUTE, TEST_CONNECTION_ROUTE, THUMB_ROUTE, ZIP_ROUTE, mergeComfyUIPrompt, resolveOpenAICompatChannel, type ImageProvider } from './shared.js'
 import { createInspirationRoute } from './inspiration-route.js'
 import { BUNDLED_INSPIRATION_CATALOG, searchInspirationCases } from './inspiration.js'
 import { generateFromStudio, describeStudio } from './studio.js'
@@ -213,6 +213,12 @@ export function apply(ctx: Context, config: Config = {}): void {
         readImageRequest: (ref, target, signal) => ctx.attachments.readImageRequest(ref, target, signal),
       }),
     }), 'dsh-image-gen: thumbnail route')
+    webCtx.effect(() => register({
+      kind: 'exact', path: PREVIEW_ROUTE,
+      handler: (req, res) => servePreview(req, res, {
+        readImageRequest: (ref, target, signal) => ctx.attachments.readImageRequest(ref, target, signal),
+      }),
+    }), 'dsh-image-gen: preview route')
     webCtx.effect(() => register({
       kind: 'exact', path: IMPORT_ROUTE,
       handler: (req, res) => serveImport(req, res, {

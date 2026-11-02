@@ -1,10 +1,10 @@
-/** Server-rendered gallery thumbnails derived from the attachment store. */
+/** Server-rendered gallery variants derived from the attachment store. */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { parseImageAttachmentRef } from './reference-image.js'
 import { decodeImageRef } from './shared.js'
 
-/** Dependencies required by the thumbnail route. */
+/** Dependencies required by the thumbnail and preview routes. */
 export interface ThumbRouteDeps {
   readImageRequest(
     ref: ImageAttachmentRef,
@@ -13,11 +13,34 @@ export interface ThumbRouteDeps {
   ): Promise<{ variantId: string; data: Uint8Array; mediaType: ImageAttachmentRef['mediaType'] }>
 }
 
-const DEFAULT_WIDTH = 320
-const MIN_WIDTH = 64
-const MAX_WIDTH = 1024
-/** Generous for a 320 px tile, so the quality ladder stays at its top rung. */
-const MAX_BYTES = 96 * 1024
+interface VariantConfig {
+  defaultWidth: number
+  minWidth: number
+  maxWidth: number
+  maxBytes: number
+  unavailableCode: string
+}
+
+const THUMB: VariantConfig = {
+  defaultWidth: 320,
+  minWidth: 64,
+  maxWidth: 1024,
+  /** Generous for a 320 px tile, so the quality ladder stays at its top rung. */
+  maxBytes: 96 * 1024,
+  unavailableCode: 'thumbnail-unavailable',
+}
+
+/**
+ * A 1600 px long edge keeps lightbox decoding small (a 33.5 MP original costs
+ * roughly 130 MB as RGBA) while staying sharp on a desktop window.
+ */
+const PREVIEW: VariantConfig = {
+  defaultWidth: 1600,
+  minWidth: 256,
+  maxWidth: 2048,
+  maxBytes: 512 * 1024,
+  unavailableCode: 'preview-unavailable',
+}
 
 /**
  * Serve one downscaled, cached thumbnail.
@@ -27,6 +50,15 @@ const MAX_BYTES = 96 * 1024
  * can render a tile without transferring the original to the renderer at all.
  */
 export async function serveThumb(req: IncomingMessage, res: ServerResponse, deps: ThumbRouteDeps): Promise<void> {
+  return serveVariant(req, res, deps, THUMB)
+}
+
+/** Serve the mid-size variant used by the lightbox preview. */
+export async function servePreview(req: IncomingMessage, res: ServerResponse, deps: ThumbRouteDeps): Promise<void> {
+  return serveVariant(req, res, deps, PREVIEW)
+}
+
+async function serveVariant(req: IncomingMessage, res: ServerResponse, deps: ThumbRouteDeps, config: VariantConfig): Promise<void> {
   if (req.method !== 'GET') return jsonError(res, 405, 'method-not-allowed')
   if (!sameOrigin(req)) return jsonError(res, 403, 'origin-rejected')
   const url = new URL(req.url ?? '/', 'http://x')
@@ -34,13 +66,13 @@ export async function serveThumb(req: IncomingMessage, res: ServerResponse, deps
   const attachment = rawRef === null ? undefined : decodeImageRef(rawRef, parseImageAttachmentRef)
   if (attachment === undefined) return jsonError(res, 400, 'invalid-attachment')
 
-  const requested = Number(url.searchParams.get('w') ?? DEFAULT_WIDTH)
+  const requested = Number(url.searchParams.get('w') ?? config.defaultWidth)
   const width = Number.isFinite(requested)
-    ? Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, Math.round(requested)))
-    : DEFAULT_WIDTH
+    ? Math.min(config.maxWidth, Math.max(config.minWidth, Math.round(requested)))
+    : config.defaultWidth
 
   try {
-    const variant = await deps.readImageRequest(attachment, { width, height: width, maxBytes: MAX_BYTES })
+    const variant = await deps.readImageRequest(attachment, { width, height: width, maxBytes: config.maxBytes })
     const etag = '"' + String(variant.variantId) + '"'
     const headers = {
       'cache-control': 'private, max-age=31536000, immutable',
@@ -60,7 +92,7 @@ export async function serveThumb(req: IncomingMessage, res: ServerResponse, deps
     })
     res.end(variant.data)
   } catch {
-    jsonError(res, 404, 'thumbnail-unavailable')
+    jsonError(res, 404, config.unavailableCode)
   }
 }
 

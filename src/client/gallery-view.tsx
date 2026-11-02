@@ -5,7 +5,7 @@
  */
 import { memo, useCallback, useDeferredValue, useEffect, useState, useMemo, useRef, type FC, type MouseEvent } from 'react'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import { DELETE_ROUTE, IMPORT_ROUTE, ZIP_ROUTE, imageUrlFor, thumbUrlFor, type ImageProvider } from '../shared.js'
+import { DELETE_ROUTE, IMPORT_ROUTE, ZIP_ROUTE, imageUrlFor, previewUrlFor, thumbUrlFor, type ImageProvider } from '../shared.js'
 import {
   Image as ImageIcon,
   SlidersHorizontal,
@@ -47,6 +47,7 @@ import { startGalleryImageDrag } from './tl/gallery-image-transfer.js'
 import { InspirationView } from './inspiration-view.js'
 import { evictAttachmentCache, fetchAttachmentBlob } from './image-cache.js'
 import { shouldShowBatchBar } from './gallery-batch-bar.js'
+import { mergeGalleryItems } from './gallery-merge.js'
 import { copyImageBlob, createImageThumbnail, createZipBlob, downloadBlobUrl, type ZipFileInput } from './browser-image-utils.js'
 import { conversationRegenerateRequest } from './conversation-regenerate.js'
 import { STUDIO_ROUTE, type StudioWorkspaceInfo, type StudioGenerateResponse } from '../shared.js'
@@ -577,6 +578,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   const [previewItem, setPreviewItem] = useState<GalleryItem | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const previewUrlRef = useRef<string | null>(null)
+  const previewPrefetchRef = useRef<HTMLImageElement[]>([])
   previewUrlRef.current = previewUrl
   const [previewBlob, setPreviewBlob] = useState<Blob | null>(null)
   // Stable dispatchers keep memoized cards from re-rendering on selection changes.
@@ -752,7 +754,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
     const load = () => {
       void getGalleryItems().then((res) => {
         if (!active) return
-        setItems(res)
+        setItems(prev => mergeGalleryItems(prev, res))
         if (!pruned) {
           // One sweep per mount drops thumbnails left behind by older deletions.
           pruned = true
@@ -838,6 +840,25 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   const hasPrev = currentPreviewIndex > 0
   const hasNext = currentPreviewIndex >= 0 && currentPreviewIndex < filteredItems.length - 1
 
+  // Warm the neighbouring 1600 px variants so left/right navigation paints
+  // immediately instead of waiting for a fresh request each time.
+  const clearPreviewPrefetch = () => {
+    for (const image of previewPrefetchRef.current) image.src = ''
+    previewPrefetchRef.current = []
+  }
+  const prefetchPreviewNeighbors = (item: GalleryItem) => {
+    clearPreviewPrefetch()
+    if (typeof Image === 'undefined') return
+    const index = filteredItems.findIndex(entry => entry.id === item.id)
+    if (index < 0) return
+    for (const neighbor of [filteredItems[index - 1], filteredItems[index + 1]]) {
+      if (neighbor === undefined) continue
+      const image = new Image()
+      image.src = previewUrlFor(neighbor.attachment)
+      previewPrefetchRef.current.push(image)
+    }
+  }
+
   // Safely open or navigate preview item
   const openPreviewItem = (item: GalleryItem, blob?: Blob) => {
     if (previewUrlRef.current) {
@@ -852,18 +873,22 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
       setPreviewBlob(blob)
       setPreviewUrl(url)
       setPreviewLoading(false)
+      prefetchPreviewNeighbors(item)
       return
     }
 
     setPreviewBlob(null)
-    // The cacheable GET route paints progressively and avoids a second copy in
-    // memory; the lightbox falls back to the blob form if the route is missing.
+    // Show a 1600 px variant here; the full-resolution attachment stays for
+    // copy/download/drag. The lightbox falls back to the original GET and then
+    // to the blob form when a host cannot derive the variant.
     setPreviewLoading(true)
-    setPreviewUrl(imageUrlFor(item.attachment))
+    setPreviewUrl(previewUrlFor(item.attachment))
+    prefetchPreviewNeighbors(item)
   }
 
   // Close preview and revoke object URL
   const handleClosePreview = () => {
+    clearPreviewPrefetch()
     if (regenerateControllerRef.current) {
       regenerateControllerRef.current.abort()
       regenerateControllerRef.current = null
@@ -995,6 +1020,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   useEffect(() => {
     return () => {
       if (regenerateControllerRef.current) regenerateControllerRef.current.abort()
+      clearPreviewPrefetch()
       if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current)
     }
   }, [])
@@ -1177,7 +1203,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
       )
     } catch (err) {
       console.error('[dsh-image-gen] Batch favorite failed:', err)
-      void getGalleryItems().then((res) => setItems(res))
+      void getGalleryItems().then((res) => setItems(prev => mergeGalleryItems(prev, res)))
       showToast(t('batchFavoriteFailed'))
     }
   }
@@ -1876,6 +1902,13 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
                 decoding="async"
                 onLoad={() => setPreviewLoading(false)}
                 onError={() => {
+                  const original = imageUrlFor(previewItem.attachment)
+                  if (previewUrl !== original) {
+                    // The 1600 px variant is unavailable; fall back to the
+                    // original GET before giving up on the route entirely.
+                    setPreviewUrl(original)
+                    return
+                  }
                   fetchAttachmentBlob(previewItem.attachment)
                     .then((fetched) => {
                       const objectUrl = URL.createObjectURL(fetched)
@@ -1935,14 +1968,20 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
                 className="dsh-ig-lightbox-btn"
                 title={t('download')}
                 onClick={() => {
-                  if (!previewUrl) return
-                  const a = document.createElement('a')
-                  a.href = previewUrl
                   const extension = previewItem.attachment.mediaType === 'image/jpeg' ? 'jpg' : previewItem.attachment.mediaType === 'image/webp' ? 'webp' : previewItem.attachment.mediaType === 'image/gif' ? 'gif' : 'png'
+                  // The lightbox shows a 1600 px variant; downloads keep the
+                  // original bytes: the card's original blob when present, the
+                  // cacheable original GET otherwise.
+                  const href = previewBlob !== null
+                    ? URL.createObjectURL(previewBlob)
+                    : imageUrlFor(previewItem.attachment)
+                  const a = document.createElement('a')
+                  a.href = href
                   a.download = `dsh-${previewItem.provider}-${previewItem.id}.${extension}`
                   document.body.appendChild(a)
                   a.click()
                   document.body.removeChild(a)
+                  if (previewBlob !== null) window.setTimeout(() => URL.revokeObjectURL(href), 10_000)
                 }}
               >
                 <Download size={14} />

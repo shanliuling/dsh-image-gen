@@ -1578,7 +1578,22 @@ export const StudioView: FC<{
             ) : selected === null ? (
               <div className="dsh-ig-canvas-empty"><ImagePlus size={36} /><span>{t('selectHistory')}</span></div>
             ) : image.loading ? (
-              <div className="dsh-ig-canvas-empty"><LoaderCircle className="dsh-ig-spin" size={28} /><span>{t('loading')}</span></div>
+              <>
+                <img
+                  className="dsh-ig-canvas-thumb"
+                  src={thumbUrlFor(selected.attachment)}
+                  alt={selected.prompt}
+                  draggable={false}
+                  style={{
+                    width: String(selected.attachment.width) + 'px',
+                    height: String(selected.attachment.height) + 'px',
+                    transform: `translate(${offset.x}px) scale(${zoom / 100})`,
+                    transformOrigin: 'center center',
+                    transition: isDragging ? 'none' : 'transform 0.08s ease-out',
+                  }}
+                />
+                <div className="dsh-ig-canvas-loading-pill"><LoaderCircle className="dsh-ig-spin" size={16} /><span>{t('loading')}</span></div>
+              </>
             ) : image.url !== null ? (
               <img
                 src={image.url}
