@@ -5,7 +5,7 @@
  */
 import { memo, useCallback, useDeferredValue, useEffect, useState, useMemo, useRef, type FC, type MouseEvent } from 'react'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import { DELETE_ROUTE, IMPORT_ROUTE, ZIP_CANCEL_ROUTE, ZIP_PROGRESS_ROUTE, ZIP_ROUTE, imageUrlFor, previewUrlFor, thumbUrlFor, type ImageProvider } from '../shared.js'
+import { DELETE_ROUTE, IMPORT_ROUTE, STORAGE_STATS_ROUTE, ZIP_CANCEL_ROUTE, ZIP_PROGRESS_ROUTE, ZIP_ROUTE, imageUrlFor, previewUrlFor, thumbUrlFor, type ImageProvider } from '../shared.js'
 import {
   Image as ImageIcon,
   SlidersHorizontal,
@@ -23,6 +23,7 @@ import {
   AlertTriangle,
   Sparkles,
   Upload,
+  HardDrive,
 } from 'lucide-react'
 import {
   getGalleryItems,
@@ -37,6 +38,8 @@ import {
   getGalleryThumb,
   putGalleryThumb,
   pruneGalleryThumbs,
+  pruneTombstones,
+  getGalleryThumbStats,
   GALLERY_THUMB_WIDTH,
   type GalleryItem,
 } from './gallery-store.js'
@@ -51,6 +54,23 @@ import { mergeGalleryItems } from './gallery-merge.js'
 import { copyImageBlob, createImageThumbnail, createZipBlob, downloadBlobUrl, type ZipFileInput } from './browser-image-utils.js'
 import { conversationRegenerateRequest } from './conversation-regenerate.js'
 import { STUDIO_ROUTE, type StudioWorkspaceInfo, type StudioGenerateResponse } from '../shared.js'
+
+const GALLERY_RENDER_BATCH = 120
+
+interface GalleryStorageStats {
+  attachments: { count: number; bytes: number }
+  requestImages: { count: number; bytes: number }
+  thumbs: { count: number; bytes: number }
+  orphans: { count: number; bytes: number; ids: string[] }
+  scannedAt: number
+}
+
+function formatStorageBytes(bytes: number): string {
+  if (bytes < 1024) return bytes + ' B'
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+  if (bytes < 1024 ** 3) return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+  return (bytes / (1024 ** 3)).toFixed(2) + ' GB'
+}
 
 const IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
   png: 'image/png',
@@ -233,6 +253,18 @@ const DICT = {
     confirmBatchDelete: '确认删除 ({count})',
     confirmDeleteSingle: '确认删除',
     batchDeletedToast: '已删除 {count} 张图片',
+    storageTitle: '存储占用',
+    storageScanning: '扫描中…',
+    storageAttachments: '附件对象',
+    storageThumbs: '缩略图缓存（本地回退）',
+    storageRequestCache: '请求图缓存',
+    storageOrphans: '孤儿附件（未引用）',
+    storageItems: '{n} 个文件',
+    storageOrphanHint: '只读统计，不会删除任何文件。',
+    storageThumbsHint: '服务端缩略图正常时，本地回退缓存保持为空；320px 缩略图计入请求图缓存。',
+    storageExport: '导出孤儿清单',
+    storageScanFailed: '存储统计失败',
+    storageClose: '关闭',
     batchDeletedWithFilesToast: '已删除 {count} 张图片，并清理了 {files} 个工作区文件',
     deleteFailedFileLocked: '已删除 {count} 张图片，但有 {files} 个文件因被系统占用未能删除',
     deleteFailedDatabase: '删除失败：本地数据库操作异常',
@@ -346,6 +378,18 @@ const DICT = {
     confirmBatchDelete: 'Delete ({count})',
     confirmDeleteSingle: 'Delete',
     batchDeletedToast: 'Deleted {count} images',
+    storageTitle: 'Storage usage',
+    storageScanning: 'Scanning…',
+    storageAttachments: 'Attachment objects',
+    storageThumbs: 'Thumbnail cache (local fallback)',
+    storageRequestCache: 'Request-image cache',
+    storageOrphans: 'Orphan attachments (unreferenced)',
+    storageItems: '{n} files',
+    storageOrphanHint: 'Read-only statistics; nothing is deleted.',
+    storageThumbsHint: 'The local fallback stays empty while server thumbnails work; 320px thumbnails count as request-image cache.',
+    storageExport: 'Export orphan list',
+    storageScanFailed: 'Storage scan failed',
+    storageClose: 'Close',
     batchDeletedWithFilesToast: 'Deleted {count} images and cleaned {files} workspace files',
     deleteFailedFileLocked: 'Deleted {count} images, but {files} files could not be deleted (busy/locked)',
     deleteFailedDatabase: 'Failed to delete: local database error',
@@ -500,6 +544,8 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   const [studioDraft, setStudioDraft] = useState<string | undefined>(undefined)
   const [studioReference, setStudioReference] = useState<File | undefined>(undefined)
   const [items, setItems] = useState<GalleryItem[]>([])
+  const [renderLimit, setRenderLimit] = useState(GALLERY_RENDER_BATCH)
+  const gallerySentinelRef = useRef<HTMLDivElement | null>(null)
   const [search, setSearch] = useState('')
   // Keep typing responsive while the full list is re-filtered off the critical path.
   const deferredSearch = useDeferredValue(search)
@@ -614,6 +660,9 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   const [showDeleteModal, setShowDeleteModal] = useState(false)
   const [deleteWorkspaceFiles, setDeleteWorkspaceFiles] = useState(true)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [showStorageModal, setShowStorageModal] = useState(false)
+  const [isStorageScanning, setIsStorageScanning] = useState(false)
+  const [storageStats, setStorageStats] = useState<GalleryStorageStats | null>(null)
 
   // Clear batch selection and shift anchor when switching tabs, searching, or changing filters
   useEffect(() => {
@@ -765,9 +814,11 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
         if (!active) return
         setItems(prev => mergeGalleryItems(prev, res))
         if (!pruned) {
-          // One sweep per mount drops thumbnails left behind by older deletions.
+          // One sweep per mount drops thumbnails left behind by older deletions
+          // and tombstones past the multi-window retention window.
           pruned = true
           void pruneGalleryThumbs(res.map(item => String(item.attachment.attachmentId)))
+          void pruneTombstones()
         }
       })
     }
@@ -833,6 +884,29 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
         return b.createdAt - a.createdAt
       })
   }, [items, activeTab, selectedProvider, selectedRatio, deferredSearch, sortBy, onlyCurrentWorkspace, activeWorkspace])
+
+  // Render the grid in batches so a very large library does not mount every
+  // card on first paint; select-all still works on the full filtered list.
+  const galleryFilterKey = [activeTab, selectedProvider, selectedRatio, deferredSearch, sortBy, String(onlyCurrentWorkspace), activeWorkspace?.path ?? ''].join('|')
+  useEffect(() => {
+    setRenderLimit(GALLERY_RENDER_BATCH)
+  }, [galleryFilterKey])
+  useEffect(() => {
+    if (filteredItems.length <= renderLimit) return
+    const node = gallerySentinelRef.current
+    if (node === null) return
+    if (typeof IntersectionObserver === 'undefined') {
+      setRenderLimit(filteredItems.length)
+      return
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some(entry => entry.isIntersecting)) {
+        setRenderLimit(limit => Math.min(filteredItems.length, limit + GALLERY_RENDER_BATCH))
+      }
+    }, { rootMargin: '800px' })
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [filteredItems.length, renderLimit])
 
   // Count of items belonging to the current workspace (before other search/filter criteria)
   const workspaceItemsCount = useMemo(() => {
@@ -1404,6 +1478,49 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
     }
   }
 
+  const openStorageStats = async () => {
+    setShowStorageModal(true)
+    setIsStorageScanning(true)
+    try {
+      const attachmentIds = Array.from(new Set(items.map(item => String(item.attachment.attachmentId))))
+      const [thumbs, response] = await Promise.all([
+        getGalleryThumbStats(),
+        fetch(STORAGE_STATS_ROUTE, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ attachmentIds }),
+        }),
+      ])
+      if (!response.ok) throw new Error('storage stats failed (' + response.status + ')')
+      const stats = await response.json() as Omit<GalleryStorageStats, 'thumbs'>
+      setStorageStats({ ...stats, thumbs })
+    } catch (err) {
+      console.error('[dsh-image-gen] Storage stats failed:', err)
+      showToast(t('storageScanFailed'))
+      setShowStorageModal(false)
+    } finally {
+      setIsStorageScanning(false)
+    }
+  }
+
+  const exportOrphanList = () => {
+    if (storageStats === null) return
+    const payload = JSON.stringify({
+      scannedAt: new Date(storageStats.scannedAt).toISOString(),
+      count: storageStats.orphans.count,
+      bytes: storageStats.orphans.bytes,
+      ids: storageStats.orphans.ids,
+    }, null, 2)
+    const url = URL.createObjectURL(new Blob([payload], { type: 'application/json' }))
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = 'dsh-image-gen-orphans.json'
+    document.body.appendChild(anchor)
+    anchor.click()
+    document.body.removeChild(anchor)
+    window.setTimeout(() => URL.revokeObjectURL(url), 10_000)
+  }
+
   // Request single image deletion through the unified modal
   const requestSingleDelete = (item: GalleryItem, e?: MouseEvent) => {
     if (e) e.stopPropagation()
@@ -1630,13 +1747,22 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
                   className="dsh-ig-studio-btn"
                   disabled={importing}
                   title={t('importPickHint')}
+                  aria-label={t('importImages')}
                   onClick={() => importInputRef.current?.click()}
                 >
                   <Upload size={13} />
-                  <span>{t('importImages')}</span>
                 </button>
               </>
             )}
+
+            <button
+              type="button"
+              className="dsh-ig-studio-btn"
+              title={t('storageTitle')}
+              onClick={() => void openStorageStats()}
+            >
+              <HardDrive size={13} />
+            </button>
 
             {/* Sort Dropdown */}
             <select
@@ -1700,7 +1826,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
             </div>
           ) : (
             <div className="dsh-ig-gallery-grid">
-              {filteredItems.map((item, idx) => (
+              {filteredItems.slice(0, renderLimit).map((item, idx) => (
                 <GalleryCard
                   lang={lang}
                   key={item.id}
@@ -1712,6 +1838,9 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
                   actions={cardActions}
                 />
               ))}
+              {filteredItems.length > renderLimit && (
+                <div ref={gallerySentinelRef} className="dsh-ig-gallery-sentinel" aria-hidden="true" />
+              )}
             </div>
           )
         ) : activeTab === 'inspiration' ? (
@@ -1894,6 +2023,69 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
                   : selectedIds.size === 1
                   ? t('confirmDeleteSingle')
                   : t('confirmBatchDelete', { count: String(selectedIds.size) })}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 5b. Storage usage modal (read-only) */}
+      {showStorageModal && (
+        <div
+          className="dsh-ig-modal-backdrop"
+          onClick={() => {
+            if (!isStorageScanning) setShowStorageModal(false)
+          }}
+        >
+          <div className="dsh-ig-modal-box" onClick={(e) => e.stopPropagation()}>
+            <div className="dsh-ig-modal-header">
+              <div className="dsh-ig-regenerate-modal-icon"><HardDrive size={18} /></div>
+              <div className="dsh-ig-modal-title">{t('storageTitle')}</div>
+            </div>
+            <div className="dsh-ig-modal-body">
+              {isStorageScanning || storageStats === null ? (
+                <p className="dsh-ig-modal-desc">{t('storageScanning')}</p>
+              ) : (
+                <>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+                      <span>{t('storageAttachments')}</span>
+                      <span>{t('storageItems', { n: String(storageStats.attachments.count) })} · {formatStorageBytes(storageStats.attachments.bytes)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+                      <span>{t('storageThumbs')}</span>
+                      <span>{t('storageItems', { n: String(storageStats.thumbs.count) })} · {formatStorageBytes(storageStats.thumbs.bytes)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+                      <span>{t('storageRequestCache')}</span>
+                      <span>{t('storageItems', { n: String(storageStats.requestImages.count) })} · {formatStorageBytes(storageStats.requestImages.bytes)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+                      <span>{t('storageOrphans')}</span>
+                      <span>{t('storageItems', { n: String(storageStats.orphans.count) })} · {formatStorageBytes(storageStats.orphans.bytes)}</span>
+                    </div>
+                  </div>
+                  <p className="dsh-ig-modal-desc">{t('storageThumbsHint')}</p>
+                  <p className="dsh-ig-modal-desc">{t('storageOrphanHint')}</p>
+                  <button
+                    type="button"
+                    className="dsh-ig-modal-btn"
+                    onClick={exportOrphanList}
+                    disabled={storageStats.orphans.count === 0}
+                  >
+                    {t('storageExport')}
+                  </button>
+                </>
+              )}
+            </div>
+            <div className="dsh-ig-modal-footer">
+              <button
+                type="button"
+                className="dsh-ig-modal-btn dsh-ig-modal-btn-cancel"
+                onClick={() => setShowStorageModal(false)}
+                disabled={isStorageScanning}
+              >
+                {t('storageClose')}
               </button>
             </div>
           </div>

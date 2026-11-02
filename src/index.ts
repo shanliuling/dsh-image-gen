@@ -20,13 +20,14 @@ import { IMAGE_ROUTE, DELETE_ROUTE, SAVE_WORKSPACE_ROUTE, imageAttachmentFromMet
 import { serveImport } from './import-route.js'
 import { serveZip } from './zip-route.js'
 import { serveZipCancel, serveZipProgress } from './zip-progress.js'
+import { serveStorageStats } from './storage-stats.js'
 import { servePreview, serveThumb } from './thumb-route.js'
 import { pruneRequestImageCache, resolveRequestImageCacheDir } from './request-cache.js'
 import { editOpenAICompatibleImage, generateOpenAICompatibleImage } from './openai-compatible.js'
 import { type ResolvedReferenceImage, resolveReferenceImages } from './reference-image.js'
 import { editSeedreamImage } from './seedream.js'
 import { generateSubscriptionImage, registerSubscriptionRoutes, subscriptionToolParameters, SubscriptionManager } from './subscription.js'
-import { CANVAS_STATE_ROUTE, DEFAULT_CLOUD_TIMEOUT_MS, IMAGE_GENERATION_NAMESPACE, IMAGE_PROVIDERS, IMPORT_ROUTE, INSPIRATION_ROUTE, PREVIEW_ROUTE, STUDIO_ROUTE, TEST_CONNECTION_ROUTE, THUMB_ROUTE, ZIP_CANCEL_ROUTE, ZIP_PROGRESS_ROUTE, ZIP_ROUTE, mergeComfyUIPrompt, resolveOpenAICompatChannel, type ImageProvider } from './shared.js'
+import { CANVAS_STATE_ROUTE, DEFAULT_CLOUD_TIMEOUT_MS, IMAGE_GENERATION_NAMESPACE, IMAGE_PROVIDERS, IMPORT_ROUTE, INSPIRATION_ROUTE, PREVIEW_ROUTE, STORAGE_STATS_ROUTE, STUDIO_ROUTE, TEST_CONNECTION_ROUTE, THUMB_ROUTE, ZIP_CANCEL_ROUTE, ZIP_PROGRESS_ROUTE, ZIP_ROUTE, mergeComfyUIPrompt, resolveOpenAICompatChannel, type ImageProvider } from './shared.js'
 import { createInspirationRoute } from './inspiration-route.js'
 import { BUNDLED_INSPIRATION_CATALOG, searchInspirationCases } from './inspiration.js'
 import { generateFromStudio, describeStudio } from './studio.js'
@@ -248,6 +249,10 @@ export function apply(ctx: Context, config: Config = {}): void {
       kind: 'exact', path: ZIP_CANCEL_ROUTE,
       handler: (req, res) => serveZipCancel(req, res),
     }), 'dsh-image-gen: zip cancel route')
+    webCtx.effect(() => register({
+      kind: 'exact', path: STORAGE_STATS_ROUTE,
+      handler: (req, res) => serveStorageStats(req, res),
+    }), 'dsh-image-gen: storage stats route')
     webCtx.effect(() => register({
       kind: 'exact', path: DELETE_ROUTE,
       handler: (req, res) => serveDelete(req, res, {

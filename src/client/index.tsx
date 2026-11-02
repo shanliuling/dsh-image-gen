@@ -715,8 +715,8 @@ const STYLE = `
 .dsh-ig-studio-tab-btn.is-active{color:var(--dsw-alias-brand-primary,#2563eb);font-weight:600;background:rgba(37,99,235,0.08)}
 
 /* 2. Secondary Filter & Search Toolbar */
-.dsh-ig-studio-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 24px;background:var(--dsw-alias-bg-layer-1,#ffffff);border-bottom:1px solid var(--dsw-alias-border-l2,#f1f5f9);flex-shrink:0;flex-wrap:wrap}
-.dsh-ig-studio-toolbar-left{display:flex;align-items:center;gap:10px;flex-wrap:wrap;flex:1;min-width:0}
+.dsh-ig-studio-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 24px;background:var(--dsw-alias-bg-layer-1,#ffffff);border-bottom:1px solid var(--dsw-alias-border-l2,#f1f5f9);flex-shrink:0;flex-wrap:nowrap;min-width:0}
+.dsh-ig-studio-toolbar-left{display:flex;align-items:center;gap:10px;flex-wrap:nowrap;flex:1;min-width:0}
 .dsh-ig-studio-toolbar-right{display:flex;align-items:center;gap:10px;flex-shrink:0}
 
 /* Modern Custom Select (Removes OS default arrows & ugly borders) */
@@ -726,7 +726,7 @@ const STYLE = `
 .dsh-ig-studio-select-sort{font-weight:500}
 
 /* Unified Search Input */
-.dsh-ig-studio-search-wrap{position:relative;display:flex;align-items:center;min-width:190px;max-width:320px;flex:1}
+.dsh-ig-studio-search-wrap{position:relative;display:flex;align-items:center;min-width:140px;max-width:320px;flex:1}
 .dsh-ig-studio-search-icon{position:absolute;left:10px;color:var(--dsw-alias-label-tertiary,#94a3b8);pointer-events:none}
 .dsh-ig-studio-search-input{width:100%;height:32px;line-height:30px;padding:0 12px 0 32px;font-size:12.5px;border:1px solid var(--dsw-alias-border-l2,#e2e8f0);border-radius:6px;background-color:var(--dsw-alias-bg-layer-2,#ffffff);color:inherit;outline:none;box-sizing:border-box;transition:border-color .15s ease,box-shadow .15s ease}
 .dsh-ig-studio-search-input:hover{border-color:var(--dsw-alias-border-l1,#cbd5e1)}
@@ -736,6 +736,7 @@ const STYLE = `
 /* 3. Grid & Responsive Cards */
 .dsh-ig-gallery-page-body{flex:1;overflow-y:auto;padding:20px 24px}
 .dsh-ig-gallery-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:18px}
+.dsh-ig-gallery-sentinel{grid-column:1/-1;height:1px;width:100%}
 .dsh-ig-gallery-card{background:var(--dsw-alias-bg-layer-2,#ffffff);border:1px solid var(--dsw-alias-border-l2,#e2e8f0);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease;content-visibility:auto;contain-intrinsic-size:auto 280px}
 .dsh-ig-gallery-card:hover{transform:translateY(-2px);box-shadow:0 10px 20px -5px rgba(0,0,0,0.06),0 4px 6px -2px rgba(0,0,0,0.03);border-color:var(--dsw-alias-border-l1,#cbd5e1)}
 .dsh-ig-gallery-card-media{position:relative;width:100%;aspect-ratio:1/1;background:#f1f5f9;overflow:hidden;display:flex;align-items:center;justify-content:center}

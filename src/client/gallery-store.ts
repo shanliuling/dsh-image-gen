@@ -154,6 +154,40 @@ async function loadTombstones(db: IDBDatabase): Promise<Set<string>> {
   })
 }
 
+/** Tombstones younger than this still protect multi-window deletes. */
+export const TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60 * 1000
+
+/**
+ * Drop tombstones older than the retention window so the table (and the set
+ * consulted on every save) does not grow without bound. Returns the number of
+ * removed entries.
+ */
+export async function pruneTombstones(maxAgeMs = TOMBSTONE_TTL_MS): Promise<number> {
+  try {
+    const db = await getDB()
+    if (!db.objectStoreNames.contains(TOMBSTONE_STORE)) return 0
+    const records = await new Promise<{ id?: string; deletedAt?: number }[]>((resolve, reject) => {
+      const req = db.transaction(TOMBSTONE_STORE, 'readonly').objectStore(TOMBSTONE_STORE).getAll()
+      req.onsuccess = () => resolve((req.result ?? []) as { id?: string; deletedAt?: number }[])
+      req.onerror = () => reject(req.error)
+    })
+    const cutoff = Date.now() - maxAgeMs
+    const doomed = records.filter(record => typeof record.deletedAt === 'number' && record.deletedAt < cutoff)
+    if (doomed.length === 0) return 0
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(TOMBSTONE_STORE, 'readwrite')
+      const store = tx.objectStore(TOMBSTONE_STORE)
+      for (const record of doomed) store.delete(String(record.id))
+      tx.oncomplete = () => resolve()
+      tx.onerror = () => reject(tx.error)
+    })
+    tombstonesCache = null
+    return doomed.length
+  } catch {
+    return 0
+  }
+}
+
 type GalleryListener = () => void
 const listeners = new Set<GalleryListener>()
 
@@ -328,6 +362,21 @@ export async function putGalleryThumb(key: string, blob: Blob): Promise<void> {
     })
   } catch (err) {
     console.warn('[dsh-image-gen] Failed to cache gallery thumbnail:', err)
+  }
+}
+
+/** Aggregate size of the disposable thumbnail cache (storage panel). */
+export async function getGalleryThumbStats(): Promise<{ count: number; bytes: number }> {
+  try {
+    const db = await getThumbDB()
+    const records = await new Promise<{ bytes?: number }[]>((resolve, reject) => {
+      const req = db.transaction(THUMB_STORE, 'readonly').objectStore(THUMB_STORE).getAll()
+      req.onsuccess = () => resolve((req.result ?? []) as { bytes?: number }[])
+      req.onerror = () => reject(req.error)
+    })
+    return { count: records.length, bytes: records.reduce((sum, record) => sum + (typeof record.bytes === 'number' ? record.bytes : 0), 0) }
+  } catch {
+    return { count: 0, bytes: 0 }
   }
 }
 
