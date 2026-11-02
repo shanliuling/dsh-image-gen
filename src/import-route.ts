@@ -9,6 +9,8 @@ export interface ImportRouteDeps {
   maxImageBytes: number
   /** Accepted media types from the host attachment limits. */
   mediaTypes: readonly string[]
+  /** Optional background warm-up for the gallery thumbnail of a saved image. */
+  warmThumbnail?(ref: ImageAttachmentRef): void
 }
 
 interface ImportRequestItem {
@@ -98,6 +100,9 @@ export async function serveImport(req: IncomingMessage, res: ServerResponse, dep
           ...(typeof record.name === 'string' && record.name.length > 0 ? { name: record.name } : {}),
         })
         saved.push({ attachment })
+        try {
+          deps.warmThumbnail?.(attachment)
+        } catch { /* warm-up is best effort */ }
       } catch {
         // Host save errors may carry internal details; surface a stable code
         // instead, matching the canvas upload route's generic failure answer.

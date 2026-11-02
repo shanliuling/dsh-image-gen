@@ -3,9 +3,9 @@
  * Fully i18n-reactive (Chinese & English) with modular tabs, multi-dimensional filters,
  * responsive image grid, and placeholder routes.
  */
-import { useCallback, useDeferredValue, useEffect, useState, useMemo, useRef, type FC, type MouseEvent } from 'react'
+import { memo, useCallback, useDeferredValue, useEffect, useState, useMemo, useRef, type FC, type MouseEvent } from 'react'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import { DELETE_ROUTE, IMPORT_ROUTE, ZIP_ROUTE, thumbUrlFor, type ImageProvider } from '../shared.js'
+import { DELETE_ROUTE, IMPORT_ROUTE, ZIP_ROUTE, imageUrlFor, thumbUrlFor, type ImageProvider } from '../shared.js'
 import {
   Image as ImageIcon,
   SlidersHorizontal,
@@ -573,6 +573,15 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   const previewUrlRef = useRef<string | null>(null)
   previewUrlRef.current = previewUrl
   const [previewBlob, setPreviewBlob] = useState<Blob | null>(null)
+  // Stable dispatchers keep memoized cards from re-rendering on selection changes.
+  const cardActionsRef = useRef<GalleryCardActions | null>(null)
+  const cardActions = useMemo<GalleryCardActions>(() => ({
+    click: (item, index, event, blob) => cardActionsRef.current?.click(item, index, event, blob),
+    toggleSelect: (item, index, event) => cardActionsRef.current?.toggleSelect(item, index, event),
+    requestDelete: item => cardActionsRef.current?.requestDelete(item),
+    preview: (item, blob) => cardActionsRef.current?.preview(item, blob),
+    toast: message => cardActionsRef.current?.toast(message),
+  }), [])
   const [toast, setToast] = useState<string | null>(null)
 
   // In-Gallery Regenerate State
@@ -609,15 +618,18 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   }, [locale])
 
   const dict = lang === 'en' ? DICT.en : DICT.zh
-  const t = (key: DictKey, params?: Record<string, string>): string => {
-    let text: string = dict[key] || DICT.zh[key] || key
-    if (params) {
-      for (const [k, v] of Object.entries(params)) {
-        text = text.replace(`{${k}}`, v)
+  // Stable identity: memoized cards only re-render when their own state changes.
+  const t = useMemo(() => {
+    return (key: DictKey, params?: Record<string, string>): string => {
+      let text: string = dict[key] || DICT.zh[key] || key
+      if (params) {
+        for (const [k, v] of Object.entries(params)) {
+          text = text.replace(`{${k}}`, v)
+        }
       }
+      return text
     }
-    return text
-  }
+  }, [dict])
 
   const showToast = (msg: string) => {
     setToast(msg)
@@ -842,27 +854,11 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
       return
     }
 
-    setPreviewLoading(true)
     setPreviewBlob(null)
-    setPreviewUrl(null)
-
-    const controller = new AbortController()
-    abortControllerRef.current = controller
-
-    fetchAttachmentBlob(item.attachment)
-      .then((fetchedBlob) => {
-        if (controller.signal.aborted) return
-        const url = URL.createObjectURL(fetchedBlob)
-        previewUrlRef.current = url
-        setPreviewBlob(fetchedBlob)
-        setPreviewUrl(url)
-        setPreviewLoading(false)
-      })
-      .catch((err) => {
-        if (controller.signal.aborted) return
-        setPreviewLoading(false)
-        showToast(t('copyFailed'))
-      })
+    // The cacheable GET route paints progressively and avoids a second copy in
+    // memory; the lightbox falls back to the blob form if the route is missing.
+    setPreviewLoading(true)
+    setPreviewUrl(imageUrlFor(item.attachment))
   }
 
   // Close preview and revoke object URL
@@ -1359,6 +1355,14 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
     }
   }
 
+  cardActionsRef.current = {
+    click: handleCardClick,
+    toggleSelect: (item, index, event) => handleToggleSelect(item.id, index, event),
+    requestDelete: item => requestSingleDelete(item),
+    preview: (item, blob) => openPreviewItem(item, blob),
+    toast: showToast,
+  }
+
   return (
     <div className={`dsh-ig-gallery-page${inSidebar ? ' dsh-ig-page-in-sidebar' : ''}`} data-conversation-composer-overlay="">
       {/* 1. Top Navigation Tabs */}
@@ -1563,11 +1567,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
                   isManageMode={isManageMode}
                   isSelected={selectedIds.has(item.id)}
                   t={t}
-                  onClick={(e, blob) => handleCardClick(item, idx, e, blob)}
-                  onToggleSelect={(e) => handleToggleSelect(item.id, idx, e)}
-                  onRequestDelete={() => requestSingleDelete(item)}
-                  onPreview={(blob) => openPreviewItem(item, blob)}
-                  onToast={showToast}
+                  actions={cardActions}
                 />
               ))}
             </div>
@@ -1861,15 +1861,26 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
 
           {/* Centered Image / Loading state */}
           <div className="dsh-ig-lightbox-img-wrap" onClick={(e) => e.stopPropagation()}>
-            {previewLoading ? (
-              <div className="dsh-ig-lightbox-loading">
-                <div className="dsh-ig-lightbox-spinner" />
-              </div>
-            ) : previewUrl ? (
+            {/* Render the image first: the GET route paints progressively, and
+                gating it on previewLoading left the spinner on screen forever
+                because the <img> never mounted to fire onLoad. */}
+            {previewUrl ? (
               <img
                 className="dsh-ig-lightbox-img"
                 src={previewUrl}
                 alt={previewItem.prompt}
+                onLoad={() => setPreviewLoading(false)}
+                onError={() => {
+                  fetchAttachmentBlob(previewItem.attachment)
+                    .then((fetched) => {
+                      const objectUrl = URL.createObjectURL(fetched)
+                      previewUrlRef.current = objectUrl
+                      setPreviewBlob(fetched)
+                      setPreviewUrl(objectUrl)
+                      setPreviewLoading(false)
+                    })
+                    .catch(() => setPreviewLoading(false))
+                }}
               />
             ) : null}
           </div>
@@ -1901,9 +1912,13 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
                 className="dsh-ig-lightbox-btn"
                 title={t('copyImg')}
                 onClick={async () => {
-                  if (!previewBlob) return
-                  const ok = await copyImageBlob(previewBlob)
-                  showToast(ok ? t('copiedImage') : t('copyFailed'))
+                  try {
+                    const target = previewBlob ?? await fetchAttachmentBlob(previewItem.attachment)
+                    const ok = await copyImageBlob(target)
+                    showToast(ok ? t('copiedImage') : t('copyFailed'))
+                  } catch {
+                    showToast(t('copyFailed'))
+                  }
                 }}
               >
                 <Copy size={14} />
@@ -1918,7 +1933,8 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
                   if (!previewUrl) return
                   const a = document.createElement('a')
                   a.href = previewUrl
-                  a.download = `dsh-${previewItem.provider}-${previewItem.id}.png`
+                  const extension = previewItem.attachment.mediaType === 'image/jpeg' ? 'jpg' : previewItem.attachment.mediaType === 'image/webp' ? 'webp' : previewItem.attachment.mediaType === 'image/gif' ? 'gif' : 'png'
+                  a.download = `dsh-${previewItem.provider}-${previewItem.id}.${extension}`
                   document.body.appendChild(a)
                   a.click()
                   document.body.removeChild(a)
@@ -1974,6 +1990,15 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   )
 }
 
+/** Stable dispatchers shared by every card, so memoized cards never re-render for selection changes. */
+interface GalleryCardActions {
+  click: (item: GalleryItem, index: number, event: MouseEvent, blob?: Blob) => void
+  toggleSelect: (item: GalleryItem, index: number, event: MouseEvent) => void
+  requestDelete: (item: GalleryItem) => void
+  preview: (item: GalleryItem, blob?: Blob) => void
+  toast: (message: string) => void
+}
+
 interface GalleryCardProps {
   lang: 'zh' | 'en'
   item: GalleryItem
@@ -1981,26 +2006,18 @@ interface GalleryCardProps {
   isManageMode: boolean
   isSelected: boolean
   t: (key: DictKey, params?: Record<string, string>) => string
-  onClick: (e: MouseEvent, blob?: Blob) => void
-  onToggleSelect: (e: MouseEvent) => void
-  onRequestDelete: () => void
-  onPreview: (blob: Blob) => void
-  onToast: (msg: string) => void
+  actions: GalleryCardActions
 }
 
-const GalleryCard: FC<GalleryCardProps> = ({
+const GalleryCard = memo(function GalleryCard({
   lang,
   item,
-  index: _index,
+  index,
   isManageMode,
   isSelected,
   t,
-  onClick,
-  onToggleSelect,
-  onRequestDelete,
-  onPreview: _onPreview,
-  onToast,
-}) => {
+  actions,
+}: GalleryCardProps) {
   const [setCardRef, inView] = useInView<HTMLDivElement>()
   const [url, setUrl] = useState<string>()
   const [blob, setBlob] = useState<Blob>()
@@ -2070,9 +2087,9 @@ const GalleryCard: FC<GalleryCardProps> = ({
     e.stopPropagation()
     try {
       await navigator.clipboard.writeText(item.prompt)
-      onToast(t('copiedPrompt'))
+      actions.toast(t('copiedPrompt'))
     } catch {
-      onToast(t('copyFailed'))
+      actions.toast(t('copyFailed'))
     }
   }
 
@@ -2080,9 +2097,9 @@ const GalleryCard: FC<GalleryCardProps> = ({
     e.stopPropagation()
     try {
       const ok = await copyImageBlob(await ensureOriginal())
-      onToast(ok ? t('copiedImage') : t('copyFailed'))
+      actions.toast(ok ? t('copiedImage') : t('copyFailed'))
     } catch {
-      onToast(t('copyFailed'))
+      actions.toast(t('copyFailed'))
     }
   }
 
@@ -2105,7 +2122,7 @@ const GalleryCard: FC<GalleryCardProps> = ({
   const toggleFavorite = async (e: MouseEvent) => {
     e.stopPropagation()
     const nextStatus = await toggleFavoriteGalleryItem(item.id)
-    onToast(nextStatus ? t('favoriteAdded') : t('favoriteRemoved'))
+    actions.toast(nextStatus ? t('favoriteAdded') : t('favoriteRemoved'))
   }
 
   // Label for top badge: show model or fallback to provider
@@ -2115,7 +2132,7 @@ const GalleryCard: FC<GalleryCardProps> = ({
     <div
       ref={setCardRef}
       className={`dsh-ig-gallery-card ${isSelected ? 'is-selected' : ''} ${isManageMode ? 'is-manage-mode' : ''}`}
-      onClick={(e) => onClick(e, blob)}
+      onClick={(e) => actions.click(item, index, e, blob)}
       onPointerEnter={() => {
         // Native drag-out needs the decoded original at dragstart, which cannot
         // await; prefetching on hover keeps the interaction synchronous.
@@ -2129,7 +2146,7 @@ const GalleryCard: FC<GalleryCardProps> = ({
           type="button"
           className={`dsh-ig-card-checkbox ${isSelected ? 'is-checked' : ''}`}
           title={isSelected ? t('clearSelect') : t('manage')}
-          onClick={onToggleSelect}
+          onClick={(e) => actions.toggleSelect(item, index, e)}
         >
           {isSelected && <Check size={11} strokeWidth={3} />}
         </button>
@@ -2160,7 +2177,7 @@ const GalleryCard: FC<GalleryCardProps> = ({
 
         {/* Hover quick action toolbar */}
         <div className="dsh-ig-card-toolbar">
-          {!isManageMode && <GalleryCanvasButton item={item} lang={lang} className="dsh-ig-tool-btn" onToast={onToast} />}
+          {!isManageMode && <GalleryCanvasButton item={item} lang={lang} className="dsh-ig-tool-btn" onToast={actions.toast} />}
           <button
             type="button"
             className="dsh-ig-tool-btn"
@@ -2197,7 +2214,7 @@ const GalleryCard: FC<GalleryCardProps> = ({
             title={t('delete')}
             onClick={(e) => {
               e.stopPropagation()
-              onRequestDelete()
+              actions.requestDelete(item)
             }}
           >
             <Trash2 size={13} />
@@ -2242,7 +2259,7 @@ const GalleryCard: FC<GalleryCardProps> = ({
       </div>
     </div>
   )
-}
+})
 
 interface PlaceholderViewProps {
   icon: string

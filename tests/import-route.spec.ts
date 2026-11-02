@@ -140,6 +140,31 @@ describe('import route', () => {
     expect(result.failures[3].error).toContain('size-out-of-range')
   })
 
+  it('warms a thumbnail for every saved attachment', async () => {
+    const warmed: string[] = []
+    const warmServer = createServer((req, res) => {
+      void serveImport(req, res, {
+        saveImage: async () => attachmentRef('att-warm'),
+        maxImageBytes: 1024,
+        mediaTypes: ['image/png'],
+        warmThumbnail: ref => { warmed.push(String(ref.attachmentId)) },
+      })
+    })
+    await new Promise<void>(resolve => warmServer.listen(0, '127.0.0.1', resolve))
+    try {
+      const port = (warmServer.address() as AddressInfo).port
+      const response = await fetch('http://127.0.0.1:' + String(port) + '/', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ images: [{ data: PNG_BASE64, mediaType: 'image/png' }] }),
+      })
+      expect(response.status).toBe(200)
+      expect(warmed).toEqual(['att-warm'])
+    } finally {
+      await new Promise<void>(resolve => { warmServer.close(() => { resolve() }) })
+    }
+  })
+
   it('reports saveImage errors as a stable code without leaking details', async () => {
     await listen()
     failNextSave = new Error('disk-full /var/lib/postgresql/pgdata volume 7f3a')

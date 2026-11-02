@@ -189,6 +189,11 @@ export function apply(ctx: Context, config: Config = {}): void {
         saveImage: image => ctx.attachments.saveImage(image),
         maxImageBytes: ctx.attachments.imageLimits.maxImageBytes,
         mediaTypes: ctx.attachments.imageLimits.mediaTypes,
+        // Warm the 320 px gallery tile while the import response is still fresh,
+        // so the first gallery scroll hits the on-disk request-image cache.
+        warmThumbnail: ref => {
+          void ctx.attachments.readImageRequest(ref, { width: 320, height: 320, maxBytes: 96 * 1024 }).catch(() => undefined)
+        },
       }),
     }), 'dsh-image-gen: import route')
     webCtx.effect(() => register({
