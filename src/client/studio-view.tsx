@@ -1065,6 +1065,32 @@ export const StudioView: FC<{
     flash(saved.length > 1 ? t('savedSelected', { count: String(saved.length) }) : t('savedToGallery'))
   }
 
+  // Workbench generations land in the gallery list automatically: the agent
+  // path saves tool results as they arrive, so the manual path matches
+  // instead of requiring the explicit save click (see #99).
+  useEffect(() => {
+    if (pendingGalleryItems.length === 0) return
+    let cancelled = false
+    void (async () => {
+      const settled = await Promise.allSettled(pendingGalleryItems.map(saveGalleryEntry))
+      if (cancelled) return
+      const saved = settled.flatMap(result => result.status === 'fulfilled' ? [result.value] : [])
+      if (saved.length === 0) return
+      const savedById = new Map(saved.map(item => [item.id, item]))
+      setCurrentBatch(current => current?.map(item => savedById.get(item.id) ?? item) ?? null)
+      setError(null)
+      pushTlLandings(saved.map(item => ({
+        galleryId: item.id,
+        attachment: item.attachment,
+        prompt: item.prompt,
+        provider: item.provider,
+        model: item.model,
+      })))
+      flash(t('savedToGallery'))
+    })()
+    return () => { cancelled = true }
+  }, [pendingGalleryItems])
+
   const handleConfirmDelete = async () => {
     if (selected === null) return
     const idToDelete = selected.id

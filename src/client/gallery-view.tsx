@@ -403,8 +403,8 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   const [sortBy, setSortBy] = useState<SortKey>('newest')
   const [onlyCurrentWorkspace, setOnlyCurrentWorkspace] = useState<boolean>(() => {
     try {
-      const stored = localStorage.getItem('dsh-ig-only-current-workspace')
-      return stored === null ? true : stored === 'true'
+      const stored = localStorage.getItem('dsh-ig-only-current-workspace-v2')
+      return stored === null ? false : stored === 'true'
     } catch {
       return true
     }
@@ -414,7 +414,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
 
   useEffect(() => {
     try {
-      localStorage.setItem('dsh-ig-only-current-workspace', String(onlyCurrentWorkspace))
+      localStorage.setItem('dsh-ig-only-current-workspace-v2', String(onlyCurrentWorkspace))
     } catch {}
   }, [onlyCurrentWorkspace])
 
