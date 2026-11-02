@@ -36,6 +36,7 @@ import {
   galleryThumbKey,
   getGalleryThumb,
   putGalleryThumb,
+  pruneGalleryThumbs,
   GALLERY_THUMB_WIDTH,
   type GalleryItem,
 } from './gallery-store.js'
@@ -192,6 +193,7 @@ const DICT = {
     batchDownloadSingleToast: '已下载 1 张图片',
     batchDownloadZipToast: '已开始下载 {count} 张图片（ZIP）',
     batchDownloadFailed: '批量下载失败，请重试',
+    batchDownloadLimit: '选择过大：一次最多 2000 张、总大小不超过 4GB，请分批下载',
     batchDelete: '批量删除',
     batchDeleteTitle: '确认批量删除选中的 {count} 张图片？',
     batchDeleteTitleSingle: '确认从画廊中删除这张图片？',
@@ -303,6 +305,7 @@ const DICT = {
     batchDownloadSingleToast: 'Downloaded 1 image',
     batchDownloadZipToast: 'Started downloading {count} images (ZIP)',
     batchDownloadFailed: 'Batch download failed, please retry',
+    batchDownloadLimit: 'Selection too large: up to 2000 images and 4 GB per export. Please split it.',
     batchDelete: 'Batch Delete',
     batchDeleteTitle: 'Delete {count} selected images?',
     batchDeleteTitleSingle: 'Delete this image from gallery?',
@@ -704,9 +707,16 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   // Load items from IndexedDB
   useEffect(() => {
     let active = true
+    let pruned = false
     const load = () => {
       void getGalleryItems().then((res) => {
-        if (active) setItems(res)
+        if (!active) return
+        setItems(res)
+        if (!pruned) {
+          // One sweep per mount drops thumbnails left behind by older deletions.
+          pruned = true
+          void pruneGalleryThumbs(res.map(item => String(item.attachment.attachmentId)))
+        }
       })
     }
     load()
@@ -1171,6 +1181,14 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
         downloadBlobUrl(objectUrl, `dsh-${single.provider}-${single.id}.png`)
         URL.revokeObjectURL(objectUrl)
         showToast(t('batchDownloadSingleToast'))
+        return
+      }
+
+      // Reject oversized selections here: the host answers 413 inside the
+      // hidden iframe, where the user would never see it.
+      const totalBytes = itemsToDownload.reduce((sum, item) => sum + (item.attachment.bytes ?? 0), 0)
+      if (itemsToDownload.length > 2000 || totalBytes > 0xffff_ff00) {
+        showToast(t('batchDownloadLimit'))
         return
       }
 
