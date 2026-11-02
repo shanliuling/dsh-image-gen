@@ -46,6 +46,12 @@ const TOMBSTONE_STORE = 'gallery_tombstones'
 const FAV_PROMPT_STORE = 'favorite_prompts'
 const FAV_FOLDER_STORE = 'favorite_folders'
 
+// Thumbnails live in their own database: the cache is disposable, and keeping it
+// out of the gallery DB avoids an irreversible version bump for existing users.
+const THUMB_DB_NAME = 'dsh_image_gen_thumbs'
+const THUMB_DB_VERSION = 1
+const THUMB_STORE = 'thumbs'
+
 /** A user-created folder grouping favorite prompts. */
 export interface FavoriteFolder {
   id: string
@@ -250,6 +256,107 @@ export async function getGalleryItems(): Promise<GalleryItem[]> {
   }
 }
 
+/** Width, in CSS pixels, of the thumbnail cached for the grid. */
+export const GALLERY_THUMB_WIDTH = 320
+
+/** Cache key for one attachment thumbnail. */
+export function galleryThumbKey(attachmentId: string, width = GALLERY_THUMB_WIDTH): string {
+  return `${attachmentId}@${width}`
+}
+
+let thumbDbPromise: Promise<IDBDatabase> | null = null
+
+function getThumbDB(): Promise<IDBDatabase> {
+  if (thumbDbPromise) return thumbDbPromise
+  thumbDbPromise = new Promise<IDBDatabase>((resolve, reject) => {
+    if (typeof indexedDB === 'undefined') {
+      reject(new Error('IndexedDB is not supported in this environment.'))
+      return
+    }
+    const request = indexedDB.open(THUMB_DB_NAME, THUMB_DB_VERSION)
+    request.onupgradeneeded = () => {
+      const db = request.result
+      if (!db.objectStoreNames.contains(THUMB_STORE)) {
+        db.createObjectStore(THUMB_STORE, { keyPath: 'key' })
+      }
+    }
+    request.onsuccess = () => {
+      const db = request.result
+      db.onversionchange = () => {
+        db.close()
+        thumbDbPromise = null
+      }
+      resolve(db)
+    }
+    request.onerror = () => {
+      thumbDbPromise = null
+      reject(request.error)
+    }
+  })
+  return thumbDbPromise
+}
+
+/** Read a cached thumbnail; resolves undefined when it was never generated. */
+export async function getGalleryThumb(key: string): Promise<Blob | undefined> {
+  try {
+    const db = await getThumbDB()
+    return await new Promise<Blob | undefined>((resolve) => {
+      const req = db.transaction(THUMB_STORE, 'readonly').objectStore(THUMB_STORE).get(key)
+      req.onsuccess = () => resolve((req.result as { blob?: Blob } | undefined)?.blob)
+      req.onerror = () => resolve(undefined)
+    })
+  } catch {
+    return undefined
+  }
+}
+
+/** Persist a generated thumbnail. Failures are non-fatal: the grid falls back to the original. */
+export async function putGalleryThumb(key: string, blob: Blob): Promise<void> {
+  try {
+    const db = await getThumbDB()
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(THUMB_STORE, 'readwrite')
+      tx.objectStore(THUMB_STORE).put({ key, blob, bytes: blob.size, createdAt: Date.now() })
+      tx.oncomplete = () => resolve()
+      tx.onerror = () => reject(tx.error)
+    })
+  } catch (err) {
+    console.warn('[dsh-image-gen] Failed to cache gallery thumbnail:', err)
+  }
+}
+
+/** Drop cached thumbnails for deleted records. Best-effort: the cache is disposable. */
+async function deleteGalleryThumbs(ids: string[]): Promise<void> {
+  if (ids.length === 0) return
+  try {
+    const db = await getThumbDB()
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(THUMB_STORE, 'readwrite')
+      const store = tx.objectStore(THUMB_STORE)
+      for (const id of ids) store.delete(galleryThumbKey(id))
+      tx.oncomplete = () => resolve()
+      tx.onerror = () => reject(tx.error)
+    })
+  } catch {
+    // A stale thumbnail is harmless; it is evicted with the rest of the cache.
+  }
+}
+
+/** Drop every cached thumbnail (used when the gallery is cleared). */
+async function clearGalleryThumbs(): Promise<void> {
+  try {
+    const db = await getThumbDB()
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(THUMB_STORE, 'readwrite')
+      tx.objectStore(THUMB_STORE).clear()
+      tx.oncomplete = () => resolve()
+      tx.onerror = () => reject(tx.error)
+    })
+  } catch {
+    // The cache is disposable.
+  }
+}
+
 /**
  * Toggle favorite status of a gallery item.
  * Returns the new favorite status (true if favorited, false if unfavorited).
@@ -302,6 +409,7 @@ export async function deleteGalleryItem(id: string): Promise<void> {
     }
     tx.onerror = () => reject(tx.error)
   })
+  void deleteGalleryThumbs([id])
   notifyListeners()
 }
 
@@ -330,6 +438,7 @@ export async function bulkDeleteGalleryItems(ids: string[]): Promise<void> {
     tx.onerror = () => reject(tx.error ?? new Error('IndexedDB transaction failed'))
     tx.onabort = () => reject(tx.error ?? new Error('IndexedDB transaction aborted'))
   })
+  void deleteGalleryThumbs(ids)
   notifyListeners()
 }
 
@@ -375,6 +484,7 @@ export async function clearGallery(): Promise<void> {
       tx.oncomplete = () => resolve()
       tx.onerror = () => reject(tx.error)
     })
+    void clearGalleryThumbs()
     notifyListeners()
   } catch (err) {
     console.warn('[dsh-image-gen] Failed to clear gallery in IndexedDB:', err)

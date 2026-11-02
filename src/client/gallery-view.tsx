@@ -3,7 +3,7 @@
  * Fully i18n-reactive (Chinese & English) with modular tabs, multi-dimensional filters,
  * responsive image grid, and placeholder routes.
  */
-import { useCallback, useEffect, useState, useMemo, useRef, type FC, type MouseEvent } from 'react'
+import { useCallback, useDeferredValue, useEffect, useState, useMemo, useRef, type FC, type MouseEvent } from 'react'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { DELETE_ROUTE, IMPORT_ROUTE, type ImageProvider } from '../shared.js'
 import {
@@ -33,6 +33,10 @@ import {
   bulkSetFavoriteGalleryItems,
   toggleFavoriteGalleryItem,
   isItemInWorkspace,
+  galleryThumbKey,
+  getGalleryThumb,
+  putGalleryThumb,
+  GALLERY_THUMB_WIDTH,
   type GalleryItem,
 } from './gallery-store.js'
 import { StudioView, useInView } from './studio-view.js'
@@ -41,7 +45,7 @@ import { GalleryCanvasButton } from './tl/gallery-canvas-button.js'
 import { startGalleryImageDrag } from './tl/gallery-image-transfer.js'
 import { InspirationView } from './inspiration-view.js'
 import { evictAttachmentCache, fetchAttachmentBlob } from './image-cache.js'
-import { copyImageBlob, createZipBlob, downloadBlobUrl, type ZipFileInput } from './browser-image-utils.js'
+import { copyImageBlob, createImageThumbnail, createZipBlob, downloadBlobUrl, type ZipFileInput } from './browser-image-utils.js'
 import { conversationRegenerateRequest } from './conversation-regenerate.js'
 import { STUDIO_ROUTE, type StudioWorkspaceInfo, type StudioGenerateResponse } from '../shared.js'
 
@@ -412,6 +416,8 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   const [studioReference, setStudioReference] = useState<File | undefined>(undefined)
   const [items, setItems] = useState<GalleryItem[]>([])
   const [search, setSearch] = useState('')
+  // Keep typing responsive while the full list is re-filtered off the critical path.
+  const deferredSearch = useDeferredValue(search)
   const [selectedProvider, setSelectedProvider] = useState<string>('all')
   const [selectedRatio, setSelectedRatio] = useState<string>('all')
   const [sortBy, setSortBy] = useState<SortKey>('newest')
@@ -653,9 +659,16 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
       })
     }
     load()
-    const unsubscribe = subscribeGallery(load)
+    // Batch favourite/delete operations notify once per record; coalesce the
+    // full-table re-read so a bulk action does not re-render the grid N times.
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const unsubscribe = subscribeGallery(() => {
+      if (timer !== undefined) clearTimeout(timer)
+      timer = setTimeout(load, 120)
+    })
     return () => {
       active = false
+      if (timer !== undefined) clearTimeout(timer)
       unsubscribe()
     }
   }, [])
@@ -683,8 +696,8 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
           }
         }
         // Search filter (Prompt, model, tags, provider)
-        if (search.trim().length > 0) {
-          const q = search.trim().toLowerCase()
+        if (deferredSearch.trim().length > 0) {
+          const q = deferredSearch.trim().toLowerCase()
           const matchPrompt = item.prompt?.toLowerCase().includes(q)
           const matchModel = item.model?.toLowerCase().includes(q)
           const matchProvider = item.provider?.toLowerCase().includes(q)
@@ -707,7 +720,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
         }
         return b.createdAt - a.createdAt
       })
-  }, [items, activeTab, selectedProvider, selectedRatio, search, sortBy, onlyCurrentWorkspace, activeWorkspace])
+  }, [items, activeTab, selectedProvider, selectedRatio, deferredSearch, sortBy, onlyCurrentWorkspace, activeWorkspace])
 
   // Count of items belonging to the current workspace (before other search/filter criteria)
   const workspaceItemsCount = useMemo(() => {
@@ -1893,29 +1906,55 @@ const GalleryCard: FC<GalleryCardProps> = ({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string>()
 
+  // The original blob is only needed for drag-out, copy and download; the grid
+  // itself renders a cached 320px thumbnail.
+  const originalRef = useRef<Promise<Blob> | undefined>(undefined)
+  const ensureOriginal = useCallback(async (): Promise<Blob> => {
+    if (blob) return blob
+    const pending = originalRef.current ?? (originalRef.current = fetchAttachmentBlob(item.attachment))
+    try {
+      const original = await pending
+      setBlob(original)
+      return original
+    } finally {
+      originalRef.current = undefined
+    }
+  }, [blob, item.attachment])
+
   useEffect(() => {
     if (!inView) return
     let active = true
     let objectUrl: string | undefined
 
     setUrl(undefined)
-    setBlob(undefined)
     setError(undefined)
     setLoading(true)
-    void fetchAttachmentBlob(item.attachment)
-      .then((resBlob) => {
+    const thumbnailKey = galleryThumbKey(item.attachment.attachmentId)
+    void (async () => {
+      try {
+        const cached = await getGalleryThumb(thumbnailKey)
         if (!active) return
-        setBlob(resBlob)
-        objectUrl = URL.createObjectURL(resBlob)
+        if (cached) {
+          objectUrl = URL.createObjectURL(cached)
+          setUrl(objectUrl)
+          setLoading(false)
+          return
+        }
+        const original = await fetchAttachmentBlob(item.attachment)
+        if (!active) return
+        const thumbnail = await createImageThumbnail(original, GALLERY_THUMB_WIDTH)
+        if (!active) return
+        if (thumbnail !== original) void putGalleryThumb(thumbnailKey, thumbnail)
+        objectUrl = URL.createObjectURL(thumbnail)
         setUrl(objectUrl)
         setLoading(false)
-      })
-      .catch((err) => {
+      } catch (err) {
         if (active) {
           setError(err instanceof Error ? err.message : String(err))
           setLoading(false)
         }
-      })
+      }
+    })()
 
     return () => {
       active = false
@@ -1935,20 +1974,28 @@ const GalleryCard: FC<GalleryCardProps> = ({
 
   const copyImage = async (e: MouseEvent) => {
     e.stopPropagation()
-    if (!blob) return
-    const ok = await copyImageBlob(blob)
-    onToast(ok ? t('copiedImage') : t('copyFailed'))
+    try {
+      const ok = await copyImageBlob(await ensureOriginal())
+      onToast(ok ? t('copiedImage') : t('copyFailed'))
+    } catch {
+      onToast(t('copyFailed'))
+    }
   }
 
-  const downloadImage = (e: MouseEvent) => {
+  const downloadImage = async (e: MouseEvent) => {
     e.stopPropagation()
-    if (!url) return
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `dsh-${item.provider}-${item.id}.png`
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
+    try {
+      const objectUrl = URL.createObjectURL(await ensureOriginal())
+      const a = document.createElement('a')
+      a.href = objectUrl
+      a.download = `dsh-${item.provider}-${item.id}.png`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(objectUrl)
+    } catch {
+      // Nothing to download when the attachment cannot be fetched.
+    }
   }
 
   const toggleFavorite = async (e: MouseEvent) => {
@@ -1965,6 +2012,11 @@ const GalleryCard: FC<GalleryCardProps> = ({
       ref={setCardRef}
       className={`dsh-ig-gallery-card ${isSelected ? 'is-selected' : ''} ${isManageMode ? 'is-manage-mode' : ''}`}
       onClick={(e) => onClick(e, blob)}
+      onPointerEnter={() => {
+        // Native drag-out needs the decoded original at dragstart, which cannot
+        // await; prefetching on hover keeps the interaction synchronous.
+        void ensureOriginal()
+      }}
     >
       {/* Upper media container */}
       <div className="dsh-ig-gallery-card-media">
@@ -1986,6 +2038,7 @@ const GalleryCard: FC<GalleryCardProps> = ({
             src={url}
             alt={item.prompt}
             loading="lazy"
+            decoding="async"
             draggable={!isManageMode && Boolean(blob?.size)}
             onDragStart={event => {
               if (isManageMode) event.preventDefault()
@@ -1996,7 +2049,7 @@ const GalleryCard: FC<GalleryCardProps> = ({
 
         {/* Hover quick action toolbar */}
         <div className="dsh-ig-card-toolbar">
-          {!isManageMode && <GalleryCanvasButton item={item} lang={lang} disabled={!blob?.size} className="dsh-ig-tool-btn" onToast={onToast} />}
+          {!isManageMode && <GalleryCanvasButton item={item} lang={lang} className="dsh-ig-tool-btn" onToast={onToast} />}
           <button
             type="button"
             className="dsh-ig-tool-btn"
@@ -2011,7 +2064,9 @@ const GalleryCard: FC<GalleryCardProps> = ({
             type="button"
             className="dsh-ig-tool-btn"
             title={t('download')}
-            onClick={downloadImage}
+            onClick={(e) => {
+              void downloadImage(e)
+            }}
           >
             <Download size={13} />
           </button>

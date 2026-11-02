@@ -207,3 +207,34 @@ export function createZipBlob(files: ZipFileInput[]): Blob {
 
   return new Blob([...parts, ...centralRecords, eocd] as unknown as BlobPart[], { type: 'application/zip' })
 }
+
+/**
+ * Downscale an image for the gallery grid.
+ * Returns the source blob when the browser lacks the needed canvas APIs, so
+ * callers can always render something without extra capability branches.
+ */
+export async function createImageThumbnail(source: Blob, width: number): Promise<Blob> {
+  if (typeof createImageBitmap !== 'function') return source
+  try {
+    const bitmap = await createImageBitmap(source, { resizeWidth: width, resizeQuality: 'high' })
+    try {
+      const canvas: HTMLCanvasElement | OffscreenCanvas =
+        typeof OffscreenCanvas === 'function'
+          ? new OffscreenCanvas(bitmap.width, bitmap.height)
+          : Object.assign(document.createElement('canvas'), { width: bitmap.width, height: bitmap.height })
+      const context = canvas.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null
+      if (!context) return source
+      context.drawImage(bitmap, 0, 0)
+      if (canvas instanceof OffscreenCanvas) {
+        return await canvas.convertToBlob({ type: 'image/webp', quality: 0.82 })
+      }
+      return await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('thumbnail encode failed'))), 'image/webp', 0.82)
+      })
+    } finally {
+      bitmap.close?.()
+    }
+  } catch {
+    return source
+  }
+}
