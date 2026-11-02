@@ -20,6 +20,7 @@ import { IMAGE_ROUTE, DELETE_ROUTE, SAVE_WORKSPACE_ROUTE, imageAttachmentFromMet
 import { serveImport } from './import-route.js'
 import { serveZip } from './zip-route.js'
 import { serveThumb } from './thumb-route.js'
+import { pruneRequestImageCache, resolveRequestImageCacheDir } from './request-cache.js'
 import { editOpenAICompatibleImage, generateOpenAICompatibleImage } from './openai-compatible.js'
 import { type ResolvedReferenceImage, resolveReferenceImages } from './reference-image.js'
 import { editSeedreamImage } from './seedream.js'
@@ -159,6 +160,35 @@ export function apply(ctx: Context, config: Config = {}): void {
     setSource: source => { current = () => migrateOpenAICompatConfig(plainConfig(source())) },
     onChange: () => { void refreshImageToolContext() },
   })
+  // Request-image variants are generated on demand and cached forever by the
+  // attachment backend; keep that cache bounded without touching fresh files.
+  ctx.effect(() => {
+    const run = (): void => {
+      const config = current()
+      if (config.requestCachePrune === false) return
+      const ttlDays = config.requestCacheTtlDays ?? 14
+      const maxBytes = config.requestCacheMaxBytes ?? 256 * 1024 * 1024
+      const configured = config.requestCacheDir ?? ''
+      const dir = configured.length > 0 ? configured : resolveRequestImageCacheDir()
+      void pruneRequestImageCache({ dir, ttlMs: ttlDays * 24 * 60 * 60 * 1000, maxBytes })
+        .then(stats => {
+          if (stats.removed > 0) {
+            ctx.logger.info('dsh-image-gen: pruned ' + String(stats.removed) + ' request-image variants (' + String(stats.freedBytes) + ' bytes)')
+          }
+        })
+        .catch((error: unknown) => {
+          ctx.logger.warn('dsh-image-gen: request-image cache prune failed: ' + (error instanceof Error ? error.message : String(error)))
+        })
+    }
+    const startup = setTimeout(run, 30_000)
+    const daily = setInterval(run, 24 * 60 * 60 * 1000)
+    startup.unref()
+    daily.unref()
+    return () => {
+      clearTimeout(startup)
+      clearInterval(daily)
+    }
+  }, 'dsh-image-gen: request image cache upkeep')
   let webAdmission: WebAdmission | undefined
   ctx.inject(['connection'], (connectionCtx: Context) => {
     webAdmission = request => connectionCtx.connection.requestRejection(request)
