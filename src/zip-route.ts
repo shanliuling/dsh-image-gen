@@ -1,0 +1,152 @@
+/** Streaming ZIP export of gallery attachments. */
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { ImageAttachmentRef, StoredImageAttachment } from '@deepseek-ai/dsh-attachment'
+import { parseImageAttachmentRef } from './reference-image.js'
+import { ZipStreamWriter, ZipTooLargeError } from './zip-stream.js'
+
+/** Dependencies required by the gallery export route. */
+export interface ZipRouteDeps {
+  readImage(ref: ImageAttachmentRef): Promise<StoredImageAttachment>
+  /** Hard cap on how many attachments one archive may contain. */
+  maxEntries?: number
+  maxBodyBytes?: number
+}
+
+const DEFAULT_MAX_ENTRIES = 2000
+const DEFAULT_MAX_BODY_BYTES = 1024 * 1024
+/** Keep a margin below the 4 GiB ZIP32 ceiling before the first byte is sent. */
+const MAX_TOTAL_BYTES = 0xffff_ff00
+const IMAGE_EXTENSIONS: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+}
+
+interface ZipExportItem {
+  name?: string | undefined
+  attachment: ImageAttachmentRef
+}
+
+/**
+ * Package selected gallery images into one ZIP and stream it to the browser.
+ *
+ * The request is a plain form post (`items` = JSON array of {name, attachment}),
+ * so the renderer never builds the archive: the browser download manager owns
+ * the transfer while this route reads attachments one at a time.
+ */
+export async function serveZip(req: IncomingMessage, res: ServerResponse, deps: ZipRouteDeps): Promise<void> {
+  if (req.method !== 'POST') return jsonError(res, 405, 'method-not-allowed')
+  if (!(req.headers['content-type'] ?? '').toLowerCase().startsWith('application/x-www-form-urlencoded')) {
+    return jsonError(res, 415, 'form-required')
+  }
+  if (!sameOrigin(req)) return jsonError(res, 403, 'origin-rejected')
+
+  let body: string
+  try {
+    body = await readBody(req, deps.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES)
+  } catch {
+    return jsonError(res, 413, 'request-too-large')
+  }
+
+  const rawItems = new URLSearchParams(body).get('items')
+  if (rawItems === null) return jsonError(res, 400, 'invalid-request')
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(rawItems)
+  } catch {
+    return jsonError(res, 400, 'invalid-request')
+  }
+  if (!Array.isArray(parsed)) return jsonError(res, 400, 'invalid-request')
+
+  const items: ZipExportItem[] = []
+  for (const entry of parsed) {
+    const record = typeof entry === 'object' && entry !== null && !Array.isArray(entry)
+      ? entry as Record<string, unknown>
+      : undefined
+    const attachment = parseImageAttachmentRef(record?.attachment)
+    if (attachment === undefined) continue
+    items.push({
+      attachment,
+      ...(typeof record?.name === 'string' ? { name: record.name } : {}),
+    })
+  }
+  if (items.length === 0) return jsonError(res, 400, 'no-attachments')
+
+  const maxEntries = deps.maxEntries ?? DEFAULT_MAX_ENTRIES
+  if (items.length > maxEntries) return jsonError(res, 413, 'too-many-attachments')
+
+  let declaredBytes = 0
+  for (const item of items) declaredBytes += item.attachment.bytes
+  if (declaredBytes > MAX_TOTAL_BYTES) return jsonError(res, 413, 'archive-too-large')
+
+  const filename = 'dsh-gallery-' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '.zip'
+  res.writeHead(200, {
+    'content-type': 'application/zip',
+    'content-disposition': 'attachment; filename="' + filename + '"',
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+  })
+
+  const zip = new ZipStreamWriter(res)
+  const skipped: string[] = []
+  const onClose = (): void => zip.markClientClosed()
+  req.on('close', onClose)
+
+  try {
+    for (const item of items) {
+      const extension = IMAGE_EXTENSIONS[item.attachment.mediaType] ?? 'png'
+      const fallback = 'dsh-' + String(item.attachment.attachmentId).replace(/^sha256:/, '').slice(0, 8) + '.' + extension
+      try {
+        const stored = await deps.readImage(item.attachment)
+        await zip.add(item.name ?? fallback, Buffer.from(stored.data))
+      } catch (err) {
+        if (zip.bytesWritten > 0 && isClosed(zip, err)) break
+        skipped.push(String(item.attachment.attachmentId) + '\t' + (err instanceof Error ? err.message : 'unavailable'))
+      }
+    }
+    if (skipped.length > 0) {
+      await zip.add('skipped.txt', Buffer.from(skipped.join('\n') + '\n', 'utf8'))
+    }
+    await zip.finish()
+  } catch (err) {
+    if (!res.headersSent) {
+      jsonError(res, err instanceof ZipTooLargeError ? 413 : 500, err instanceof ZipTooLargeError ? 'archive-too-large' : 'zip-failed')
+      return
+    }
+    // Headers are gone: the only honest signal left is a broken download.
+    res.destroy(err instanceof Error ? err : undefined)
+  } finally {
+    req.off('close', onClose)
+  }
+}
+
+function isClosed(zip: ZipStreamWriter, err: unknown): boolean {
+  return zip.bytesWritten > 0 && err instanceof Error && err.message === 'client closed the download'
+}
+
+function sameOrigin(req: IncomingMessage): boolean {
+  const origin = req.headers.origin
+  const host = req.headers.host
+  if (origin !== undefined && host !== undefined && origin !== 'http://' + host && origin !== 'https://' + host) {
+    return false
+  }
+  return true
+}
+
+async function readBody(req: IncomingMessage, limit: number): Promise<string> {
+  const chunks: Buffer[] = []
+  let bytes = 0
+  for await (const chunk of req) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    bytes += buffer.byteLength
+    if (bytes > limit) throw new Error('request too large')
+    chunks.push(buffer)
+  }
+  return Buffer.concat(chunks).toString('utf8')
+}
+
+function jsonError(res: ServerResponse, status: number, code: string): void {
+  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+  res.end(JSON.stringify({ error: code }))
+}

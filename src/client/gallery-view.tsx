@@ -5,7 +5,7 @@
  */
 import { useCallback, useDeferredValue, useEffect, useState, useMemo, useRef, type FC, type MouseEvent } from 'react'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import { DELETE_ROUTE, IMPORT_ROUTE, type ImageProvider } from '../shared.js'
+import { DELETE_ROUTE, IMPORT_ROUTE, ZIP_ROUTE, type ImageProvider } from '../shared.js'
 import {
   Image as ImageIcon,
   SlidersHorizontal,
@@ -48,6 +48,57 @@ import { evictAttachmentCache, fetchAttachmentBlob } from './image-cache.js'
 import { copyImageBlob, createImageThumbnail, createZipBlob, downloadBlobUrl, type ZipFileInput } from './browser-image-utils.js'
 import { conversationRegenerateRequest } from './conversation-regenerate.js'
 import { STUDIO_ROUTE, type StudioWorkspaceInfo, type StudioGenerateResponse } from '../shared.js'
+
+let zipRouteProbe: Promise<boolean> | undefined
+
+/** Probe once whether this host can stream ZIP exports (older hosts 404 the route). */
+function canUseServerZip(): Promise<boolean> {
+  zipRouteProbe ??= fetch(ZIP_ROUTE, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: '',
+  })
+    .then(response => response.status !== 404)
+    .catch(() => false)
+  return zipRouteProbe
+}
+
+function extensionFor(mediaType: string): string {
+  if (mediaType === 'image/jpeg') return 'jpg'
+  if (mediaType === 'image/webp') return 'webp'
+  if (mediaType === 'image/gif') return 'gif'
+  return 'png'
+}
+
+/**
+ * Ask the host to stream the archive through a hidden form post.
+ * A real form navigation would replace the SPA, so the response lands in an
+ * off-screen iframe and the browser download manager owns the transfer.
+ */
+function postZipDownload(items: GalleryItem[]): void {
+  const payload = items.map(item => ({
+    name: `dsh-${item.provider}-${item.id.slice(0, 8)}.${extensionFor(item.attachment.mediaType)}`,
+    attachment: item.attachment,
+  }))
+  const sink = document.createElement('iframe')
+  sink.name = 'dsh-ig-zip-sink'
+  sink.hidden = true
+  document.body.appendChild(sink)
+  const form = document.createElement('form')
+  form.method = 'POST'
+  form.action = ZIP_ROUTE
+  form.target = sink.name
+  form.style.display = 'none'
+  const field = document.createElement('input')
+  field.type = 'hidden'
+  field.name = 'items'
+  field.value = JSON.stringify(payload)
+  form.appendChild(field)
+  document.body.appendChild(form)
+  form.submit()
+  form.remove()
+  window.setTimeout(() => sink.remove(), 60_000)
+}
 
 /** Host-provided locale service; `active` may be missing before the locale loads. */
 export interface LocaleService {
@@ -139,7 +190,7 @@ const DICT = {
     batchDownload: '批量下载',
     batchDownloading: '打包中 ({current}/{total})…',
     batchDownloadSingleToast: '已下载 1 张图片',
-    batchDownloadZipToast: '已打包下载 {count} 张图片',
+    batchDownloadZipToast: '已开始下载 {count} 张图片（ZIP）',
     batchDownloadFailed: '批量下载失败，请重试',
     batchDelete: '批量删除',
     batchDeleteTitle: '确认批量删除选中的 {count} 张图片？',
@@ -250,7 +301,7 @@ const DICT = {
     batchDownload: 'Batch Download',
     batchDownloading: 'Packaging ({current}/{total})…',
     batchDownloadSingleToast: 'Downloaded 1 image',
-    batchDownloadZipToast: 'Packaged & downloaded {count} images',
+    batchDownloadZipToast: 'Started downloading {count} images (ZIP)',
     batchDownloadFailed: 'Batch download failed, please retry',
     batchDelete: 'Batch Delete',
     batchDeleteTitle: 'Delete {count} selected images?',
@@ -1120,6 +1171,15 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
         downloadBlobUrl(objectUrl, `dsh-${single.provider}-${single.id}.png`)
         URL.revokeObjectURL(objectUrl)
         showToast(t('batchDownloadSingleToast'))
+        return
+      }
+
+      // Multiple images: the host streams the archive, so the renderer never
+      // builds or holds the ZIP. Older hosts without the route fall through to
+      // the in-page packer below.
+      if (await canUseServerZip()) {
+        postZipDownload(itemsToDownload)
+        showToast(t('batchDownloadZipToast', { count: String(itemsToDownload.length) }))
         return
       }
 

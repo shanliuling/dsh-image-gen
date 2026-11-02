@@ -13,6 +13,8 @@ export const STUDIO_ROUTE = '/plugins/dsh-image-gen/studio'
 export const INSPIRATION_ROUTE = '/plugins/dsh-image-gen/inspiration'
 /** Browser route used for saving generated images to workspace on demand. */
 export const SAVE_WORKSPACE_ROUTE = '/plugins/dsh-image-gen/save-workspace'
+/** Browser route that streams a ZIP export of the selected gallery images. */
+export const ZIP_ROUTE = '/plugins/dsh-image-gen/zip'
 /** Browser route the settings card probes provider connectivity through. */
 export const TEST_CONNECTION_ROUTE = '/plugins/dsh-image-gen/test'
 /** Non-secret settings capability probe, available even when the host cannot serve a form. */

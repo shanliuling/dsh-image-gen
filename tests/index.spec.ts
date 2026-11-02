@@ -4,6 +4,7 @@ import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { apply } from '../src/index.js'
+import { ZIP_ROUTE } from '../src/shared.js'
 import { createImageResultDefinition } from '../src/client/image-result-node.js'
 
 function attachment(id: string): ImageAttachmentRef {
@@ -255,8 +256,9 @@ describe('image tool registration', () => {
     const { ctx } = harnessContext()
     apply(ctx, { provider: 'google', saveToWorkspace: false })
     const paths = vi.mocked((ctx as unknown as { webServer: { register: (route: { path: string }) => unknown } }).webServer.register).mock.calls.map(([route]) => route.path)
-    expect(paths).toHaveLength(12)
-    expect(new Set(paths).size).toBe(12)
+    expect(paths).toHaveLength(13)
+    expect(new Set(paths).size).toBe(13)
+    expect(paths).toContain(ZIP_ROUTE)
   })
 
   it('serves reusable inspiration prompts to the agent with bounded hits', async () => {
