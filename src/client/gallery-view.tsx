@@ -45,6 +45,7 @@ import { GalleryCanvasButton } from './tl/gallery-canvas-button.js'
 import { startGalleryImageDrag } from './tl/gallery-image-transfer.js'
 import { InspirationView } from './inspiration-view.js'
 import { evictAttachmentCache, fetchAttachmentBlob } from './image-cache.js'
+import { shouldShowBatchBar } from './gallery-batch-bar.js'
 import { copyImageBlob, createImageThumbnail, createZipBlob, downloadBlobUrl, type ZipFileInput } from './browser-image-utils.js'
 import { conversationRegenerateRequest } from './conversation-regenerate.js'
 import { STUDIO_ROUTE, type StudioWorkspaceInfo, type StudioGenerateResponse } from '../shared.js'
@@ -1060,6 +1061,14 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
     lastSelectedIndexRef.current = null
   }
 
+  // The batch bar is fixed to the viewport, so leaving the grid tabs must exit
+  // manage mode too; otherwise it floats over the workbench/inspiration page.
+  useEffect(() => {
+    if (activeTab === 'gallery' || activeTab === 'favorites') return
+    if (!isManageMode && selectedIds.size === 0) return
+    handleExitManage()
+  }, [activeTab])
+
   // Selected items array
   const selectedItems = useMemo(() => {
     if (selectedIds.size === 0) return []
@@ -1481,7 +1490,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
       {toast && <div className="dsh-ig-gallery-page-toast">{toast}</div>}
 
       {/* 4. Floating Batch Action Bar */}
-      {(isManageMode || selectedIds.size > 0) && (
+      {shouldShowBatchBar(activeTab, isManageMode, selectedIds.size) && (
         <div className="dsh-ig-batch-bar">
           <div className="dsh-ig-batch-bar-left">
             <span className="dsh-ig-batch-counter">
