@@ -90,6 +90,27 @@ describe('OpenAI-compatible images', () => {
     await expect(generateOpenAICompatibleImage({ provider: 'seedream', apiKey: 'key', baseURL: 'https://ark.example/api/v3', model: 'seedream', prompt: 'a cat', size: '2K', maxBytes: 1024, signal })).resolves.toEqual({ data: new Uint8Array([1, 2]), mediaType: 'image/jpeg' })
   })
 
+  it('resolves a relative image URL against the configured base URL', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ url: '/v1/images/example-id/content' }] }), { headers: { 'content-type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(new Uint8Array([5, 6]), { headers: { 'content-type': 'image/png' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(generateOpenAICompatibleImage({ provider: 'openai-compat', apiKey: 'key', baseURL: 'http://127.0.0.1:30010/v1', model: 'image-model', prompt: 'a cat', maxBytes: 1024, signal })).resolves.toEqual({ data: new Uint8Array([5, 6]), mediaType: 'image/png' })
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('http://127.0.0.1:30010/v1/images/example-id/content')
+  })
+
+  it('falls back to the origin path when the relay drops /v1', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ url: '/v1/media/example' }] }), { headers: { 'content-type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(null, { status: 404 }))
+      .mockResolvedValueOnce(new Response(null, { status: 404 }))
+      .mockResolvedValueOnce(new Response(new Uint8Array([7, 8]), { headers: { 'content-type': 'image/png' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(generateOpenAICompatibleImage({ provider: 'openai-compat', apiKey: 'key', baseURL: 'https://relay.example/v1', model: 'image-model', prompt: 'a cat', maxBytes: 1024, signal })).resolves.toEqual({ data: new Uint8Array([7, 8]), mediaType: 'image/png' })
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('https://relay.example/v1/media/example')
+    expect(fetchMock.mock.calls[3]?.[0]).toBe('https://relay.example/media/example')
+  })
+
   it('keeps authorization on same-origin image downloads', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ url: 'https://relay.example/assets/result' }] }), { headers: { 'content-type': 'application/json' } }))

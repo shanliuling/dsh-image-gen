@@ -266,21 +266,64 @@ async function downloadImage(
     const data = decodeBase64(parsed.base64, provider)
     return { data, mediaType: detectImageMediaType(data) ?? imageMediaType(parsed.mediaType) ?? 'image/png' }
   }
-  const sameOrigin = new URL(url).origin === new URL(input.baseURL).origin
-  let response = await guardedFetch(`${provider} image download`, input.signal, () => fetch(url, {
-    redirect: 'follow', signal: input.signal,
-    ...(input.apiKey === undefined || !sameOrigin ? {} : { headers: { authorization: `Bearer ${input.apiKey}` } }),
-  }), input.apiKey)
-  // Some same-origin relays reject Authorization on public image URLs, so the
-  // legacy retry remains available without ever sending the key to another origin.
-  if (!response.ok && input.apiKey !== undefined && sameOrigin) {
-    response = await guardedFetch(`${provider} image download`, input.signal, () => fetch(url, { redirect: 'follow', signal: input.signal }), input.apiKey)
+  // Relative URLs are legal for self-hosted gateways (SGLang returns
+  // "/v1/images/<id>/content"): resolve them against the configured base URL,
+  // then fall back to the origin path for relays whose real route drops /v1.
+  const candidates = imageDownloadCandidates(url, input.baseURL, provider)
+  let response: Response | undefined
+  let failure: unknown
+  for (const candidate of candidates) {
+    try {
+      response = await requestImageCandidate(candidate, provider, input)
+      if (response.ok) break
+      failure = new Error(`${provider} image download failed (${response.status})`)
+      response = undefined
+    } catch (err) {
+      failure = err
+    }
   }
-  if (!response.ok) throw new Error(`${provider} image download failed (${response.status})`)
+  if (response === undefined) throw failure instanceof Error ? failure : new Error(`${provider} image download failed`)
   const data = await readBoundedBytes(response, input.maxBytes)
   const mediaType = detectImageMediaType(data) ?? imageMediaType(response.headers.get('content-type'))
   if (mediaType === undefined) throw new Error(`${provider} image download returned unsupported content type`)
   return { data, mediaType }
+}
+
+function imageDownloadCandidates(url: string, baseURL: string, provider: string): string[] {
+  const candidates: string[] = []
+  try {
+    candidates.push(new URL(url, baseURL.endsWith('/') ? baseURL : baseURL + '/').toString())
+  } catch {
+    // A malformed baseURL still leaves the origin fallback below for "/path".
+  }
+  if (url.startsWith('/')) {
+    try {
+      const stripped = new URL(baseURL).origin + url.replace(/^\/v1(?=\/)/, '')
+      if (!candidates.includes(stripped)) candidates.push(stripped)
+    } catch {
+      // No origin fallback without a parseable baseURL.
+    }
+  }
+  if (candidates.length === 0) throw new Error(provider + ' image download URL is not absolute')
+  return candidates
+}
+
+async function requestImageCandidate(
+  candidate: string,
+  provider: string,
+  input: { baseURL: string; maxBytes: number; signal: AbortSignal; apiKey?: string },
+): Promise<Response> {
+  const sameOrigin = new URL(candidate).origin === new URL(input.baseURL).origin
+  let response = await guardedFetch(provider + ' image download', input.signal, () => fetch(candidate, {
+    redirect: 'follow', signal: input.signal,
+    ...(input.apiKey === undefined || !sameOrigin ? {} : { headers: { authorization: 'Bearer ' + input.apiKey } }),
+  }), input.apiKey)
+  // Some same-origin relays reject Authorization on public image URLs, so the
+  // legacy retry remains available without ever sending the key to another origin.
+  if (!response.ok && input.apiKey !== undefined && sameOrigin) {
+    response = await guardedFetch(provider + ' image download', input.signal, () => fetch(candidate, { redirect: 'follow', signal: input.signal }), input.apiKey)
+  }
+  return response
 }
 
 function parseDataUrl(value: string): { mediaType: string; base64: string } | undefined {
