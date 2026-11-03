@@ -1423,14 +1423,12 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
       if (itemsToDownload.length === 1) {
         const single = itemsToDownload[0]
         if (!single) return
-        if (single.original !== undefined) {
-          downloadBlobUrl(vaultUrlFor(single.original.key, single.original.mediaType), `dsh-${single.provider}-${single.id}.${extensionFor(single.original.mediaType)}`)
-        } else {
-          const blob = await fetchAttachmentBlob(single.attachment)
-          const objectUrl = URL.createObjectURL(blob)
-          downloadBlobUrl(objectUrl, `dsh-${single.provider}-${single.id}.${extensionFor(single.attachment.mediaType)}`)
-          URL.revokeObjectURL(objectUrl)
-        }
+        // Resolve the bytes first: a vault file may have been evicted by the
+        // size cap, and a direct anchor would save the 404 JSON as an image.
+        const blob = await fetchGalleryItemBlob(single)
+        const objectUrl = URL.createObjectURL(blob)
+        downloadBlobUrl(objectUrl, `dsh-${single.provider}-${single.id}.${extensionFor(single.original?.mediaType ?? single.attachment.mediaType)}`)
+        URL.revokeObjectURL(objectUrl)
         showToast(t('batchDownloadSingleToast'))
         return
       }
@@ -2314,24 +2312,22 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
                 type="button"
                 className="dsh-ig-lightbox-btn"
                 title={t('download')}
-                onClick={() => {
+                onClick={async () => {
                   const extension = extensionFor(previewItem.original?.mediaType ?? previewItem.attachment.mediaType)
                   // The lightbox shows a 1600 px variant; downloads keep the
-                  // original bytes: the raw vault copy, the card's original blob,
-                  // or the cacheable original GET, in that order.
-                  const href = previewItem.original !== undefined
-                    ? vaultUrlFor(previewItem.original.key, previewItem.original.mediaType)
-                    : previewBlob !== null
-                      ? URL.createObjectURL(previewBlob)
-                      : imageUrlFor(previewItem.attachment)
-                  const a = document.createElement('a')
-                  a.href = href
-                  a.download = `dsh-${previewItem.provider}-${previewItem.id}.${extension}`
-                  document.body.appendChild(a)
-                  a.click()
-                  document.body.removeChild(a)
-                  if (previewItem.original === undefined && previewBlob !== null) window.setTimeout(() => URL.revokeObjectURL(href), 10_000)
-                }}
+                  // original bytes and fall back to the attachment when the vault
+                  // copy was evicted.
+                  try {
+                    const blob = previewItem.original !== undefined
+                      ? await fetchOriginalBlob(previewItem)
+                      : previewBlob ?? await fetchAttachmentBlob(previewItem.attachment)
+                    const objectUrl = URL.createObjectURL(blob)
+                    downloadBlobUrl(objectUrl, `dsh-${previewItem.provider}-${previewItem.id}.${extension}`)
+                    URL.revokeObjectURL(objectUrl)
+                  } catch {
+                    showToast(t('batchDownloadFailed'))
+                  }}
+                }
               >
                 <Download size={14} />
                 <span>{t('download')}</span>

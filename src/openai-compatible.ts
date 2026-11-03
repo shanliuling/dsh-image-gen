@@ -211,7 +211,10 @@ export async function editOpenAICompatibleImage(input: {
     if (input.size !== undefined && input.size.length > 0) form.append('size', input.size)
     if (input.quality !== undefined) form.append('quality', input.quality)
     if (includeResponseFormat && !explicitResponseFormat) form.append('response_format', 'b64_json')
-    for (const [key, value] of Object.entries(input.extraBody ?? {})) form.append(key, String(value))
+    for (const [key, value] of Object.entries(input.extraBody ?? {})) {
+      if (value === undefined) continue
+      form.append(key, String(value))
+    }
     return form
   }
   const sendEdit = (form: FormData): Promise<Response> => guardedFetch('openai image edit request', input.signal, () => fetch(imageEndpoint(input.baseURL, 'edits'), {

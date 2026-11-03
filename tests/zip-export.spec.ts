@@ -39,10 +39,10 @@ class FakeResponse {
   }
 }
 
-function attachment(id: string, bytes: number): ImageAttachmentRef {
+function attachment(id: string, bytes: number, mediaType: ImageAttachmentRef['mediaType'] = 'image/png'): ImageAttachmentRef {
   return {
     attachmentId: 'sha256:' + id.padEnd(64, '0') as ImageAttachmentRef['attachmentId'],
-    mediaType: 'image/png',
+    mediaType,
     bytes,
     width: 64,
     height: 64,
@@ -71,6 +71,16 @@ function endOfCentralDirectory(zip: Buffer): { entries: number; centralOffset: n
 }
 
 describe('zip export writer', () => {
+  it('uses the attachment extension when the vault copy is gone', async () => {
+    const res = new FakeResponse()
+    const readImage = vi.fn(async () => ({ data: Buffer.from('jpeg-bytes'), mediaType: 'image/jpeg' as const }))
+    await serveZip(formRequest([{ name: 'photo.png', attachment: attachment('abc', 100, 'image/jpeg'), originalKey: 'b'.repeat(64), originalMediaType: 'image/png' }]), res as unknown as ServerResponse, { readImage })
+    const zip = res.body()
+    const nameLength = zip.readUInt16LE(26)
+    expect(zip.subarray(30, 30 + nameLength).toString()).toBe('photo.jpg')
+    expect(readImage).toHaveBeenCalledTimes(1)
+  })
+
   it('prefers the raw vault copy over the attachment bytes', async () => {
     const res = new FakeResponse()
     const readImage = vi.fn(async () => ({ data: Buffer.from('attachment-bytes'), mediaType: 'image/png' as const }))

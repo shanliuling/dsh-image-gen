@@ -135,12 +135,17 @@ export async function serveZip(req: IncomingMessage, res: ServerResponse, deps: 
       const mediaType = original?.mediaType ?? item.attachment.mediaType
       const extension = IMAGE_EXTENSIONS[mediaType] ?? 'png'
       const fallback = 'dsh-' + String(item.attachment.attachmentId).replace(/^sha256:/, '').slice(0, 8) + '.' + extension
+      // The client names entries from the raw copy; once that copy is gone the
+      // bytes come from the attachment, so the extension must follow them.
+      const entryName = item.name === undefined
+        ? fallback
+        : original === undefined ? replaceExtension(item.name, extension) : item.name
       try {
         if (original !== undefined) {
-          await zip.add(item.name ?? fallback, Buffer.from(original.data))
+          await zip.add(entryName, Buffer.from(original.data))
         } else {
           const stored = await deps.readImage(item.attachment)
-          await zip.add(item.name ?? fallback, Buffer.from(stored.data))
+          await zip.add(entryName, Buffer.from(stored.data))
         }
       } catch (err) {
         if (zip.bytesWritten > 0 && isClosed(zip, err)) break
@@ -164,6 +169,12 @@ export async function serveZip(req: IncomingMessage, res: ServerResponse, deps: 
   } finally {
     req.off('close', onClose)
   }
+}
+
+function replaceExtension(name: string, extension: string): string {
+  const slash = Math.max(name.lastIndexOf('/'), name.lastIndexOf('\\'))
+  const dot = name.lastIndexOf('.')
+  return dot <= slash ? name + '.' + extension : name.slice(0, dot) + '.' + extension
 }
 
 function isClosed(zip: ZipStreamWriter, err: unknown): boolean {
