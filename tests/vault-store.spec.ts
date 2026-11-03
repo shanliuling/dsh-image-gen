@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtemp, readdir, rm, utimes } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { gcVault, readOriginal, saveOriginal, type VaultConfig } from '../src/vault-store.js'
+import { gcVault, readOriginal, resolveVaultPath, saveOriginal, type VaultConfig } from '../src/vault-store.js'
 
 const dirs: string[] = []
 
@@ -17,6 +17,12 @@ afterEach(async () => {
 })
 
 describe('raw image vault store', () => {
+  it('resolves relative overrides below the DSH home, not the process cwd', () => {
+    expect(resolveVaultPath('raw-images', '/srv/dsh')).toBe('/srv/dsh/raw-images')
+    expect(resolveVaultPath('', '/srv/dsh')).toBe('/srv/dsh/image-gen/vault')
+    expect(resolveVaultPath('/var/vault', '/srv/dsh')).toBe('/var/vault')
+  })
+
   it('saves content-addressed originals, dedupes and reads them back', async () => {
     const config = await makeConfig()
     const data = new Uint8Array([1, 2, 3, 4])
@@ -50,6 +56,39 @@ describe('raw image vault store', () => {
     expect(await readOriginal(config, dropped!.key)).toBeUndefined()
     const shards = await readdir(config.dir)
     expect(shards).toEqual([kept!.key.slice(0, 2)])
+  })
+
+  it('protects recently written files from a concurrent window gc', async () => {
+    const config = await makeConfig()
+    const kept = await saveOriginal(config, { data: new Uint8Array([1]), mediaType: 'image/png' })
+    const recent = await saveOriginal(config, { data: new Uint8Array([2]), mediaType: 'image/png' })
+    const protectedStats = await gcVault(config, [kept!.key], { protectRecentMs: 60_000 })
+    expect(protectedStats.removed).toBe(0)
+    expect(await readOriginal(config, recent!.key)).toBeDefined()
+
+    const sweep = await gcVault(config, [kept!.key])
+    expect(sweep.removed).toBe(1)
+    expect(await readOriginal(config, recent!.key)).toBeUndefined()
+  })
+
+  it('removes stale write temporaries and empty shards', async () => {
+    const config = await makeConfig()
+    const shard = join(config.dir, 'aa')
+    await mkdir(shard, { recursive: true })
+    const temporary = join(shard, 'a'.repeat(64) + '.png.tmp-1-2')
+    await writeFile(temporary, 'partial')
+    await utimes(temporary, new Date(1_000), new Date(1_000))
+    const stats = await gcVault(config, [])
+    expect(stats.removed).toBe(0)
+    expect(await readdir(config.dir)).toEqual([])
+  })
+
+  it('honours a media type hint and still falls back to other extensions', async () => {
+    const config = await makeConfig()
+    const saved = await saveOriginal(config, { data: new Uint8Array([7, 7]), mediaType: 'image/jpeg' })
+    expect((await readOriginal(config, saved!.key, 'image/jpeg'))?.mediaType).toBe('image/jpeg')
+    // A stale hint must not make an existing file unreachable.
+    expect((await readOriginal(config, saved!.key, 'image/png'))?.mediaType).toBe('image/jpeg')
   })
 
   it('evicts the oldest file when the byte cap is exceeded', async () => {

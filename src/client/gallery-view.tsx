@@ -31,6 +31,7 @@ import {
   saveGalleryItem,
   deleteGalleryItem,
   bulkDeleteGalleryItems,
+  getGalleryItemsStrict,
   bulkSetFavoriteGalleryItems,
   toggleFavoriteGalleryItem,
   isItemInWorkspace,
@@ -56,6 +57,8 @@ import { conversationRegenerateRequest } from './conversation-regenerate.js'
 import { STUDIO_ROUTE, type StudioWorkspaceInfo, type StudioGenerateResponse } from '../shared.js'
 
 const GALLERY_RENDER_BATCH = 120
+/** Hover prefetch stops pulling raw originals above this size; drag-out then uses the attachment. */
+const GALLERY_PREFETCH_ORIGINAL_MAX_BYTES = 4 * 1024 * 1024
 
 /** Drop vault files the gallery no longer references; failures are non-fatal. */
 function sendVaultGc(keys: string[]): void {
@@ -75,7 +78,7 @@ function vaultKeysOf(items: readonly GalleryItem[]): string[] {
 async function fetchGalleryItemBlob(item: GalleryItem): Promise<Blob> {
   if (item.original !== undefined) {
     try {
-      const response = await fetch(vaultUrlFor(item.original.key), { credentials: 'same-origin' })
+      const response = await fetch(vaultUrlFor(item.original.key, item.original.mediaType), { credentials: 'same-origin' })
       if (response.ok) return await response.blob()
     } catch {
       // Fall back to the attachment copy below.
@@ -144,7 +147,7 @@ function postZipDownload(items: GalleryItem[], token: string): void {
   const payload = items.map(item => ({
     name: `dsh-${item.provider}-${item.id.slice(0, 8)}.${extensionFor(item.original?.mediaType ?? item.attachment.mediaType)}`,
     attachment: item.attachment,
-    ...(item.original === undefined ? {} : { originalKey: item.original.key }),
+    ...(item.original === undefined ? {} : { originalKey: item.original.key, originalMediaType: item.original.mediaType }),
   }))
   const sink = document.createElement('iframe')
   // Unique target per export: a reused name would make a second form submit
@@ -822,7 +825,9 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
     let active = true
     let pruned = false
     const load = () => {
-      void getGalleryItems().then((res) => {
+      // Maintenance (vault gc) only runs after a complete read: a failed read
+      // must not look like an empty gallery and delete every original.
+      void getGalleryItemsStrict().then((res) => {
         if (!active) return
         setItems(prev => mergeGalleryItems(prev, res))
         if (!pruned) {
@@ -833,6 +838,8 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
           void pruneTombstones()
           sendVaultGc(vaultKeysOf(res))
         }
+      }).catch((err: unknown) => {
+        console.warn('[dsh-image-gen] Failed to read gallery items:', err)
       })
     }
     load()
@@ -1417,7 +1424,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
         const single = itemsToDownload[0]
         if (!single) return
         if (single.original !== undefined) {
-          downloadBlobUrl(vaultUrlFor(single.original.key), `dsh-${single.provider}-${single.id}.${extensionFor(single.original.mediaType)}`)
+          downloadBlobUrl(vaultUrlFor(single.original.key, single.original.mediaType), `dsh-${single.provider}-${single.id}.${extensionFor(single.original.mediaType)}`)
         } else {
           const blob = await fetchAttachmentBlob(single.attachment)
           const objectUrl = URL.createObjectURL(blob)
@@ -2313,7 +2320,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
                   // original bytes: the raw vault copy, the card's original blob,
                   // or the cacheable original GET, in that order.
                   const href = previewItem.original !== undefined
-                    ? vaultUrlFor(previewItem.original.key)
+                    ? vaultUrlFor(previewItem.original.key, previewItem.original.mediaType)
                     : previewBlob !== null
                       ? URL.createObjectURL(previewBlob)
                       : imageUrlFor(previewItem.attachment)
@@ -2417,9 +2424,9 @@ const GalleryCard = memo(function GalleryCard({
   const serverThumbUrl = thumbUrlFor(item.attachment)
   const displayUrl = url ?? (thumbFailed ? undefined : (thumbAttempt === 0 ? serverThumbUrl : serverThumbUrl + '&retry=1'))
   const originalRef = useRef<Promise<Blob> | undefined>(undefined)
-  const ensureOriginal = useCallback(async (): Promise<Blob> => {
+  const ensureAttachment = useCallback(async (): Promise<Blob> => {
     if (blob) return blob
-    const pending = originalRef.current ?? (originalRef.current = fetchGalleryItemBlob(item))
+    const pending = originalRef.current ?? (originalRef.current = fetchAttachmentBlob(item.attachment))
     try {
       const original = await pending
       setBlob(original)
@@ -2427,7 +2434,13 @@ const GalleryCard = memo(function GalleryCard({
     } finally {
       originalRef.current = undefined
     }
-  }, [blob, item])
+  }, [blob, item.attachment])
+  const ensureOriginal = useCallback(async (): Promise<Blob> => {
+    // Copy/download always want the raw bytes; drag prefetch keeps the smaller
+    // attachment because a hover must not pull a multi-megabyte original.
+    if (item.original !== undefined) return fetchGalleryItemBlob(item)
+    return ensureAttachment()
+  }, [ensureAttachment, item])
 
   useEffect(() => {
     if (!inView || !thumbFailed) return
@@ -2521,9 +2534,10 @@ const GalleryCard = memo(function GalleryCard({
       className={`dsh-ig-gallery-card ${isSelected ? 'is-selected' : ''} ${isManageMode ? 'is-manage-mode' : ''}`}
       onClick={(e) => actions.click(item, index, e)}
       onPointerEnter={() => {
-        // Native drag-out needs the decoded original at dragstart, which cannot
-        // await; prefetching on hover keeps the interaction synchronous.
-        void ensureOriginal()
+        // Native drag-out needs a decoded blob at dragstart, which cannot
+        // await; prefetch on hover, but keep large raw originals out of it.
+        if (item.original !== undefined && item.original.bytes > GALLERY_PREFETCH_ORIGINAL_MAX_BYTES) void ensureAttachment()
+        else void ensureOriginal()
       }}
     >
       {/* Upper media container */}

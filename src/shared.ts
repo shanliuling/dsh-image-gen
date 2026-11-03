@@ -41,8 +41,9 @@ export function previewUrlFor(ref: ImageAttachmentRef): string {
 }
 
 /** Content-addressed raw copy, served when the attachment layer normalized the import. */
-export function vaultUrlFor(key: string): string {
-  return VAULT_ROUTE + '?key=' + encodeURIComponent(key)
+export function vaultUrlFor(key: string, mediaType?: string): string {
+  const base = VAULT_ROUTE + '?key=' + encodeURIComponent(key)
+  return mediaType === undefined ? base : base + '&mediaType=' + encodeURIComponent(mediaType)
 }
 /** Browser route that uploads user-picked images as DSH attachments. */
 export const IMPORT_ROUTE = '/plugins/dsh-image-gen/import'

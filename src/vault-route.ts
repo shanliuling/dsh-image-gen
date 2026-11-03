@@ -5,9 +5,11 @@ import { gcVault, isValidVaultKey, readOriginal, type VaultConfig } from './vaul
 export async function serveVault(req: IncomingMessage, res: ServerResponse, config: VaultConfig): Promise<void> {
   if (req.method !== 'GET') return jsonError(res, 405, 'method-not-allowed')
   if (!sameOrigin(req)) return jsonError(res, 403, 'origin-rejected')
-  const key = new URL(req.url ?? '/', 'http://x').searchParams.get('key') ?? ''
+  const params = new URL(req.url ?? '/', 'http://x').searchParams
+  const key = params.get('key') ?? ''
   if (!isValidVaultKey(key)) return jsonError(res, 400, 'invalid-key')
-  const original = await readOriginal(config, key)
+  const mediaType = params.get('mediaType') ?? undefined
+  const original = await readOriginal(config, key, mediaType)
   if (original === undefined) return jsonError(res, 404, 'not-found')
 
   const etag = '"sha256:' + key + '"'
@@ -46,7 +48,9 @@ export async function serveVaultGc(req: IncomingMessage, res: ServerResponse, co
   }
   const keys = (parsed as { keys?: unknown } | null)?.keys
   if (!Array.isArray(keys)) return jsonError(res, 400, 'invalid-request')
-  const stats = await gcVault(config, keys.filter((key): key is string => typeof key === 'string'))
+  // Imports save the vault copy before the gallery record lands; keep very
+  // recent files so another window's gc cannot delete a just-imported original.
+  const stats = await gcVault(config, keys.filter((key): key is string => typeof key === 'string'), { protectRecentMs: 10_000 })
   res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
   res.end(JSON.stringify(stats))
 }

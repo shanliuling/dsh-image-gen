@@ -75,7 +75,7 @@ describe('zip export writer', () => {
     const res = new FakeResponse()
     const readImage = vi.fn(async () => ({ data: Buffer.from('attachment-bytes'), mediaType: 'image/png' as const }))
     const readVault = vi.fn(async () => ({ data: new Uint8Array(Buffer.from('raw-bytes')), mediaType: 'image/png' as const }))
-    await serveZip(formRequest([{ name: 'a.png', attachment: attachment('abc', 100), originalKey: 'b'.repeat(64) }]), res as unknown as ServerResponse, { readImage, readVault })
+    await serveZip(formRequest([{ name: 'a.png', attachment: attachment('abc', 100), originalKey: 'b'.repeat(64), originalMediaType: 'image/png' }]), res as unknown as ServerResponse, { readImage, readVault })
     const zip = res.body()
     const nameLength = zip.readUInt16LE(26)
     const extraLength = zip.readUInt16LE(28)
@@ -83,7 +83,7 @@ describe('zip export writer', () => {
     const size = zip.readUInt32LE(18)
     expect(zip.subarray(dataStart, dataStart + size).toString()).toBe('raw-bytes')
     expect(readImage).not.toHaveBeenCalled()
-    expect(readVault).toHaveBeenCalledWith('b'.repeat(64))
+    expect(readVault).toHaveBeenCalledWith('b'.repeat(64), 'image/png')
   })
 
   it('writes stored entries with correct CRC and an EOCD', async () => {

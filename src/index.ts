@@ -22,7 +22,7 @@ import { serveZip } from './zip-route.js'
 import { serveZipCancel, serveZipProgress } from './zip-progress.js'
 import { serveStorageStats } from './storage-stats.js'
 import { serveVault, serveVaultGc } from './vault-route.js'
-import { readOriginal, resolveVaultDir, saveOriginal } from './vault-store.js'
+import { readOriginal, resolveVaultPath, saveOriginal } from './vault-store.js'
 import { servePreview, serveThumb } from './thumb-route.js'
 import { pruneRequestImageCache, resolveRequestImageCacheDir } from './request-cache.js'
 import { editOpenAICompatibleImage, generateOpenAICompatibleImage } from './openai-compatible.js'
@@ -164,10 +164,10 @@ export function apply(ctx: Context, config: Config = {}): void {
   // caps are re-read on every call so settings changes apply without a restart.
   const vaultConfig = () => {
     const config = current()
-    const configured = config.vaultDir?.trim() ?? ''
     return {
       enabled: config.vaultEnabled !== false,
-      dir: configured.length > 0 ? configured : resolveVaultDir(),
+      // Relative overrides stay below the DSH home instead of the process cwd.
+      dir: resolveVaultPath(config.vaultDir ?? ''),
       maxBytes: config.vaultMaxBytes ?? 0,
     }
   }
@@ -253,7 +253,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       kind: 'exact', path: ZIP_ROUTE,
       handler: (req, res) => serveZip(req, res, {
         readImage: ref => ctx.attachments.readImage(ref),
-        readVault: key => readOriginal(vaultConfig(), key),
+        readVault: (key, mediaType) => readOriginal(vaultConfig(), key, mediaType),
         maxEntries: 2000,
       }),
     }), 'dsh-image-gen: zip export route')

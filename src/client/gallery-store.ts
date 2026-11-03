@@ -262,34 +262,47 @@ export async function saveGalleryItem(
   }
 }
 
+async function readGalleryItems(): Promise<GalleryItem[]> {
+  const db = await getDB()
+  return await new Promise<GalleryItem[]>((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readonly')
+    const store = tx.objectStore(STORE_NAME)
+    const index = store.index('createdAt')
+    const req = index.openCursor(null, 'prev') // newest first
+    const items: GalleryItem[] = []
+
+    req.onsuccess = (event) => {
+      const cursor = (event.target as IDBRequest<IDBCursorWithValue>).result
+      if (cursor) {
+        items.push(cursor.value as GalleryItem)
+        cursor.continue()
+      } else {
+        resolve(items)
+      }
+    }
+    req.onerror = () => reject(req.error)
+  })
+}
+
 /**
  * Retrieve all gallery records sorted by createdAt descending.
  */
 export async function getGalleryItems(): Promise<GalleryItem[]> {
   try {
-    const db = await getDB()
-    return await new Promise<GalleryItem[]>((resolve, reject) => {
-      const tx = db.transaction(STORE_NAME, 'readonly')
-      const store = tx.objectStore(STORE_NAME)
-      const index = store.index('createdAt')
-      const req = index.openCursor(null, 'prev') // newest first
-      const items: GalleryItem[] = []
-
-      req.onsuccess = (event) => {
-        const cursor = (event.target as IDBRequest<IDBCursorWithValue>).result
-        if (cursor) {
-          items.push(cursor.value as GalleryItem)
-          cursor.continue()
-        } else {
-          resolve(items)
-        }
-      }
-      req.onerror = () => reject(req.error)
-    })
+    return await readGalleryItems()
   } catch (err) {
     console.warn('[dsh-image-gen] Failed to read gallery items from IndexedDB:', err)
     return []
   }
+}
+
+/**
+ * Like getGalleryItems, but rejects when IndexedDB is unavailable. Maintenance
+ * callers must not treat a read failure as an empty gallery (that would make
+ * vault gc delete every original).
+ */
+export async function getGalleryItemsStrict(): Promise<GalleryItem[]> {
+  return readGalleryItems()
 }
 
 /** Width, in CSS pixels, of the thumbnail cached for the grid. */

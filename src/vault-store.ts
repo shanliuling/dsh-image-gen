@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto'
 import { mkdir, readFile, readdir, rename, rmdir, stat, unlink, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import type { ImageMediaType } from '@deepseek-ai/dsh-attachment'
 
 export const VAULT_KEY_PATTERN = /^[a-f0-9]{64}$/
@@ -34,9 +34,19 @@ export interface SavedOriginal {
   mediaType: ImageMediaType
 }
 
+export function resolveDshHome(home?: string): string {
+  return home?.trim() || process.env.DSH_HOME?.trim() || join(homedir(), '.dsh')
+}
+
 export function resolveVaultDir(home?: string): string {
-  const root = home?.trim() || process.env.DSH_HOME?.trim() || join(homedir(), '.dsh')
-  return join(root, 'image-gen', 'vault')
+  return join(resolveDshHome(home), 'image-gen', 'vault')
+}
+
+/** Resolve a configured vault path; relative values stay below the DSH home, not the process cwd. */
+export function resolveVaultPath(configured: string, home?: string): string {
+  const value = configured.trim()
+  if (value.length === 0) return resolveVaultDir(home)
+  return isAbsolute(value) ? value : join(resolveDshHome(home), value)
 }
 
 export function isValidVaultKey(key: string): boolean {
@@ -74,9 +84,19 @@ export async function saveOriginal(
 export async function readOriginal(
   config: VaultConfig,
   key: string,
+  preferredMediaType?: string,
 ): Promise<{ data: Buffer; mediaType: ImageMediaType } | undefined> {
   if (!config.enabled || !isValidVaultKey(key)) return undefined
-  for (const [extension, mediaType] of Object.entries(MEDIA_TYPE)) {
+  // The caller usually knows the stored media type; skip probing the other
+  // extensions. Unknown hints fall back to the full probe for old clients.
+  const preferred = preferredMediaType === undefined ? undefined : EXTENSION[preferredMediaType]
+  const all = Object.entries(MEDIA_TYPE)
+  // Try the hinted extension first, then fall back so a stale hint cannot hide
+  // a file that is still present under another known extension.
+  const candidates: readonly (readonly [string, ImageMediaType])[] = preferred === undefined
+    ? all
+    : [[preferred, preferredMediaType as ImageMediaType] as const, ...all.filter(([extension]) => extension !== preferred)]
+  for (const [extension, mediaType] of candidates) {
     try {
       return { data: await readFile(join(config.dir, key.slice(0, 2), key + '.' + extension)), mediaType }
     } catch {
@@ -84,6 +104,38 @@ export async function readOriginal(
     }
   }
   return undefined
+}
+
+export interface VaultGcOptions {
+  /** Keep files written this recently even when unreferenced (multi-window import race). */
+  protectRecentMs?: number
+  /** Abandoned .tmp-* files older than this are removed; 0 disables the sweep. */
+  tempMaxAgeMs?: number
+}
+
+const TEMPORARY_NAME = /^[a-f0-9]{64}\.(?:png|jpg|webp|gif)\.tmp-\d+-\d+$/
+
+/** Remove write temporaries left behind by a crash; older than the cutoff only. */
+async function removeStaleTemporaries(config: VaultConfig, maxAgeMs: number): Promise<void> {
+  if (maxAgeMs <= 0) return
+  const cutoff = Date.now() - maxAgeMs
+  try {
+    for (const shard of await readdir(config.dir, { withFileTypes: true })) {
+      if (!shard.isDirectory() || !/^[a-f0-9]{2}$/.test(shard.name)) continue
+      for (const entry of await readdir(join(config.dir, shard.name), { withFileTypes: true })) {
+        if (!entry.isFile() || !TEMPORARY_NAME.test(entry.name)) continue
+        const path = join(config.dir, shard.name, entry.name)
+        try {
+          const info = await stat(path)
+          if (info.mtimeMs <= cutoff) await unlink(path)
+        } catch {
+          // Removed concurrently or still being written.
+        }
+      }
+    }
+  } catch {
+    // The vault directory may not exist yet.
+  }
 }
 
 interface VaultFile {
@@ -122,8 +174,12 @@ async function listVaultFiles(config: VaultConfig): Promise<VaultFile[]> {
 export async function gcVault(
   config: VaultConfig,
   referencedKeys: Iterable<string>,
+  options: VaultGcOptions = {},
 ): Promise<{ removed: number; bytes: number }> {
   if (!config.enabled) return { removed: 0, bytes: 0 }
+  await removeStaleTemporaries(config, options.tempMaxAgeMs ?? 60 * 60 * 1000)
+  const protectRecentMs = options.protectRecentMs ?? 0
+  const now = Date.now()
   const references = new Set<string>()
   for (const key of referencedKeys) {
     if (isValidVaultKey(key)) references.add(key)
@@ -134,6 +190,12 @@ export async function gcVault(
   const keep: VaultFile[] = []
   for (const file of files) {
     if (references.has(file.key)) {
+      keep.push(file)
+      continue
+    }
+    // A concurrent window may have saved this key but not yet written its
+    // gallery record; deleting it here would silently lose the original.
+    if (protectRecentMs > 0 && now - file.mtimeMs < protectRecentMs) {
       keep.push(file)
       continue
     }

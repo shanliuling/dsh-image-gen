@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { serveVault, serveVaultGc } from '../src/vault-route.js'
@@ -59,7 +59,7 @@ describe('raw vault routes', () => {
     const config = await makeConfig()
     const saved = await saveOriginal(config, { data: new Uint8Array([9, 8, 7]), mediaType: 'image/png' })
     const res = new FakeResponse()
-    await serveVault(request('GET', '/plugins/dsh-image-gen/vault?key=' + saved!.key), res as unknown as ServerResponse, config)
+    await serveVault(request('GET', '/plugins/dsh-image-gen/vault?key=' + saved!.key + '&mediaType=image%2Fpng'), res as unknown as ServerResponse, config)
     expect(res.status).toBe(200)
     expect(res.headers['content-type']).toBe('image/png')
     expect(res.headers['cache-control']).toContain('immutable')
@@ -87,7 +87,11 @@ describe('raw vault routes', () => {
   it('garbage-collects unreferenced files over POST', async () => {
     const config = await makeConfig()
     const kept = await saveOriginal(config, { data: new Uint8Array([1]), mediaType: 'image/png' })
-    await saveOriginal(config, { data: new Uint8Array([2]), mediaType: 'image/png' })
+    const dropped = await saveOriginal(config, { data: new Uint8Array([2]), mediaType: 'image/png' })
+    // Past the recent-write protection window.
+    for (const key of [kept!.key, dropped!.key]) {
+      await utimes(join(config.dir, key.slice(0, 2), key + '.png'), new Date(1_000), new Date(1_000))
+    }
     const res = new FakeResponse()
     await serveVaultGc(request('POST', '/plugins/dsh-image-gen/vault-gc', JSON.stringify({ keys: [kept!.key] })), res as unknown as ServerResponse, config)
     expect(res.status).toBe(200)

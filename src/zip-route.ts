@@ -10,7 +10,7 @@ import { isValidVaultKey } from './vault-store.js'
 export interface ZipRouteDeps {
   readImage(ref: ImageAttachmentRef): Promise<StoredImageAttachment>
   /** Optional raw-vault reader: archives prefer original bytes when present. */
-  readVault?(key: string): Promise<{ data: Uint8Array; mediaType: ImageMediaType } | undefined>
+  readVault?(key: string, mediaType?: string): Promise<{ data: Uint8Array; mediaType: ImageMediaType } | undefined>
   /** Hard cap on how many attachments one archive may contain. */
   maxEntries?: number
   maxBodyBytes?: number
@@ -31,6 +31,7 @@ interface ZipExportItem {
   name?: string | undefined
   attachment: ImageAttachmentRef
   originalKey?: string | undefined
+  originalMediaType?: string | undefined
 }
 
 /**
@@ -89,6 +90,7 @@ export async function serveZip(req: IncomingMessage, res: ServerResponse, deps: 
       attachment,
       ...(typeof record?.name === 'string' ? { name: record.name } : {}),
       ...(typeof record?.originalKey === 'string' && isValidVaultKey(record.originalKey) ? { originalKey: record.originalKey } : {}),
+      ...(typeof record?.originalMediaType === 'string' ? { originalMediaType: record.originalMediaType } : {}),
     })
   }
   if (items.length === 0) return fail(400, 'no-attachments')
@@ -128,7 +130,7 @@ export async function serveZip(req: IncomingMessage, res: ServerResponse, deps: 
       const item = items[index]!
       let original: { data: Uint8Array; mediaType: ImageMediaType } | undefined
       if (item.originalKey !== undefined && deps.readVault !== undefined) {
-        try { original = await deps.readVault(item.originalKey) } catch { original = undefined }
+        try { original = await deps.readVault(item.originalKey, item.originalMediaType) } catch { original = undefined }
       }
       const mediaType = original?.mediaType ?? item.attachment.mediaType
       const extension = IMAGE_EXTENSIONS[mediaType] ?? 'png'
