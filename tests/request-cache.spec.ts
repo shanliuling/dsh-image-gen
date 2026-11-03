@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { pruneRequestImageCache, resolveRequestImageCacheDir } from '../src/request-cache.js'
+import { overlapsDurableAttachments, pruneRequestImageCache, resolveRequestImageCacheDir } from '../src/request-cache.js'
 
 const roots: string[] = []
 
@@ -31,6 +31,27 @@ afterEach(async () => {
 })
 
 describe('request-image cache pruning', () => {
+  it('recognizes paths that overlap the durable attachment tree', () => {
+    expect(overlapsDurableAttachments('/srv/dsh/attachments/v1/objects', '/srv/dsh/attachments')).toBe(true)
+    expect(overlapsDurableAttachments('/srv/dsh/attachments', '/srv/dsh/attachments')).toBe(true)
+    expect(overlapsDurableAttachments('/srv/dsh', '/srv/dsh/attachments')).toBe(true)
+    expect(overlapsDurableAttachments('/srv/dsh/cache/attachments/request-images', '/srv/dsh/attachments')).toBe(false)
+  })
+
+  it('refuses to prune a durable attachment root override', async () => {
+    const root = await makeRoot()
+    await writeVariant(join(root, 'attachments'), 'ab', 'image', 100, 20 * DAY)
+    const previous = process.env.DSH_HOME
+    process.env.DSH_HOME = root
+    try {
+      const stats = await pruneRequestImageCache({ dir: join(root, 'attachments'), ttlMs: 14 * DAY, maxBytes: 0 })
+      expect(stats).toEqual({ scanned: 0, removed: 0, freedBytes: 0, remainingBytes: 0 })
+    } finally {
+      if (previous === undefined) delete process.env.DSH_HOME
+      else process.env.DSH_HOME = previous
+    }
+  })
+
   it('ignores a missing cache directory', async () => {
     const stats = await pruneRequestImageCache({ dir: join(tmpdir(), 'dsh-request-cache-missing-' + String(Date.now())) })
     expect(stats).toEqual({ scanned: 0, removed: 0, freedBytes: 0, remainingBytes: 0 })

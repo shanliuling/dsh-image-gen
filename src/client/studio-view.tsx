@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FC } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type FC } from 'react'
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import {
   AlertTriangle,
@@ -1265,11 +1265,15 @@ export const StudioView: FC<{
     window.setTimeout(() => setNotice(null), 2_200)
   }
 
-  railActionsRef.current = {
-    select: selectItem,
-    favorite: item => { void applyFavoriteImage(item) },
-    toast: flash,
-  }
+  // After commit: an interrupted render must not expose handlers that close
+  // over an uncommitted reference limit to the already-rendered rail.
+  useLayoutEffect(() => {
+    railActionsRef.current = {
+      select: selectItem,
+      favorite: item => { void applyFavoriteImage(item) },
+      toast: flash,
+    }
+  })
 
   return (
     <section ref={workbenchRootRef} className="dsh-ig-workbench" aria-label={t('title')}>
@@ -1585,9 +1589,10 @@ export const StudioView: FC<{
                   alt={selected.prompt}
                   draggable={false}
                   style={{
-                    width: String(selected.attachment.width) + 'px',
-                    height: String(selected.attachment.height) + 'px',
-                    transform: `translate(${offset.x}px) scale(${zoom / 100})`,
+                    ...(selected.attachment.width && selected.attachment.height
+                      ? { width: String(selected.attachment.width) + 'px', height: String(selected.attachment.height) + 'px' }
+                      : {}),
+                    transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom / 100})`,
                     transformOrigin: 'center center',
                     transition: isDragging ? 'none' : 'transform 0.08s ease-out',
                   }}

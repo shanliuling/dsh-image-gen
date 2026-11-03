@@ -60,6 +60,27 @@ describe('datalist scroll fix', () => {
     expect(installDatalistScrollFix()).toBe(false)
   })
 
+  it('falls back to a macrotask when no frame scheduler is available', () => {
+    vi.useFakeTimers()
+    try {
+      const input = element('INPUT', true)
+      const listeners = new Map<string, () => void>()
+      installDatalistScrollFix({
+        window: { addEventListener: (type, listener) => { listeners.set('window:' + type, listener) } },
+        document: {
+          activeElement: input,
+          addEventListener: (type, listener) => { listeners.set('document:' + type, listener) },
+        },
+      })
+      listeners.get('document:scroll')?.()
+      expect(input.blur).not.toHaveBeenCalled()
+      vi.runAllTimers()
+      expect(input.blur).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('coalesces bursts into one close', () => {
     const input = element('INPUT', true)
     const callbacks: Array<() => void> = []

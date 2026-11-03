@@ -184,6 +184,17 @@ describe('OpenAI-compatible images', () => {
     expect(downloadCall[1]?.headers).toBeUndefined()
   })
 
+  it('does not retry a failing cross-origin image URL with the provider key', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ url: 'https://cdn.example/result' }] }), { headers: { 'content-type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(null, { status: 403 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(generateOpenAICompatibleImage({ provider: 'openai-compat', apiKey: 'key', baseURL: 'https://relay.example/v1', model: 'image-model', prompt: 'a cat', maxBytes: 1024, signal })).rejects.toThrow()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('https://cdn.example/result')
+    expect(fetchMock.mock.calls[1]?.[1]?.headers).toBeUndefined()
+  })
+
   // Relays can omit mime_type while returning non-PNG bytes (Ark jpeg): the
   // declared mediaType is sniffed from the bytes, not assumed to be PNG (#61).
   it('sniffs jpeg from base64 bytes when the relay omits mime_type', async () => {

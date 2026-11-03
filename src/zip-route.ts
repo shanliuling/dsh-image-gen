@@ -115,10 +115,13 @@ export async function serveZip(req: IncomingMessage, res: ServerResponse, deps: 
   const zip = new ZipStreamWriter(res)
   const skipped: string[] = []
   const onClose = (): void => {
+    // Request close fires when the POST body is consumed, not when the download
+    // socket goes away; response close is the disconnect signal here.
+    if (res.writableFinished) return
     zip.markClientClosed()
     if (jobToken !== '') finishZipJob(jobToken, 'cancelled')
   }
-  req.on('close', onClose)
+  res.on('close', onClose)
 
   try {
     for (let index = 0; index < items.length; index += 1) {
@@ -156,6 +159,13 @@ export async function serveZip(req: IncomingMessage, res: ServerResponse, deps: 
     if (skipped.length > 0) {
       await zip.add('skipped.txt', Buffer.from(skipped.join('\n') + '\n', 'utf8'))
     }
+    // Cancellation can arrive while the last attachment is being read or
+    // written; do not let that export finish as a success.
+    if (jobToken !== '' && isZipJobCancelled(jobToken)) {
+      finishZipJob(jobToken, 'cancelled')
+      res.destroy()
+      return
+    }
     await zip.finish()
     if (jobToken !== '') finishZipJob(jobToken, 'done')
   } catch (err) {
@@ -167,7 +177,7 @@ export async function serveZip(req: IncomingMessage, res: ServerResponse, deps: 
     // Headers are gone: the only honest signal left is a broken download.
     res.destroy(err instanceof Error ? err : undefined)
   } finally {
-    req.off('close', onClose)
+    res.off('close', onClose)
   }
 }
 

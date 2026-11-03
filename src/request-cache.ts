@@ -1,7 +1,7 @@
 /** Bounded maintenance for the attachment backend's request-image cache. */
 import { readdir, stat, unlink } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 
 /** Default retention for request-image variants. */
 export const DEFAULT_REQUEST_CACHE_TTL_MS = 14 * 24 * 60 * 60 * 1000
@@ -44,6 +44,19 @@ export function resolveRequestImageCacheDir(home?: string): string {
   return join(root, 'cache', 'attachments', 'request-images')
 }
 
+/** Durable attachment objects; never a pruning target, even via a broad override. */
+function durableAttachmentsRoot(): string {
+  return join(process.env.DSH_HOME?.trim() || join(homedir(), '.dsh'), 'attachments')
+}
+
+/** True when the directory is the durable attachment tree or one of its ancestors. */
+export function overlapsDurableAttachments(dir: string, attachmentsRoot = durableAttachmentsRoot()): boolean {
+  const target = resolve(dir)
+  const durable = resolve(attachmentsRoot)
+  const prefix = target.endsWith(sep) ? target : target + sep
+  return target === durable || target.startsWith(durable + sep) || durable.startsWith(prefix)
+}
+
 /**
  * Remove stale request-image variants.
  *
@@ -57,6 +70,9 @@ export async function pruneRequestImageCache(options: RequestCachePruneOptions):
   const maxBytes = options.maxBytes ?? DEFAULT_REQUEST_CACHE_MAX_BYTES
   const keepMs = options.keepMs ?? DEFAULT_REQUEST_CACHE_KEEP_MS
   const now = options.now ?? Date.now()
+  if (overlapsDurableAttachments(options.dir)) {
+    return { scanned: 0, removed: 0, freedBytes: 0, remainingBytes: 0 }
+  }
   const files: CacheFile[] = []
   await collect(options.dir, 0, files)
 

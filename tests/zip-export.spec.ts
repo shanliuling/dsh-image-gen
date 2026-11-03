@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events'
 import { Readable } from 'node:stream'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { crc32 } from 'node:zlib'
@@ -7,11 +8,12 @@ import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { ZipStreamWriter } from '../src/zip-stream.js'
 import { serveZip } from '../src/zip-route.js'
 
-class FakeResponse {
+class FakeResponse extends EventEmitter {
   chunks: Buffer[] = []
   status = 0
   headers: Record<string, string> = {}
   headersSent = false
+  writableFinished = false
   destroyed: Error | undefined
 
   writeHead(status: number, headers: Record<string, string> = {}): this {
@@ -28,10 +30,12 @@ class FakeResponse {
 
   end(chunk?: Buffer): void {
     if (chunk !== undefined) this.chunks.push(Buffer.from(chunk))
+    this.writableFinished = true
   }
 
   destroy(error?: Error): void {
     this.destroyed = error
+    this.emit('close')
   }
 
   body(): Buffer {

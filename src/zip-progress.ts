@@ -60,7 +60,8 @@ export function createZipJob(token: string, total: number): void {
   job.total = total
   job.done = 0
   job.state = 'running'
-  job.cancelled = false
+  // A placeholder may already have been cancelled from the progress stream;
+  // keep that flag so the export stops before its first attachment.
   notify(job)
 }
 
@@ -126,7 +127,9 @@ export function serveZipProgress(req: IncomingMessage, res: ServerResponse): voi
       if (!res.writableEnded) res.write(': ping\n\n')
     }, 15_000)
     heartbeat.unref?.()
-    req.on('close', () => {
+    // Request close signals the completed GET, not the SSE socket; clean up
+    // when the response itself closes instead.
+    res.on('close', () => {
       clearInterval(heartbeat)
       job.listeners.delete(send)
     })

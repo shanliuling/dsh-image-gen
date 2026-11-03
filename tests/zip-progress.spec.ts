@@ -5,7 +5,7 @@ import { Readable } from 'node:stream'
 import { serveZip } from '../src/zip-route.js'
 import { serveZipProgress } from '../src/zip-progress.js'
 
-class FakeResponse {
+class FakeResponse extends EventEmitter {
   chunks: Buffer[] = []
   status = 0
   headers: Record<string, string> = {}
@@ -75,6 +75,16 @@ describe('zip progress jobs', () => {
     mod.serveZipCancel(request('POST', '/plugins/dsh-image-gen/zip/cancel?token=123e4567-e89b-12d3-a456-426614174000'), res as unknown as ServerResponse)
     expect(res.status).toBe(200)
     expect(res.body()).toBe('{"ok":true}')
+  })
+
+  it('keeps a placeholder cancellation when the ZIP request starts', async () => {
+    const mod = await import('../src/zip-progress.js')
+    const token = '123e4567-e89b-12d3-a456-426614174000'
+    const res = new FakeResponse()
+    mod.serveZipProgress(request('GET', '/plugins/dsh-image-gen/zip/progress?token=' + token), res as unknown as ServerResponse)
+    expect(mod.cancelZipJob(token)).toBe(true)
+    mod.createZipJob(token, 3)
+    expect(mod.isZipJobCancelled(token)).toBe(true)
   })
 
   it('finishes the job with an error when the archive request is rejected', async () => {

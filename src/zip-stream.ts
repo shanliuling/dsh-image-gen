@@ -1,5 +1,4 @@
 /** Streaming ZIP writer (Store mode) used by the gallery export route. */
-import { once } from 'node:events'
 import type { ServerResponse } from 'node:http'
 import { crc32 } from 'node:zlib'
 
@@ -201,7 +200,19 @@ export class ZipStreamWriter {
   private async write(chunk: Buffer): Promise<void> {
     if (this.closed) throw new Error('client closed the download')
     this.offset += chunk.byteLength
-    if (!this.res.write(chunk)) await once(this.res, 'drain')
+    if (this.res.write(chunk)) return
+    // A response that closes without draining must settle the wait, otherwise
+    // the route stays pending and retains the current image graph.
+    await new Promise<void>((resolve, reject) => {
+      const cleanup = (): void => {
+        this.res.off('drain', onDrain)
+        this.res.off('close', onClose)
+      }
+      const onDrain = (): void => { cleanup(); resolve() }
+      const onClose = (): void => { cleanup(); reject(new Error('client closed the download')) }
+      this.res.once('drain', onDrain)
+      this.res.once('close', onClose)
+    })
   }
 
   private uniqueName(raw: string): string {

@@ -275,7 +275,10 @@ export function apply(ctx: Context, config: Config = {}): void {
     }), 'dsh-image-gen: vault gc route')
     webCtx.effect(() => register({
       kind: 'exact', path: STORAGE_STATS_ROUTE,
-      handler: (req, res) => serveStorageStats(req, res),
+      handler: (req, res) => {
+        const configured = current().requestCacheDir?.trim() ?? ''
+        void serveStorageStats(req, res, { requestImagesRoot: configured.length > 0 ? configured : resolveRequestImageCacheDir() })
+      },
     }), 'dsh-image-gen: storage stats route')
     webCtx.effect(() => register({
       kind: 'exact', path: DELETE_ROUTE,

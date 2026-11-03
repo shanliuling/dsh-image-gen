@@ -51,7 +51,7 @@ async function scanTree(root: string): Promise<TreeScan> {
   }
 }
 
-let baseCache: { at: number; attachments: TreeScan; requestImages: TreeScan } | null = null
+let baseCache: { at: number; attachments: TreeScan; requestImages: TreeScan; requestImagesRoot: string } | null = null
 
 /** Drop the cached directory scan (used by tests and a manual refresh). */
 export function resetStorageStatsCache(): void {
@@ -64,14 +64,16 @@ export async function collectStorageStats(
 ): Promise<StorageStats> {
   const now = options.now ?? Date.now()
   const ttl = options.ttlMs ?? STORAGE_STATS_TTL_MS
-  const injected = options.attachmentsRoot !== undefined || options.requestImagesRoot !== undefined
-  if (!injected && baseCache !== null && now - baseCache.at < ttl) {
-    return buildStats(baseCache.attachments, baseCache.requestImages, attachmentIds, now)
-  }
+  // Only an explicit attachments root isolates a test; the request cache root
+  // changes with settings and is compared through the cache key below.
+  const injected = options.attachmentsRoot !== undefined
   const attachmentsRoot = options.attachmentsRoot ?? resolveAttachmentsRoot()
   const requestImagesRoot = options.requestImagesRoot ?? resolveRequestImageCacheDir(resolveDshHome())
+  if (!injected && baseCache !== null && baseCache.requestImagesRoot === requestImagesRoot && now - baseCache.at < ttl) {
+    return buildStats(baseCache.attachments, baseCache.requestImages, attachmentIds, now)
+  }
   const [attachments, requestImages] = await Promise.all([scanTree(attachmentsRoot), scanTree(requestImagesRoot)])
-  if (!injected) baseCache = { at: now, attachments, requestImages }
+  if (!injected) baseCache = { at: now, attachments, requestImages, requestImagesRoot }
   return buildStats(attachments, requestImages, attachmentIds, now)
 }
 
@@ -97,8 +99,13 @@ function buildStats(attachments: TreeScan, requestImages: TreeScan, attachmentId
   }
 }
 
+export interface StorageStatsRouteDeps {
+  /** Effective request-image cache root, matching the directory pruning maintains. */
+  requestImagesRoot?: string
+}
+
 /** POST {attachmentIds: string[]} -> read-only usage numbers. */
-export async function serveStorageStats(req: IncomingMessage, res: ServerResponse): Promise<void> {
+export async function serveStorageStats(req: IncomingMessage, res: ServerResponse, deps: StorageStatsRouteDeps = {}): Promise<void> {
   if (req.method !== 'POST') return jsonError(res, 405, 'method-not-allowed')
   if (!sameOrigin(req)) return jsonError(res, 403, 'origin-rejected')
   let body: string
@@ -115,7 +122,7 @@ export async function serveStorageStats(req: IncomingMessage, res: ServerRespons
   }
   const ids = (parsed as { attachmentIds?: unknown } | null)?.attachmentIds
   if (!Array.isArray(ids)) return jsonError(res, 400, 'invalid-request')
-  const stats = await collectStorageStats(ids.filter((id): id is string => typeof id === 'string'))
+  const stats = await collectStorageStats(ids.filter((id): id is string => typeof id === 'string'), deps.requestImagesRoot === undefined ? {} : { requestImagesRoot: deps.requestImagesRoot })
   res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
   res.end(JSON.stringify(stats))
 }

@@ -3,7 +3,7 @@
  * Fully i18n-reactive (Chinese & English) with modular tabs, multi-dimensional filters,
  * responsive image grid, and placeholder routes.
  */
-import { memo, useCallback, useDeferredValue, useEffect, useState, useMemo, useRef, type FC, type MouseEvent } from 'react'
+import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useState, useMemo, useRef, type FC, type MouseEvent } from 'react'
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import { DELETE_ROUTE, IMPORT_ROUTE, STORAGE_STATS_ROUTE, VAULT_GC_ROUTE, ZIP_CANCEL_ROUTE, ZIP_PROGRESS_ROUTE, ZIP_ROUTE, imageUrlFor, previewUrlFor, thumbUrlFor, vaultUrlFor, type ImageProvider } from '../shared.js'
 import {
@@ -289,9 +289,9 @@ const DICT = {
     storageAttachments: '附件对象',
     storageThumbs: '缩略图缓存（本地回退）',
     storageRequestCache: '请求图缓存',
-    storageOrphans: '孤儿附件（未引用）',
+    storageOrphans: '画廊未引用附件',
     storageItems: '{n} 个文件',
-    storageOrphanHint: '只读统计，不会删除任何文件。',
+    storageOrphanHint: '只统计本图库记录未引用的对象；其他会话、画布或上传仍可能引用，导出清单不代表可安全删除。',
     storageThumbsHint: '服务端缩略图正常时，本地回退缓存保持为空；320px 缩略图计入请求图缓存。',
     storageExport: '导出孤儿清单',
     storageScanFailed: '存储统计失败',
@@ -414,9 +414,9 @@ const DICT = {
     storageAttachments: 'Attachment objects',
     storageThumbs: 'Thumbnail cache (local fallback)',
     storageRequestCache: 'Request-image cache',
-    storageOrphans: 'Orphan attachments (unreferenced)',
+    storageOrphans: 'Gallery-unreferenced attachments',
     storageItems: '{n} files',
-    storageOrphanHint: 'Read-only statistics; nothing is deleted.',
+    storageOrphanHint: 'Counts objects not referenced by this gallery; other sessions, the canvas, or uploads may still use them. The exported list is not a safe-deletion list.',
     storageThumbsHint: 'The local fallback stays empty while server thumbnails work; 320px thumbnails count as request-image cache.',
     storageExport: 'Export orphan list',
     storageScanFailed: 'Storage scan failed',
@@ -649,6 +649,8 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   const [previewItem, setPreviewItem] = useState<GalleryItem | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const previewUrlRef = useRef<string | null>(null)
+  /** Identifies the current preview attempt; late fallback fetches are ignored. */
+  const previewRequestRef = useRef(0)
   const previewPrefetchRef = useRef<HTMLImageElement[]>([])
   previewUrlRef.current = previewUrl
   const [previewBlob, setPreviewBlob] = useState<Blob | null>(null)
@@ -964,6 +966,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
 
   // Safely open or navigate preview item
   const openPreviewItem = (item: GalleryItem, blob?: Blob) => {
+    previewRequestRef.current += 1
     if (previewUrlRef.current) {
       URL.revokeObjectURL(previewUrlRef.current)
       previewUrlRef.current = null
@@ -991,6 +994,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
 
   // Close preview and revoke object URL
   const handleClosePreview = () => {
+    previewRequestRef.current += 1
     clearPreviewPrefetch()
     if (regenerateControllerRef.current) {
       regenerateControllerRef.current.abort()
@@ -1639,13 +1643,17 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
     }
   }
 
-  cardActionsRef.current = {
-    click: handleCardClick,
-    toggleSelect: (item, index, event) => handleToggleSelect(item.id, index, event),
-    requestDelete: item => requestSingleDelete(item),
-    preview: (item, blob) => openPreviewItem(item, blob),
-    toast: showToast,
-  }
+  // Assign after commit: a discarded or interrupted render must not expose
+  // handlers that close over uncommitted selection state.
+  useLayoutEffect(() => {
+    cardActionsRef.current = {
+      click: handleCardClick,
+      toggleSelect: (item, index, event) => handleToggleSelect(item.id, index, event),
+      requestDelete: item => requestSingleDelete(item),
+      preview: (item, blob) => openPreviewItem(item, blob),
+      toast: showToast,
+    }
+  })
 
   return (
     <div className={`dsh-ig-gallery-page${inSidebar ? ' dsh-ig-page-in-sidebar' : ''}`} data-conversation-composer-overlay="">
@@ -2245,15 +2253,28 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
                 decoding="async"
                 onLoad={() => setPreviewLoading(false)}
                 onError={() => {
+                  const failedUrl = previewUrl
+                  // A blob URL that cannot be decoded is terminal; retrying
+                  // would bounce between the original and a fresh blob forever.
+                  if (failedUrl.startsWith('blob:')) {
+                    setPreviewLoading(false)
+                    return
+                  }
                   const original = imageUrlFor(previewItem.attachment)
-                  if (previewUrl !== original) {
+                  if (failedUrl !== original) {
                     // The 1600 px variant is unavailable; fall back to the
                     // original GET before giving up on the route entirely.
+                    if (previewUrlRef.current !== null) URL.revokeObjectURL(previewUrlRef.current)
+                    previewUrlRef.current = null
+                    setPreviewBlob(null)
                     setPreviewUrl(original)
                     return
                   }
+                  const requestId = previewRequestRef.current
                   fetchAttachmentBlob(previewItem.attachment)
                     .then((fetched) => {
+                      if (previewRequestRef.current !== requestId) return
+                      if (previewUrlRef.current !== null) URL.revokeObjectURL(previewUrlRef.current)
                       const objectUrl = URL.createObjectURL(fetched)
                       previewUrlRef.current = objectUrl
                       setPreviewBlob(fetched)
@@ -2532,8 +2553,8 @@ const GalleryCard = memo(function GalleryCard({
       onPointerEnter={() => {
         // Native drag-out needs a decoded blob at dragstart, which cannot
         // await; prefetch on hover, but keep large raw originals out of it.
-        if (item.original !== undefined && item.original.bytes > GALLERY_PREFETCH_ORIGINAL_MAX_BYTES) void ensureAttachment()
-        else void ensureOriginal()
+        if (item.original !== undefined && item.original.bytes > GALLERY_PREFETCH_ORIGINAL_MAX_BYTES) void ensureAttachment().catch(() => undefined)
+        else void ensureOriginal().catch(() => undefined)
       }}
     >
       {/* Upper media container */}

@@ -57,7 +57,10 @@ export function installDatalistScrollFix(environment?: DatalistScrollFixEnvironm
       closeDatalistPopup(env.document.activeElement)
     }
     if (env.schedule !== undefined) env.schedule(run)
-    else requestAnimationFrame(run)
+    // Some embedded webviews expose no requestAnimationFrame; a macrotask is
+    // enough here and keeps `queued` from staying true forever.
+    else if (typeof setTimeout === 'function') setTimeout(run, 0)
+    else run()
   }
 
   env.document.addEventListener('scroll', schedule, true)
