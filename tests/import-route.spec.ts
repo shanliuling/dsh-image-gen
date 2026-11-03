@@ -65,6 +65,66 @@ describe('import route', () => {
     return { status: response.status, payload: await response.json().catch(() => undefined) }
   }
 
+  it('imports a multipart upload without base64 bodies', async () => {
+    await listen()
+    const form = new FormData()
+    form.append('images', new Blob([PNG_BYTES], { type: 'image/png' }), 'cat.png')
+    form.append('images', new Blob([PNG_BYTES], { type: 'image/png' }), 'dog.png')
+    const response = await fetch(serverUrl, { method: 'POST', body: form })
+    expect(response.status).toBe(200)
+    const payload = await response.json() as { images: { attachment: ImageAttachmentRef }[]; failures: unknown[] }
+    expect(payload.images).toHaveLength(2)
+    expect(payload.failures).toEqual([])
+    expect(saved.map(image => image.name)).toEqual(['cat.png', 'dog.png'])
+  })
+
+  it('returns the first eight multipart images and reports the rest as failures', async () => {
+    await listen()
+    const form = new FormData()
+    for (let index = 0; index < 9; index += 1) {
+      form.append('images', new Blob([PNG_BYTES], { type: 'image/png' }), 'img-' + String(index) + '.png')
+    }
+    const response = await fetch(serverUrl, { method: 'POST', body: form })
+    expect(response.status).toBe(200)
+    const payload = await response.json() as { images: unknown[]; failures: { index: number; error: string }[] }
+    expect(payload.images).toHaveLength(8)
+    expect(payload.failures).toHaveLength(1)
+    expect(payload.failures[0]?.index).toBe(8)
+    expect(payload.failures[0]?.error).toBe('invalid-image-count')
+    expect(saved).toHaveLength(8)
+  })
+
+  it('reports an oversized multipart part and keeps the next image', async () => {
+    await listen()
+    const previous = (deps as { maxImageBytes: number }).maxImageBytes
+    ;(deps as { maxImageBytes: number }).maxImageBytes = 4
+    try {
+      const form = new FormData()
+      form.append('images', new Blob([PNG_BYTES], { type: 'image/png' }), 'big.png')
+      form.append('images', new Blob([PNG_BYTES.subarray(0, 4)], { type: 'image/png' }), 'small.png')
+      const response = await fetch(serverUrl, { method: 'POST', body: form })
+      expect(response.status).toBe(200)
+      const payload = await response.json() as { images: unknown[]; failures: { index: number; error: string }[] }
+      expect(payload.images).toHaveLength(1)
+      expect(payload.failures[0]?.index).toBe(0)
+      expect(payload.failures[0]?.error).toContain('size-out-of-range')
+    } finally {
+      ;(deps as { maxImageBytes: number }).maxImageBytes = previous
+    }
+  })
+
+  it('rejects an unsupported multipart type but imports the valid part', async () => {
+    await listen()
+    const form = new FormData()
+    form.append('images', new Blob([Buffer.from('not an image')], { type: 'text/plain' }), 'note.txt')
+    form.append('images', new Blob([PNG_BYTES], { type: 'image/png' }), 'ok.png')
+    const response = await fetch(serverUrl, { method: 'POST', body: form })
+    expect(response.status).toBe(200)
+    const payload = await response.json() as { images: unknown[]; failures: { index: number; error: string }[] }
+    expect(payload.images).toHaveLength(1)
+    expect(payload.failures[0]?.error).toContain('unsupported-media-type')
+  })
+
   it('keeps the raw copy when the attachment layer normalizes the image', async () => {
     await listen()
     nextAttachment = { attachmentId: 'att-normalized', mediaType: 'image/jpeg', bytes: 2, width: 1, height: 1 }

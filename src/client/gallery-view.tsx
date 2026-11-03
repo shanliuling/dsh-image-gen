@@ -442,21 +442,6 @@ const DICT = {
 
 export type DictKey = keyof typeof DICT.zh
 
-/** Format human-readable relative time */
-/** Read a browser-picked file as base64 payload for the import route. */
-function readFileBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const result = reader.result
-      if (typeof result === 'string') resolve(result.slice(result.indexOf(',') + 1))
-      else reject(new Error('read-failed'))
-    }
-    reader.onerror = () => reject(new Error('read-failed'))
-    reader.readAsDataURL(file)
-  })
-}
-
 function formatRelativeTime(
   timestamp: number,
   t: (key: DictKey, params?: Record<string, string>) => string
@@ -748,22 +733,17 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
     }
     setImporting(true)
     try {
-      const reads = await Promise.allSettled(picked.map(entry => readFileBase64(entry.file)))
-      const images = reads.flatMap((read, index) => {
-        if (read.status !== 'fulfilled') return []
-        const entry = picked[index]!
-        return [{ data: read.value, mediaType: entry.mediaType, ...(entry.file.name.length > 0 ? { name: entry.file.name } : {}) }]
-      })
-      const readFailures = reads.length - images.length
-      if (images.length === 0) {
-        showToast(t('importFailed'))
-        return
+      // Upload the picked files directly: the browser streams multipart from
+      // disk, so neither the page nor the host has to hold the batch as base64.
+      const form = new FormData()
+      for (const entry of picked) {
+        const name = entry.file.name.length > 0 ? entry.file.name : `image.${extensionFor(entry.mediaType)}`
+        form.append('images', entry.file, name)
       }
       const response = await fetch(IMPORT_ROUTE, {
         method: 'POST',
         credentials: 'same-origin',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ images }),
+        body: form,
       })
       if (!response.ok) throw new Error(`HTTP ${String(response.status)}`)
       const payload = await response.json() as {
@@ -792,7 +772,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
         if (persisted) added += 1
         else writeFailures += 1
       }
-      const failCount = (payload.failures ?? []).length + (all.length - picked.length) + readFailures + writeFailures
+      const failCount = (payload.failures ?? []).length + (all.length - picked.length) + writeFailures
       if (added === 0) {
         const firstFailure = (payload.failures ?? [])[0] as { error?: unknown } | undefined
         const reason = typeof firstFailure?.error === 'string' ? firstFailure.error : undefined

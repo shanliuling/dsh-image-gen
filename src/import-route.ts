@@ -1,6 +1,7 @@
 /** Upload endpoint turning browser-picked image files into DSH attachments. */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
+import { MultipartError, readMultipart } from './multipart.js'
 
 export interface ImportRouteDeps {
   /** Durable attachment store; computes dimensions and content-addresses the bytes. */
@@ -55,12 +56,15 @@ function bodyLimit(maxImageBytes: number): number {
 
 export async function serveImport(req: IncomingMessage, res: ServerResponse, deps: ImportRouteDeps): Promise<void> {
   if (req.method !== 'POST') return jsonError(res, 405, 'method-not-allowed')
-  if (!(req.headers['content-type'] ?? '').toLowerCase().startsWith('application/json')) return jsonError(res, 415, 'json-required')
   const origin = req.headers.origin
   const host = req.headers.host
   if (origin !== undefined && host !== undefined && origin !== `http://${host}` && origin !== `https://${host}`) {
     return jsonError(res, 403, 'origin-rejected')
   }
+  const contentType = req.headers['content-type'] ?? ''
+  const boundary = multipartBoundary(contentType)
+  if (boundary !== undefined) return serveMultipartImport(req, res, deps, boundary)
+  if (!contentType.toLowerCase().startsWith('application/json')) return jsonError(res, 415, 'json-required')
   let body: unknown
   try {
     body = JSON.parse(await readBody(req, bodyLimit(deps.maxImageBytes)))
@@ -96,25 +100,10 @@ export async function serveImport(req: IncomingMessage, res: ServerResponse, dep
         continue
       }
       try {
-        const inputMediaType = record.mediaType as ImageMediaType
-        const attachment = await deps.saveImage({
-          data: bytes,
-          mediaType: inputMediaType,
-          ...(typeof record.name === 'string' && record.name.length > 0 ? { name: record.name } : {}),
-        })
-        // Only keep a vault copy when the attachment layer changed the bytes
-        // (transcoded, re-encoded or resized); clean imports stay single-copy.
-        let original: { key: string; bytes: number; mediaType: ImageMediaType } | undefined
-        if (deps.saveOriginal !== undefined && (attachment.mediaType !== inputMediaType || attachment.bytes !== bytes.byteLength)) {
-          try {
-            original = await deps.saveOriginal({ data: bytes, mediaType: inputMediaType })
-          } catch {
-            // A missing vault copy must never fail the import itself.
-          }
-        }
-        saved.push({ attachment, ...(original === undefined ? {} : { original }) })
+        const persisted = await persistImport(deps, bytes, record.mediaType as ImageMediaType, record.name)
+        saved.push(persisted)
         try {
-          deps.warmThumbnail?.(attachment)
+          deps.warmThumbnail?.(persisted.attachment)
         } catch { /* warm-up is best effort */ }
       } catch {
         // Host save errors may carry internal details; surface a stable code
@@ -129,6 +118,97 @@ export async function serveImport(req: IncomingMessage, res: ServerResponse, dep
   }
   res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
   res.end(JSON.stringify({ images: saved, failures }))
+}
+
+async function serveMultipartImport(req: IncomingMessage, res: ServerResponse, deps: ImportRouteDeps, boundary: string): Promise<void> {
+  const saved: { attachment: ImageAttachmentRef; original?: { key: string; bytes: number; mediaType: ImageMediaType } }[] = []
+  const failures: { index: number; error: string }[] = []
+  let index = 0
+  try {
+    await readMultipart(req, boundary, {
+      maxPartBytes: deps.maxImageBytes,
+      onPart: async part => {
+        const current = index++
+        // Keep parsing after the cap, but never save part nine: the first eight
+        // are returned normally and the rest are reported as failures.
+        if (current >= MAX_IMAGES_PER_REQUEST) {
+          failures.push({ index: current, error: 'invalid-image-count' })
+          return
+        }
+        if (part.tooLarge || part.bytes === 0 || part.bytes > deps.maxImageBytes) {
+          failures.push({ index: current, error: `size-out-of-range (max ${String(deps.maxImageBytes)} bytes)` })
+          return
+        }
+        const declared = part.mediaType !== undefined && deps.mediaTypes.includes(part.mediaType)
+          ? part.mediaType
+          : mediaTypeFromFilename(part.filename)
+        if (declared === undefined || !deps.mediaTypes.includes(declared)) {
+          failures.push({ index: current, error: 'unsupported-media-type: ' + (declared ?? 'unknown') })
+          return
+        }
+        try {
+          const persisted = await persistImport(deps, part.data, declared as ImageMediaType, part.filename)
+          saved.push(persisted)
+          try {
+            deps.warmThumbnail?.(persisted.attachment)
+          } catch { /* warm-up is best effort */ }
+        } catch {
+          failures.push({ index: current, error: 'save-failed' })
+        }
+      },
+    })
+  } catch (err) {
+    if (err instanceof MultipartError) return jsonError(res, err.status, err.code)
+    return jsonError(res, 400, 'invalid-request')
+  }
+  if (saved.length === 0 && failures.length === 0) return jsonError(res, 400, 'invalid-image-count')
+  res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+  res.end(JSON.stringify({ images: saved, failures }))
+}
+
+/** Save one image and, when the attachment layer normalized it, keep the raw copy. */
+async function persistImport(
+  deps: ImportRouteDeps,
+  bytes: Uint8Array,
+  mediaType: ImageMediaType,
+  name?: string,
+): Promise<{ attachment: ImageAttachmentRef; original?: { key: string; bytes: number; mediaType: ImageMediaType } }> {
+  const attachment = await deps.saveImage({
+    data: bytes,
+    mediaType,
+    ...(typeof name === 'string' && name.length > 0 ? { name } : {}),
+  })
+  let original: { key: string; bytes: number; mediaType: ImageMediaType } | undefined
+  if (deps.saveOriginal !== undefined && (attachment.mediaType !== mediaType || attachment.bytes !== bytes.byteLength)) {
+    try {
+      original = await deps.saveOriginal({ data: bytes, mediaType })
+    } catch {
+      // A missing vault copy must never fail the import itself.
+    }
+  }
+  return { attachment, ...(original === undefined ? {} : { original }) }
+}
+
+function multipartBoundary(contentType: string): string | undefined {
+  if (!contentType.toLowerCase().startsWith('multipart/form-data')) return undefined
+  const match = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentType)
+  const value = (match?.[1] ?? match?.[2] ?? '').trim()
+  return value.length > 0 ? value : undefined
+}
+
+const FILENAME_MEDIA_TYPES: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  webp: 'image/webp',
+  gif: 'image/gif',
+}
+
+function mediaTypeFromFilename(name: string | undefined): string | undefined {
+  if (name === undefined) return undefined
+  const dot = name.lastIndexOf('.')
+  if (dot === -1) return undefined
+  return FILENAME_MEDIA_TYPES[name.slice(dot + 1).toLowerCase()]
 }
 
 async function readBody(req: IncomingMessage, maxBytes: number): Promise<string> {
