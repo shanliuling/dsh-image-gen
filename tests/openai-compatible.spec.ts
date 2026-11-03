@@ -37,6 +37,59 @@ describe('OpenAI-compatible images', () => {
     expect(form.get('size')).toBe('1024x1024')
     expect(form.getAll('image[]')).toHaveLength(2)
     expect(form.getAll('image[]')[0]).toBeInstanceOf(Blob)
+    // Upstream behaviour is kept unless the caller opts into b64-first.
+    expect(form.get('response_format')).toBeNull()
+  })
+
+  it('asks for b64_json and retries without it when the relay rejects the field', async () => {
+    const image = Buffer.from('edited image').toString('base64')
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response('unsupported response_format', { status: 400 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ b64_json: image }] }), { headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const onResponseFormatRetry = vi.fn()
+    await expect(editOpenAICompatibleImage({
+      apiKey: 'key', baseURL: 'https://relay.example/v1', model: 'image-model', prompt: 'edit',
+      sourceImages: [{ data: new Uint8Array([1]), mediaType: 'image/png' }],
+      maxBytes: 1024, signal, editResponseFormat: 'auto', onResponseFormatRetry,
+    })).resolves.toEqual({ data: new Uint8Array(Buffer.from('edited image')), mediaType: 'image/png' })
+
+    expect(onResponseFormatRetry).toHaveBeenCalledTimes(1)
+    expect(onResponseFormatRetry).toHaveBeenCalledWith(400)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const first = fetchMock.mock.calls[0]?.[1]?.body as FormData
+    const second = fetchMock.mock.calls[1]?.[1]?.body as FormData
+    expect(first.get('response_format')).toBe('b64_json')
+    expect(second.get('response_format')).toBeNull()
+  })
+
+  it('respects an explicit response_format from extraBody without duplicating it', async () => {
+    const image = Buffer.from('edited image').toString('base64')
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: [{ b64_json: image }] }), { headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(editOpenAICompatibleImage({
+      apiKey: 'key', baseURL: 'https://relay.example/v1', model: 'image-model', prompt: 'edit',
+      sourceImages: [{ data: new Uint8Array([1]), mediaType: 'image/png' }],
+      maxBytes: 1024, signal, editResponseFormat: 'auto', extraBody: { response_format: 'url' },
+    })).resolves.toEqual({ data: new Uint8Array(Buffer.from('edited image')), mediaType: 'image/png' })
+
+    const form = fetchMock.mock.calls[0]?.[1]?.body as FormData
+    expect(form.getAll('response_format')).toEqual(['url'])
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not retry a multipart edit that failed with a server error', async () => {
+    const fetchMock = vi.fn(async () => new Response('upstream exploded', { status: 500 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(editOpenAICompatibleImage({
+      apiKey: 'key', baseURL: 'https://relay.example/v1', model: 'image-model', prompt: 'edit',
+      sourceImages: [{ data: new Uint8Array([1]), mediaType: 'image/png' }],
+      maxBytes: 1024, signal, editResponseFormat: 'auto',
+    })).rejects.toThrow('500')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it('keeps the singular multipart image field for one reference', async () => {
