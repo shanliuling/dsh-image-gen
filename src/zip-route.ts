@@ -1,13 +1,16 @@
 /** Streaming ZIP export of gallery attachments. */
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { ImageAttachmentRef, StoredImageAttachment } from '@deepseek-ai/dsh-attachment'
+import type { ImageAttachmentRef, ImageMediaType, StoredImageAttachment } from '@deepseek-ai/dsh-attachment'
 import { parseImageAttachmentRef } from './reference-image.js'
 import { ZipStreamWriter, ZipTooLargeError } from './zip-stream.js'
 import { createZipJob, finishZipJob, isZipJobCancelled, isValidZipToken, updateZipJob } from './zip-progress.js'
+import { isValidVaultKey } from './vault-store.js'
 
 /** Dependencies required by the gallery export route. */
 export interface ZipRouteDeps {
   readImage(ref: ImageAttachmentRef): Promise<StoredImageAttachment>
+  /** Optional raw-vault reader: archives prefer original bytes when present. */
+  readVault?(key: string): Promise<{ data: Uint8Array; mediaType: ImageMediaType } | undefined>
   /** Hard cap on how many attachments one archive may contain. */
   maxEntries?: number
   maxBodyBytes?: number
@@ -27,6 +30,7 @@ const IMAGE_EXTENSIONS: Record<string, string> = {
 interface ZipExportItem {
   name?: string | undefined
   attachment: ImageAttachmentRef
+  originalKey?: string | undefined
 }
 
 /**
@@ -84,6 +88,7 @@ export async function serveZip(req: IncomingMessage, res: ServerResponse, deps: 
     items.push({
       attachment,
       ...(typeof record?.name === 'string' ? { name: record.name } : {}),
+      ...(typeof record?.originalKey === 'string' && isValidVaultKey(record.originalKey) ? { originalKey: record.originalKey } : {}),
     })
   }
   if (items.length === 0) return fail(400, 'no-attachments')
@@ -121,11 +126,20 @@ export async function serveZip(req: IncomingMessage, res: ServerResponse, deps: 
         return
       }
       const item = items[index]!
-      const extension = IMAGE_EXTENSIONS[item.attachment.mediaType] ?? 'png'
+      let original: { data: Uint8Array; mediaType: ImageMediaType } | undefined
+      if (item.originalKey !== undefined && deps.readVault !== undefined) {
+        try { original = await deps.readVault(item.originalKey) } catch { original = undefined }
+      }
+      const mediaType = original?.mediaType ?? item.attachment.mediaType
+      const extension = IMAGE_EXTENSIONS[mediaType] ?? 'png'
       const fallback = 'dsh-' + String(item.attachment.attachmentId).replace(/^sha256:/, '').slice(0, 8) + '.' + extension
       try {
-        const stored = await deps.readImage(item.attachment)
-        await zip.add(item.name ?? fallback, Buffer.from(stored.data))
+        if (original !== undefined) {
+          await zip.add(item.name ?? fallback, Buffer.from(original.data))
+        } else {
+          const stored = await deps.readImage(item.attachment)
+          await zip.add(item.name ?? fallback, Buffer.from(stored.data))
+        }
       } catch (err) {
         if (zip.bytesWritten > 0 && isClosed(zip, err)) break
         skipped.push(String(item.attachment.attachmentId) + '\t' + (err instanceof Error ? err.message : 'unavailable'))

@@ -9,6 +9,12 @@ function sameStringArray(a: readonly string[] | undefined, b: readonly string[] 
   return true
 }
 
+function sameOriginal(a: GalleryItem['original'], b: GalleryItem['original']): boolean {
+  if (a === b) return true
+  if (a === undefined || b === undefined) return false
+  return a.key === b.key && a.bytes === b.bytes && a.mediaType === b.mediaType
+}
+
 /** Content addressing makes these five fields the complete attachment identity. */
 export function sameAttachment(a: GalleryItem['attachment'], b: GalleryItem['attachment']): boolean {
   return a.attachmentId === b.attachmentId
@@ -45,6 +51,7 @@ export function sameGalleryItem(a: GalleryItem, b: GalleryItem): boolean {
     && a.workspaceId === b.workspaceId
     && a.sessionId === b.sessionId
     && sameStringArray(a.sourceAttachmentIds, b.sourceAttachmentIds)
+    && sameOriginal(a.original, b.original)
 }
 
 /**

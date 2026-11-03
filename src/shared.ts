@@ -39,6 +39,11 @@ export function thumbUrlFor(ref: ImageAttachmentRef, width = 320): string {
 export function previewUrlFor(ref: ImageAttachmentRef): string {
   return PREVIEW_ROUTE + '?ref=' + encodeImageRef(ref)
 }
+
+/** Content-addressed raw copy, served when the attachment layer normalized the import. */
+export function vaultUrlFor(key: string): string {
+  return VAULT_ROUTE + '?key=' + encodeURIComponent(key)
+}
 /** Browser route that uploads user-picked images as DSH attachments. */
 export const IMPORT_ROUTE = '/plugins/dsh-image-gen/import'
 /** Browser route used for deleting generated images and workspace files. */
@@ -54,6 +59,8 @@ export const ZIP_ROUTE = '/plugins/dsh-image-gen/zip'
 /** Browser route that serves host-rendered gallery thumbnails. */
 export const THUMB_ROUTE = '/plugins/dsh-image-gen/thumb'
 export const PREVIEW_ROUTE = '/plugins/dsh-image-gen/preview'
+export const VAULT_ROUTE = '/plugins/dsh-image-gen/vault'
+export const VAULT_GC_ROUTE = '/plugins/dsh-image-gen/vault-gc'
 export const ZIP_PROGRESS_ROUTE = '/plugins/dsh-image-gen/zip/progress'
 export const ZIP_CANCEL_ROUTE = '/plugins/dsh-image-gen/zip/cancel'
 export const STORAGE_STATS_ROUTE = '/plugins/dsh-image-gen/storage-stats'

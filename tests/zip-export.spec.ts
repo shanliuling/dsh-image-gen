@@ -71,6 +71,21 @@ function endOfCentralDirectory(zip: Buffer): { entries: number; centralOffset: n
 }
 
 describe('zip export writer', () => {
+  it('prefers the raw vault copy over the attachment bytes', async () => {
+    const res = new FakeResponse()
+    const readImage = vi.fn(async () => ({ data: Buffer.from('attachment-bytes'), mediaType: 'image/png' as const }))
+    const readVault = vi.fn(async () => ({ data: new Uint8Array(Buffer.from('raw-bytes')), mediaType: 'image/png' as const }))
+    await serveZip(formRequest([{ name: 'a.png', attachment: attachment('abc', 100), originalKey: 'b'.repeat(64) }]), res as unknown as ServerResponse, { readImage, readVault })
+    const zip = res.body()
+    const nameLength = zip.readUInt16LE(26)
+    const extraLength = zip.readUInt16LE(28)
+    const dataStart = 30 + nameLength + extraLength
+    const size = zip.readUInt32LE(18)
+    expect(zip.subarray(dataStart, dataStart + size).toString()).toBe('raw-bytes')
+    expect(readImage).not.toHaveBeenCalled()
+    expect(readVault).toHaveBeenCalledWith('b'.repeat(64))
+  })
+
   it('writes stored entries with correct CRC and an EOCD', async () => {
     const res = new FakeResponse()
     const writer = new ZipStreamWriter(res as unknown as ServerResponse)

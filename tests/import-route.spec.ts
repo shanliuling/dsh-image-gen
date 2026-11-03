@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createServer, type AddressInfo, type Server } from 'node:http'
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import { serveImport, type ImportRouteDeps } from '../src/import-route.js'
@@ -15,6 +15,7 @@ describe('import route', () => {
   let serverUrl: string
   let saved: Array<{ data: Uint8Array; mediaType: string; name?: string }>
   let failNextSave: Error | undefined
+  let nextAttachment: ImageAttachmentRef | undefined
 
   const deps: ImportRouteDeps = {
     saveImage: async image => {
@@ -24,7 +25,7 @@ describe('import route', () => {
         throw error
       }
       saved.push(image)
-      return attachmentRef(`att-${String(saved.length)}`)
+      return nextAttachment ?? attachmentRef(`att-${String(saved.length)}`)
     },
     maxImageBytes: 1024,
     mediaTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
@@ -33,6 +34,7 @@ describe('import route', () => {
   beforeEach(() => {
     saved = []
     failNextSave = undefined
+    nextAttachment = undefined
     server = createServer((req, res) => {
       void serveImport(req, res, deps).catch(() => {
         res.statusCode = 500
@@ -62,6 +64,22 @@ describe('import route', () => {
     })
     return { status: response.status, payload: await response.json().catch(() => undefined) }
   }
+
+  it('keeps the raw copy when the attachment layer normalizes the image', async () => {
+    await listen()
+    nextAttachment = { attachmentId: 'att-normalized', mediaType: 'image/jpeg', bytes: 2, width: 1, height: 1 }
+    const saveOriginal = vi.fn(async () => ({ key: 'a'.repeat(64), bytes: PNG_BYTES.byteLength, mediaType: 'image/png' as const }))
+    deps.saveOriginal = saveOriginal
+    try {
+      const { status, payload } = await post({ images: [{ data: PNG_BASE64, mediaType: 'image/png' }] })
+      expect(status).toBe(200)
+      expect((payload as { images: { original?: { key: string } }[] }).images[0]?.original?.key).toBe('a'.repeat(64))
+      expect(saveOriginal).toHaveBeenCalledTimes(1)
+      expect(saveOriginal.mock.calls[0]?.[0]).toMatchObject({ mediaType: 'image/png' })
+    } finally {
+      delete deps.saveOriginal
+    }
+  })
 
   it('saves each picked image and returns its attachment ref', async () => {
     await listen()

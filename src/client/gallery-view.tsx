@@ -4,8 +4,8 @@
  * responsive image grid, and placeholder routes.
  */
 import { memo, useCallback, useDeferredValue, useEffect, useState, useMemo, useRef, type FC, type MouseEvent } from 'react'
-import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import { DELETE_ROUTE, IMPORT_ROUTE, STORAGE_STATS_ROUTE, ZIP_CANCEL_ROUTE, ZIP_PROGRESS_ROUTE, ZIP_ROUTE, imageUrlFor, previewUrlFor, thumbUrlFor, type ImageProvider } from '../shared.js'
+import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
+import { DELETE_ROUTE, IMPORT_ROUTE, STORAGE_STATS_ROUTE, VAULT_GC_ROUTE, ZIP_CANCEL_ROUTE, ZIP_PROGRESS_ROUTE, ZIP_ROUTE, imageUrlFor, previewUrlFor, thumbUrlFor, vaultUrlFor, type ImageProvider } from '../shared.js'
 import {
   Image as ImageIcon,
   SlidersHorizontal,
@@ -56,6 +56,33 @@ import { conversationRegenerateRequest } from './conversation-regenerate.js'
 import { STUDIO_ROUTE, type StudioWorkspaceInfo, type StudioGenerateResponse } from '../shared.js'
 
 const GALLERY_RENDER_BATCH = 120
+
+/** Drop vault files the gallery no longer references; failures are non-fatal. */
+function sendVaultGc(keys: string[]): void {
+  void fetch(VAULT_GC_ROUTE, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ keys }),
+  }).catch(() => undefined)
+}
+
+function vaultKeysOf(items: readonly GalleryItem[]): string[] {
+  return items.flatMap(item => (item.original === undefined ? [] : [item.original.key]))
+}
+
+/** Full bytes for copy/download/drag: raw vault first, normalized attachment fallback. */
+async function fetchGalleryItemBlob(item: GalleryItem): Promise<Blob> {
+  if (item.original !== undefined) {
+    try {
+      const response = await fetch(vaultUrlFor(item.original.key), { credentials: 'same-origin' })
+      if (response.ok) return await response.blob()
+    } catch {
+      // Fall back to the attachment copy below.
+    }
+  }
+  return fetchAttachmentBlob(item.attachment)
+}
 
 interface GalleryStorageStats {
   attachments: { count: number; bytes: number }
@@ -115,8 +142,9 @@ function extensionFor(mediaType: string): string {
  */
 function postZipDownload(items: GalleryItem[], token: string): void {
   const payload = items.map(item => ({
-    name: `dsh-${item.provider}-${item.id.slice(0, 8)}.${extensionFor(item.attachment.mediaType)}`,
+    name: `dsh-${item.provider}-${item.id.slice(0, 8)}.${extensionFor(item.original?.mediaType ?? item.attachment.mediaType)}`,
     attachment: item.attachment,
+    ...(item.original === undefined ? {} : { originalKey: item.original.key }),
   }))
   const sink = document.createElement('iframe')
   // Unique target per export: a reused name would make a second form submit
@@ -639,7 +667,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   // Stable dispatchers keep memoized cards from re-rendering on selection changes.
   const cardActionsRef = useRef<GalleryCardActions | null>(null)
   const cardActions = useMemo<GalleryCardActions>(() => ({
-    click: (item, index, event, blob) => cardActionsRef.current?.click(item, index, event, blob),
+    click: (item, index, event) => cardActionsRef.current?.click(item, index, event),
     toggleSelect: (item, index, event) => cardActionsRef.current?.toggleSelect(item, index, event),
     requestDelete: item => cardActionsRef.current?.requestDelete(item),
     preview: (item, blob) => cardActionsRef.current?.preview(item, blob),
@@ -738,7 +766,10 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
         body: JSON.stringify({ images }),
       })
       if (!response.ok) throw new Error(`HTTP ${String(response.status)}`)
-      const payload = await response.json() as { images?: { attachment: ImageAttachmentRef }[]; failures?: unknown[] }
+      const payload = await response.json() as {
+        images?: { attachment: ImageAttachmentRef; original?: { key: string; bytes: number; mediaType: ImageMediaType } }[]
+        failures?: unknown[]
+      }
       if ((payload.failures ?? []).length > 0) console.warn('[dsh-image-gen] import failures', payload.failures)
       const imported = payload.images ?? []
       let added = 0
@@ -756,6 +787,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
           ...(activeWorkspace?.workspaceId ? { workspaceId: activeWorkspace.workspaceId } : {}),
           ...(activeWorkspace?.path ? { workspacePath: activeWorkspace.path } : {}),
           ...(currentSessionId ? { sessionId: currentSessionId } : {}),
+          ...(entry.original === undefined ? {} : { original: entry.original }),
         })
         if (persisted) added += 1
         else writeFailures += 1
@@ -819,6 +851,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
           pruned = true
           void pruneGalleryThumbs(res.map(item => String(item.attachment.attachmentId)))
           void pruneTombstones()
+          sendVaultGc(vaultKeysOf(res))
         }
       })
     }
@@ -1147,7 +1180,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   }, [showRegenerateModal, showDeleteModal, isDeleting, isManageMode, previewItem, currentPreviewIndex, filteredItems])
 
   // Shift-Click Range Selection & Card Click Handler
-  const handleCardClick = (item: GalleryItem, index: number, e: MouseEvent, blob?: Blob) => {
+  const handleCardClick = (item: GalleryItem, index: number, e: MouseEvent) => {
     // If holding Shift, or if currently in manage mode:
     if (e.shiftKey || isManageMode) {
       e.stopPropagation()
@@ -1181,10 +1214,9 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
       return
     }
 
-    // Normal click -> open preview
-    if (blob) {
-      openPreviewItem(item, blob)
-    }
+    // Normal click -> open preview. The lightbox loads its own 1600 px
+    // variant; passing a prefetched full-size blob would bypass that path.
+    openPreviewItem(item)
   }
 
   // Toggle selection for a specific card index
@@ -1372,6 +1404,9 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
     }
   }
 
+  /** Prefer the raw vault copy; the attachment remains the fallback. */
+  const fetchOriginalBlob = fetchGalleryItemBlob
+
   const cancelZipDownload = async (): Promise<void> => {
     const token = zipTokenRef.current
     if (token === null) return
@@ -1401,10 +1436,14 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
       if (itemsToDownload.length === 1) {
         const single = itemsToDownload[0]
         if (!single) return
-        const blob = await fetchAttachmentBlob(single.attachment)
-        const objectUrl = URL.createObjectURL(blob)
-        downloadBlobUrl(objectUrl, `dsh-${single.provider}-${single.id}.png`)
-        URL.revokeObjectURL(objectUrl)
+        if (single.original !== undefined) {
+          downloadBlobUrl(vaultUrlFor(single.original.key), `dsh-${single.provider}-${single.id}.${extensionFor(single.original.mediaType)}`)
+        } else {
+          const blob = await fetchAttachmentBlob(single.attachment)
+          const objectUrl = URL.createObjectURL(blob)
+          downloadBlobUrl(objectUrl, `dsh-${single.provider}-${single.id}.${extensionFor(single.attachment.mediaType)}`)
+          URL.revokeObjectURL(objectUrl)
+        }
         showToast(t('batchDownloadSingleToast'))
         return
       }
@@ -1587,6 +1626,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
       for (const item of itemsToDelete) {
         evictAttachmentCache(item.attachment.attachmentId)
       }
+      sendVaultGc(vaultKeysOf(items.filter(item => !idsToDelete.includes(item.id))))
     } catch (err) {
       setIsDeleting(false)
       showToast(t('deleteFailedDatabase'))
@@ -2269,7 +2309,9 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
                 title={t('copyImg')}
                 onClick={async () => {
                   try {
-                    const target = previewBlob ?? await fetchAttachmentBlob(previewItem.attachment)
+                    const target = previewItem.original !== undefined
+                      ? await fetchOriginalBlob(previewItem)
+                      : previewBlob ?? await fetchAttachmentBlob(previewItem.attachment)
                     const ok = await copyImageBlob(target)
                     showToast(ok ? t('copiedImage') : t('copyFailed'))
                   } catch {
@@ -2286,20 +2328,22 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
                 className="dsh-ig-lightbox-btn"
                 title={t('download')}
                 onClick={() => {
-                  const extension = previewItem.attachment.mediaType === 'image/jpeg' ? 'jpg' : previewItem.attachment.mediaType === 'image/webp' ? 'webp' : previewItem.attachment.mediaType === 'image/gif' ? 'gif' : 'png'
+                  const extension = extensionFor(previewItem.original?.mediaType ?? previewItem.attachment.mediaType)
                   // The lightbox shows a 1600 px variant; downloads keep the
-                  // original bytes: the card's original blob when present, the
-                  // cacheable original GET otherwise.
-                  const href = previewBlob !== null
-                    ? URL.createObjectURL(previewBlob)
-                    : imageUrlFor(previewItem.attachment)
+                  // original bytes: the raw vault copy, the card's original blob,
+                  // or the cacheable original GET, in that order.
+                  const href = previewItem.original !== undefined
+                    ? vaultUrlFor(previewItem.original.key)
+                    : previewBlob !== null
+                      ? URL.createObjectURL(previewBlob)
+                      : imageUrlFor(previewItem.attachment)
                   const a = document.createElement('a')
                   a.href = href
                   a.download = `dsh-${previewItem.provider}-${previewItem.id}.${extension}`
                   document.body.appendChild(a)
                   a.click()
                   document.body.removeChild(a)
-                  if (previewBlob !== null) window.setTimeout(() => URL.revokeObjectURL(href), 10_000)
+                  if (previewItem.original === undefined && previewBlob !== null) window.setTimeout(() => URL.revokeObjectURL(href), 10_000)
                 }}
               >
                 <Download size={14} />
@@ -2354,7 +2398,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
 
 /** Stable dispatchers shared by every card, so memoized cards never re-render for selection changes. */
 interface GalleryCardActions {
-  click: (item: GalleryItem, index: number, event: MouseEvent, blob?: Blob) => void
+  click: (item: GalleryItem, index: number, event: MouseEvent) => void
   toggleSelect: (item: GalleryItem, index: number, event: MouseEvent) => void
   requestDelete: (item: GalleryItem) => void
   preview: (item: GalleryItem, blob?: Blob) => void
@@ -2395,7 +2439,7 @@ const GalleryCard = memo(function GalleryCard({
   const originalRef = useRef<Promise<Blob> | undefined>(undefined)
   const ensureOriginal = useCallback(async (): Promise<Blob> => {
     if (blob) return blob
-    const pending = originalRef.current ?? (originalRef.current = fetchAttachmentBlob(item.attachment))
+    const pending = originalRef.current ?? (originalRef.current = fetchGalleryItemBlob(item))
     try {
       const original = await pending
       setBlob(original)
@@ -2403,7 +2447,7 @@ const GalleryCard = memo(function GalleryCard({
     } finally {
       originalRef.current = undefined
     }
-  }, [blob, item.attachment])
+  }, [blob, item])
 
   useEffect(() => {
     if (!inView || !thumbFailed) return
@@ -2472,7 +2516,7 @@ const GalleryCard = memo(function GalleryCard({
       const objectUrl = URL.createObjectURL(await ensureOriginal())
       const a = document.createElement('a')
       a.href = objectUrl
-      a.download = `dsh-${item.provider}-${item.id}.png`
+      a.download = `dsh-${item.provider}-${item.id}.${extensionFor(item.original?.mediaType ?? item.attachment.mediaType)}`
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)
@@ -2495,7 +2539,7 @@ const GalleryCard = memo(function GalleryCard({
     <div
       ref={setCardRef}
       className={`dsh-ig-gallery-card ${isSelected ? 'is-selected' : ''} ${isManageMode ? 'is-manage-mode' : ''}`}
-      onClick={(e) => actions.click(item, index, e, blob)}
+      onClick={(e) => actions.click(item, index, e)}
       onPointerEnter={() => {
         // Native drag-out needs the decoded original at dragstart, which cannot
         // await; prefetching on hover keeps the interaction synchronous.

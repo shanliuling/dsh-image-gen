@@ -11,6 +11,8 @@ export interface ImportRouteDeps {
   mediaTypes: readonly string[]
   /** Optional background warm-up for the gallery thumbnail of a saved image. */
   warmThumbnail?(ref: ImageAttachmentRef): void
+  /** Persist the pre-normalization bytes when the attachment layer changed them. */
+  saveOriginal?(input: { data: Uint8Array; mediaType: ImageMediaType }): Promise<{ key: string; bytes: number; mediaType: ImageMediaType } | undefined>
 }
 
 interface ImportRequestItem {
@@ -69,7 +71,7 @@ export async function serveImport(req: IncomingMessage, res: ServerResponse, dep
   if (!Array.isArray(images) || images.length === 0 || images.length > MAX_IMAGES_PER_REQUEST) {
     return jsonError(res, 400, 'invalid-image-count')
   }
-  const saved: { attachment: ImageAttachmentRef }[] = []
+  const saved: { attachment: ImageAttachmentRef; original?: { key: string; bytes: number; mediaType: ImageMediaType } }[] = []
   const failures: { index: number; error: string }[] = []
   for (const [index, item] of images.entries()) {
     try {
@@ -94,12 +96,23 @@ export async function serveImport(req: IncomingMessage, res: ServerResponse, dep
         continue
       }
       try {
+        const inputMediaType = record.mediaType as ImageMediaType
         const attachment = await deps.saveImage({
           data: bytes,
-          mediaType: record.mediaType as ImageMediaType,
+          mediaType: inputMediaType,
           ...(typeof record.name === 'string' && record.name.length > 0 ? { name: record.name } : {}),
         })
-        saved.push({ attachment })
+        // Only keep a vault copy when the attachment layer changed the bytes
+        // (transcoded, re-encoded or resized); clean imports stay single-copy.
+        let original: { key: string; bytes: number; mediaType: ImageMediaType } | undefined
+        if (deps.saveOriginal !== undefined && (attachment.mediaType !== inputMediaType || attachment.bytes !== bytes.byteLength)) {
+          try {
+            original = await deps.saveOriginal({ data: bytes, mediaType: inputMediaType })
+          } catch {
+            // A missing vault copy must never fail the import itself.
+          }
+        }
+        saved.push({ attachment, ...(original === undefined ? {} : { original }) })
         try {
           deps.warmThumbnail?.(attachment)
         } catch { /* warm-up is best effort */ }

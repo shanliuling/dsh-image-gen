@@ -21,13 +21,15 @@ import { serveImport } from './import-route.js'
 import { serveZip } from './zip-route.js'
 import { serveZipCancel, serveZipProgress } from './zip-progress.js'
 import { serveStorageStats } from './storage-stats.js'
+import { serveVault, serveVaultGc } from './vault-route.js'
+import { readOriginal, resolveVaultDir, saveOriginal } from './vault-store.js'
 import { servePreview, serveThumb } from './thumb-route.js'
 import { pruneRequestImageCache, resolveRequestImageCacheDir } from './request-cache.js'
 import { editOpenAICompatibleImage, generateOpenAICompatibleImage } from './openai-compatible.js'
 import { type ResolvedReferenceImage, resolveReferenceImages } from './reference-image.js'
 import { editSeedreamImage } from './seedream.js'
 import { generateSubscriptionImage, registerSubscriptionRoutes, subscriptionToolParameters, SubscriptionManager } from './subscription.js'
-import { CANVAS_STATE_ROUTE, DEFAULT_CLOUD_TIMEOUT_MS, IMAGE_GENERATION_NAMESPACE, IMAGE_PROVIDERS, IMPORT_ROUTE, INSPIRATION_ROUTE, PREVIEW_ROUTE, STORAGE_STATS_ROUTE, STUDIO_ROUTE, TEST_CONNECTION_ROUTE, THUMB_ROUTE, ZIP_CANCEL_ROUTE, ZIP_PROGRESS_ROUTE, ZIP_ROUTE, mergeComfyUIPrompt, resolveOpenAICompatChannel, type ImageProvider } from './shared.js'
+import { CANVAS_STATE_ROUTE, DEFAULT_CLOUD_TIMEOUT_MS, IMAGE_GENERATION_NAMESPACE, IMAGE_PROVIDERS, IMPORT_ROUTE, INSPIRATION_ROUTE, PREVIEW_ROUTE, STORAGE_STATS_ROUTE, STUDIO_ROUTE, TEST_CONNECTION_ROUTE, THUMB_ROUTE, VAULT_GC_ROUTE, VAULT_ROUTE, ZIP_CANCEL_ROUTE, ZIP_PROGRESS_ROUTE, ZIP_ROUTE, mergeComfyUIPrompt, resolveOpenAICompatChannel, type ImageProvider } from './shared.js'
 import { createInspirationRoute } from './inspiration-route.js'
 import { BUNDLED_INSPIRATION_CATALOG, searchInspirationCases } from './inspiration.js'
 import { generateFromStudio, describeStudio } from './studio.js'
@@ -158,6 +160,18 @@ export function apply(ctx: Context, config: Config = {}): void {
     } catch { /* Keep the last credential-free snapshot when status reads fail. */ }
   }
 
+  // Raw-image vault: off by default only when explicitly disabled; paths and
+  // caps are re-read on every call so settings changes apply without a restart.
+  const vaultConfig = () => {
+    const config = current()
+    const configured = config.vaultDir?.trim() ?? ''
+    return {
+      enabled: config.vaultEnabled !== false,
+      dir: configured.length > 0 ? configured : resolveVaultDir(),
+      maxBytes: config.vaultMaxBytes ?? 0,
+    }
+  }
+
   const settingsHealth = installImageSettings(ctx, current(), {
     setSource: source => { current = () => migrateOpenAICompatConfig(plainConfig(source())) },
     onChange: () => { void refreshImageToolContext() },
@@ -232,12 +246,14 @@ export function apply(ctx: Context, config: Config = {}): void {
         warmThumbnail: ref => {
           void ctx.attachments.readImageRequest(ref, { width: 320, height: 320, maxBytes: 96 * 1024 }).catch(() => undefined)
         },
+        saveOriginal: input => saveOriginal(vaultConfig(), input),
       }),
     }), 'dsh-image-gen: import route')
     webCtx.effect(() => register({
       kind: 'exact', path: ZIP_ROUTE,
       handler: (req, res) => serveZip(req, res, {
         readImage: ref => ctx.attachments.readImage(ref),
+        readVault: key => readOriginal(vaultConfig(), key),
         maxEntries: 2000,
       }),
     }), 'dsh-image-gen: zip export route')
@@ -249,6 +265,14 @@ export function apply(ctx: Context, config: Config = {}): void {
       kind: 'exact', path: ZIP_CANCEL_ROUTE,
       handler: (req, res) => serveZipCancel(req, res),
     }), 'dsh-image-gen: zip cancel route')
+    webCtx.effect(() => register({
+      kind: 'exact', path: VAULT_ROUTE,
+      handler: (req, res) => serveVault(req, res, vaultConfig()),
+    }), 'dsh-image-gen: vault route')
+    webCtx.effect(() => register({
+      kind: 'exact', path: VAULT_GC_ROUTE,
+      handler: (req, res) => serveVaultGc(req, res, vaultConfig()),
+    }), 'dsh-image-gen: vault gc route')
     webCtx.effect(() => register({
       kind: 'exact', path: STORAGE_STATS_ROUTE,
       handler: (req, res) => serveStorageStats(req, res),

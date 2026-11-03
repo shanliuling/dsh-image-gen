@@ -3,7 +3,7 @@
  * Stores lightweight metadata indexes; image binaries remain managed by DSH Attachment service.
  * Supports tombstones to ensure deleted items are never resurrected when revisiting conversations.
  */
-import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import type { ImageProvider, StudioWatermark } from '../shared.js'
 
 export interface GalleryItem {
@@ -37,6 +37,8 @@ export interface GalleryItem {
   sessionId?: string | undefined
   /** Attachment ids of the source images this image was edited from; used by the canvas to rebuild edit chains. Optional so records written by older versions stay readable. */
   sourceAttachmentIds?: string[] | undefined
+  /** Raw pre-normalization bytes, present only when the attachment layer changed the import. */
+  original?: { key: string; bytes: number; mediaType: ImageMediaType } | undefined
 }
 
 const DB_NAME = 'dsh_image_gen_db'
