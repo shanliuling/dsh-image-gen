@@ -8,7 +8,7 @@ import {
   toggleFavoriteGalleryItem,
   GALLERY_THUMB_WIDTH,
 } from './gallery-store.js'
-import { useInView } from './studio-view.js'
+import { useInView } from './studio-helpers.js'
 import { thumbUrlFor } from '../shared.js'
 import { fetchAttachmentBlob } from './image-cache.js'
 import { copyImageBlob, createImageThumbnail, downloadBlobUrl } from './browser-image-utils.js'
@@ -171,8 +171,10 @@ export const GalleryCard = memo(function GalleryCard({
       onPointerEnter={() => {
         // Native drag-out needs a decoded blob at dragstart, which cannot
         // await; prefetch on hover, but keep large raw originals out of it.
+        if (blob !== undefined) return
         if (item.original !== undefined && item.original.bytes > GALLERY_PREFETCH_ORIGINAL_MAX_BYTES) void ensureAttachment().catch(() => undefined)
-        else void ensureOriginal().catch(() => undefined)
+        else if (item.original !== undefined) void fetchGalleryItemBlob(item).then(setBlob).catch(() => undefined)
+        else void ensureAttachment().catch(() => undefined)
       }}
     >
       {/* Upper media container */}

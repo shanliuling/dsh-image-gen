@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { serveVault, serveVaultDelete, serveVaultRefs } from '../src/vault-route.js'
@@ -150,6 +150,27 @@ describe('raw vault routes', () => {
     expect(res.status).toBe(200)
     expect(JSON.parse(res.body().toString())).toEqual({ removed: 0, bytes: 0 })
     expect(await readOriginal(config, original!.key)).toBeDefined()
+  })
+
+  it('adopts pre-existing originals into the legacy profile', async () => {
+    const config = await makeConfig()
+    const old = await saveOriginal(config, { data: new Uint8Array([7]), mediaType: 'image/png' })
+    const sync = new FakeResponse()
+    await serveVaultRefs(request('POST', '/plugins/dsh-image-gen/vault-refs', JSON.stringify({ profileId: 'profile-a-1234', keys: [] })), sync as unknown as ServerResponse, config)
+    expect(sync.status).toBe(200)
+
+    const registry = JSON.parse(await readFile(join(config.dir, '.refs.json'), 'utf8')) as { profiles: Record<string, { keys: string[] }> }
+    expect(registry.profiles['legacy-vault'].keys).toContain(old!.key)
+
+    const res = new FakeResponse()
+    await serveVaultDelete(request('POST', '/plugins/dsh-image-gen/vault-delete', JSON.stringify({
+      profileId: 'profile-a-1234',
+      keys: [],
+      deleteKeys: [old!.key],
+      confirm: true,
+    })), res as unknown as ServerResponse, config)
+    expect(JSON.parse(res.body().toString())).toEqual({ removed: 0, bytes: 0 })
+    expect(await readOriginal(config, old!.key)).toBeDefined()
   })
 
   it('does not delete when the registry is corrupt', async () => {

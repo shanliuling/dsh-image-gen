@@ -9,7 +9,7 @@ export const GALLERY_PREFETCH_ORIGINAL_MAX_BYTES = 4 * 1024 * 1024
 const VAULT_PROFILE_KEY = 'dsh-ig-vault-profile-v1'
 
 /** Stable per-browser-profile identity; the vault registry unions all profiles. */
-export function vaultProfileId(): string {
+export function vaultProfileId(): string | undefined {
   try {
     const existing = localStorage.getItem(VAULT_PROFILE_KEY)
     if (existing !== null && /^[A-Za-z0-9_-]{8,128}$/.test(existing)) return existing
@@ -19,29 +19,35 @@ export function vaultProfileId(): string {
     localStorage.setItem(VAULT_PROFILE_KEY, created)
     return created
   } catch {
-    return 'profile-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10)
+    // Without durable storage a new ID per call would strand references under
+    // profiles that later deletions cannot update. Fail closed instead.
+    return undefined
   }
 }
 
 /** Sync this profile's references; the server never deletes originals here. */
-export function syncVaultRefs(keys: string[]): void {
-  void fetch(VAULT_REFS_ROUTE, {
+export function syncVaultRefs(keys: string[]): Promise<void> {
+  const profileId = vaultProfileId()
+  if (profileId === undefined) return Promise.resolve()
+  return fetch(VAULT_REFS_ROUTE, {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ profileId: vaultProfileId(), keys }),
-  }).catch(() => undefined)
+    body: JSON.stringify({ profileId, keys }),
+  }).then(() => undefined).catch(() => undefined)
 }
 
 /** Manual gallery deletion: remove originals only after the server checks every profile. */
 export function deleteVaultOriginals(deleteKeys: string[], remainingKeys: string[]): void {
   if (deleteKeys.length === 0) return
+  const profileId = vaultProfileId()
+  if (profileId === undefined) return
   void fetch(VAULT_DELETE_ROUTE, {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      profileId: vaultProfileId(),
+      profileId,
       keys: remainingKeys,
       deleteKeys: Array.from(new Set(deleteKeys)),
       confirm: true,

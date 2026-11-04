@@ -190,8 +190,41 @@ function parsePartHeaders(raw: Buffer): { name: string; filename?: string; media
 }
 
 function dispositionParam(value: string, key: string): string | undefined {
-  const quoted = new RegExp(key + '="((?:\\\\.|[^"\\\\])*)"', 'i').exec(value)
-  if (quoted !== null) return quoted[1]!.replace(/\\(.)/g, '$1')
-  const bare = new RegExp(key + '=([^;\\s]+)', 'i').exec(value)
-  return bare?.[1]
+  // Split parameters on semicolons outside quoted strings. A regex such as
+  // /(?:^|;)\s*name=/ can match a semicolon inside filename="...".
+  const params: string[] = []
+  let start = 0
+  let quoted = false
+  let escaped = false
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index]
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (quoted && char === '\\') {
+      escaped = true
+      continue
+    }
+    if (char === '"') {
+      quoted = !quoted
+      continue
+    }
+    if (char === ';' && !quoted) {
+      params.push(value.slice(start, index))
+      start = index + 1
+    }
+  }
+  params.push(value.slice(start))
+
+  for (const param of params) {
+    const equals = param.indexOf('=')
+    if (equals <= 0 || param.slice(0, equals).trim().toLowerCase() !== key.toLowerCase()) continue
+    const raw = param.slice(equals + 1).trim()
+    if (raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"')) {
+      return raw.slice(1, -1).replace(/\\(.)/g, '$1')
+    }
+    return raw
+  }
+  return undefined
 }

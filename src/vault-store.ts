@@ -111,6 +111,10 @@ interface VaultFile {
   mtimeMs: number
 }
 
+export async function listVaultKeys(config: VaultConfig): Promise<string[]> {
+  return (await listVaultFiles(config)).map(file => file.key)
+}
+
 export async function deleteVaultKeys(config: VaultConfig, keys: Iterable<string>): Promise<{ removed: number; bytes: number }> {
   if (!config.enabled) return { removed: 0, bytes: 0 }
   const targets = new Set<string>()

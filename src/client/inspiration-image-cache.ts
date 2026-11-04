@@ -104,7 +104,7 @@ async function getCached(key: string): Promise<Blob | undefined> {
         const entry = request.result as CachedImage | undefined
         if (entry === undefined || !(entry.blob instanceof Blob) || entry.blob.size < 64) {
           if (entry !== undefined) {
-            try { store.delete(key) } catch {}
+            try { store.delete(key) } catch { /* best effort */ }
           }
           return resolve(undefined)
         }

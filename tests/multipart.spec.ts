@@ -45,6 +45,34 @@ async function collect(body: Buffer, chunkSize: number, maxPartBytes = 1024): Pr
 }
 
 describe('multipart reader', () => {
+  it('does not split quoted filename on a semicolon', async () => {
+    const body = Buffer.concat([
+      Buffer.from('--' + BOUNDARY + '\r\n'),
+      Buffer.from('Content-Disposition: form-data; filename="a; name=evil.png"; name="images"\r\n'),
+      Buffer.from('Content-Type: image/png\r\n\r\n'),
+      Buffer.from([1, 2, 3]),
+      Buffer.from('\r\n--' + BOUNDARY + '--\r\n'),
+    ])
+    const parts = await collect(body, 5)
+    expect(parts).toHaveLength(1)
+    expect(parts[0]!.name).toBe('images')
+    expect(parts[0]!.filename).toBe('a; name=evil.png')
+  })
+
+  it('does not treat filename as the form field name', async () => {
+    const body = Buffer.concat([
+      Buffer.from('--' + BOUNDARY + '\r\n'),
+      Buffer.from('Content-Disposition: form-data; filename="a.png"; name="images"\r\n'),
+      Buffer.from('Content-Type: image/png\r\n\r\n'),
+      Buffer.from([1, 2, 3]),
+      Buffer.from('\r\n--' + BOUNDARY + '--\r\n'),
+    ])
+    const parts = await collect(body, 7)
+    expect(parts).toHaveLength(1)
+    expect(parts[0]!.name).toBe('images')
+    expect(parts[0]!.filename).toBe('a.png')
+  })
+
   it('parses parts split at every byte boundary', async () => {
     const body = buildBody([
       { name: 'images', filename: 'a.png', contentType: 'image/png', data: Buffer.from([1, 2, 3, 4]) },

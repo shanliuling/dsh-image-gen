@@ -76,7 +76,7 @@ export function createInspirationRoute(deps: InspirationRouteDeps = {}) {
       try {
         activeCatalog = await fetchSnapshot(request)
         item = findInspirationCase(activeCatalog, sourceId, caseId)
-      } catch {}
+      } catch { /* best effort */ }
     }
     if (item === undefined) return jsonError(res, 404, 'case-not-found')
     const cacheKey = `${sourceId}_${caseId}`
@@ -110,7 +110,7 @@ export function createInspirationRoute(deps: InspirationRouteDeps = {}) {
         }
         sendImage(req, res, 200, body, type)
         return
-      } catch {}
+      } catch { /* best effort */ }
     }
     jsonError(res, 502, 'source-image-unavailable')
   }
@@ -274,9 +274,9 @@ async function readImageCache(key: string): Promise<{ type: string; data: Uint8A
         const data = await readFile(file)
         if (data.byteLength < 64) continue
         return { type: EXT_TO_MIME[ext]!, data: new Uint8Array(data.buffer, data.byteOffset, data.byteLength) }
-      } catch {}
+      } catch { /* best effort */ }
     }
-  } catch {}
+  } catch { /* best effort */ }
   return undefined
 }
 
@@ -296,7 +296,7 @@ function writeImageCache(key: string, mimeType: string, data: Uint8Array): void 
       if (!dir) return
       await writeFile(join(dir, `${key}${ext}`), data)
       await trimImageCache(dir)
-    } catch {}
+    } catch { /* best effort */ }
   }).catch(() => {})
 }
 
@@ -323,10 +323,10 @@ async function trimImageCache(dir: string): Promise<void> {
     let remaining = totalBytes
     for (const entry of entries) {
       if (remaining <= CACHE_MAX_BYTES) break
-      try { await unlink(entry.path) } catch {}
+      try { await unlink(entry.path) } catch { /* best effort */ }
       remaining -= entry.size
     }
-  } catch {}
+  } catch { /* best effort */ }
 }
 
 /** 清理全部已缓存的图片文件 */
@@ -337,5 +337,5 @@ async function clearDiskCache(): Promise<void> {
     const names = await readdir(dir)
     const valid = names.filter(name => /\.(jpg|png|webp)$/i.test(name))
     await Promise.all(valid.map(name => unlink(join(dir, name)).catch(() => {})))
-  } catch {}
+  } catch { /* best effort */ }
 }

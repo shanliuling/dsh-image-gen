@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { isValidVaultKey } from './vault-store.js'
+import { isValidVaultKey, listVaultKeys } from './vault-store.js'
 
 export interface VaultRegistryProfile {
   keys: string[]
@@ -66,8 +66,11 @@ const queues = new Map<string, Promise<unknown>>()
 
 /**
  * Merge one profile's complete key set into the persistent registry.
- * The first registry creation adopts all pre-existing vault keys into a
- * legacy profile so an upgrade cannot delete files before their client opens.
+ *
+ * On first creation, pre-existing vault files that the syncing profile does
+ * not already reference are placed in a reserved legacy profile, so a browser
+ * that has not opened yet cannot lose an original. Once a profile syncs a
+ * legacy key it takes over protection through the normal union.
  */
 export function updateVaultRegistry(
   dir: string,
@@ -79,8 +82,21 @@ export function updateVaultRegistry(
     const loaded = await loadVaultRegistry(dir)
     if (loaded.status === 'corrupt') return undefined
     const registry: VaultRegistry = loaded.registry ?? { version: 1, profiles: {} }
+    const accepted = Array.from(new Set(keys.filter(isValidVaultKey)))
+    if (loaded.status === 'missing') {
+      const existing = Array.from(new Set(await listVaultKeys({ enabled: true, dir }).catch(() => [])))
+      const legacy = existing.filter(key => !accepted.includes(key))
+      if (legacy.length > 0) registry.profiles['legacy-vault'] = { keys: legacy, updatedAt: 0 }
+    } else {
+      const legacy = registry.profiles['legacy-vault']
+      if (legacy !== undefined) {
+        const acceptedSet = new Set(accepted)
+        legacy.keys = legacy.keys.filter(key => !acceptedSet.has(key))
+        if (legacy.keys.length === 0) delete registry.profiles['legacy-vault']
+      }
+    }
     registry.profiles[profileId] = {
-      keys: Array.from(new Set(keys.filter(isValidVaultKey))),
+      keys: accepted,
       updatedAt: Date.now(),
     }
     try {

@@ -77,8 +77,7 @@ async function canonicalPath(path: string): Promise<string> {
   }
 }
 
-async function overlapsProtectedRoot(dir: string, roots: readonly string[]): Promise<boolean> {
-  const target = await canonicalPath(dir)
+async function overlapsProtectedRoot(target: string, roots: readonly string[]): Promise<boolean> {
   for (const root of roots) {
     const protectedRoot = await canonicalPath(root)
     if (target === protectedRoot || isWithin(target, protectedRoot) || isWithin(protectedRoot, target)) return true
@@ -108,11 +107,13 @@ export async function pruneRequestImageCache(options: RequestCachePruneOptions):
   const keepMs = options.keepMs ?? DEFAULT_REQUEST_CACHE_KEEP_MS
   const now = options.now ?? Date.now()
   const protectedRoots = options.protectedRoots ?? [durableAttachmentsRoot()]
-  if (await overlapsProtectedRoot(options.dir, protectedRoots)) {
+  // Pin the root once; resolving it again inside the overlap check leaves a
+  // swap window between the two resolutions.
+  const cacheRoot = await canonicalPath(options.dir)
+  if (await overlapsProtectedRoot(cacheRoot, protectedRoots)) {
     return { scanned: 0, removed: 0, freedBytes: 0, remainingBytes: 0 }
   }
   const files: CacheFile[] = []
-  const cacheRoot = await canonicalPath(options.dir)
   await collect(options.dir, 0, files, cacheRoot)
 
   let remainingBytes = files.reduce((sum, file) => sum + file.bytes, 0)

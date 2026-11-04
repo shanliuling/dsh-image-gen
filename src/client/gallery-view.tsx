@@ -118,7 +118,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   useEffect(() => {
     try {
       localStorage.setItem('dsh-ig-only-current-workspace', String(onlyCurrentWorkspace))
-    } catch {}
+    } catch { /* best effort */ }
   }, [onlyCurrentWorkspace])
 
   // Canvas selection is interaction state tied to this surface: leaving the
@@ -312,6 +312,11 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
         })
         if (persisted) added += 1
         else writeFailures += 1
+      }
+      if (added > 0) {
+        // Import committed new originals; publish the complete profile set so
+        // another browser cannot delete a key this profile just adopted.
+        await syncVaultRefs(vaultKeysOf(await getGalleryItemsStrict()))
       }
       const failCount = (payload.failures ?? []).length + (all.length - picked.length) + writeFailures
       if (added === 0) {
@@ -1148,7 +1153,9 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
     // 2. Perform IndexedDB deletion with real error handling
     try {
       const deletedVaultKeys = vaultKeysOf(itemsToDelete)
-      const remainingVaultKeys = vaultKeysOf(items.filter(item => !idsToDelete.includes(item.id)))
+      // `items` is a per-tab snapshot and misses cross-tab imports. Read the
+      // remaining keys from IndexedDB so a shared original is not deleted.
+      const remainingVaultKeys = vaultKeysOf((await getGalleryItemsStrict()).filter(item => !idsToDelete.includes(item.id)))
       await bulkDeleteGalleryItems(idsToDelete)
       for (const item of itemsToDelete) {
         evictAttachmentCache(item.attachment.attachmentId)

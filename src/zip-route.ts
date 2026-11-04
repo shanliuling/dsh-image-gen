@@ -167,6 +167,9 @@ export async function serveZip(req: IncomingMessage, res: ServerResponse, deps: 
       return
     }
     await zip.finish()
+    // res.end() only means the data was handed to the socket; wait for the
+    // actual flush before reporting a completed archive.
+    await waitForResponseFinish(res)
     if (jobToken !== '') finishZipJob(jobToken, 'done')
   } catch (err) {
     if (jobToken !== '') finishZipJob(jobToken, 'error')
@@ -179,6 +182,21 @@ export async function serveZip(req: IncomingMessage, res: ServerResponse, deps: 
   } finally {
     res.off('close', onClose)
   }
+}
+
+function waitForResponseFinish(res: ServerResponse): Promise<void> {
+  if (res.writableFinished) return Promise.resolve()
+  if (res.destroyed) return Promise.reject(new Error('client closed the download'))
+  return new Promise<void>((resolve, reject) => {
+    const cleanup = (): void => {
+      res.off('finish', onFinish)
+      res.off('close', onClose)
+    }
+    const onFinish = (): void => { cleanup(); resolve() }
+    const onClose = (): void => { cleanup(); reject(new Error('client closed the download')) }
+    res.once('finish', onFinish)
+    res.once('close', onClose)
+  })
 }
 
 function replaceExtension(name: string, extension: string): string {
