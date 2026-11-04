@@ -1,7 +1,7 @@
 /** Read-only delivery, reference sync and explicit deletion for the raw-image vault. */
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { deleteVaultKeys, isValidVaultKey, readOriginal, type VaultConfig } from './vault-store.js'
-import { isValidVaultProfileId, unionVaultKeys, updateVaultRegistry } from './vault-registry.js'
+import { isValidVaultKey, readOriginal, type VaultConfig } from './vault-store.js'
+import { deleteUnreferencedOriginals, isValidVaultProfileId, updateVaultRegistry } from './vault-registry.js'
 
 export async function serveVault(req: IncomingMessage, res: ServerResponse, config: VaultConfig): Promise<void> {
   if (req.method !== 'GET') return jsonError(res, 405, 'method-not-allowed')
@@ -45,8 +45,8 @@ export async function serveVaultRefs(req: IncomingMessage, res: ServerResponse, 
     jsonOk(res, { removed: 0, bytes: 0 })
     return
   }
-  if (!Array.isArray(keys)) return jsonError(res, 400, 'invalid-request')
-  const registry = await updateVaultRegistry(config.dir, profileId, keys.filter((key): key is string => typeof key === 'string'))
+  if (!validKeys(keys) || profileId === 'legacy-vault') return jsonError(res, 400, 'invalid-request')
+  const registry = await updateVaultRegistry(config.dir, profileId, keys)
   if (registry === undefined) return jsonError(res, 409, 'registry-unavailable')
   jsonOk(res, { removed: 0, bytes: 0, profiles: Object.keys(registry.profiles).length })
 }
@@ -60,19 +60,20 @@ export async function serveVaultDelete(req: IncomingMessage, res: ServerResponse
   const profileId = payload.profileId
   const keys = payload.keys
   const deleteKeys = payload.deleteKeys
-  if (!isValidVaultProfileId(profileId)) return jsonError(res, 400, 'invalid-profile')
-  if (!Array.isArray(keys) || !Array.isArray(deleteKeys) || payload.confirm !== true) {
+  if (!isValidVaultProfileId(profileId) || profileId === 'legacy-vault') return jsonError(res, 400, 'invalid-profile')
+  if (!validKeys(keys) || !validKeys(deleteKeys) || payload.confirm !== true) {
     return jsonError(res, 400, 'invalid-request')
   }
-  const registry = await updateVaultRegistry(config.dir, profileId, keys.filter((key): key is string => typeof key === 'string'))
-  if (registry === undefined) return jsonError(res, 409, 'registry-unavailable')
-  const references = new Set(unionVaultKeys(registry))
-  const deletable = deleteKeys.filter((key): key is string => typeof key === 'string' && isValidVaultKey(key) && !references.has(key))
-  const stats = await deleteVaultKeys(config, deletable)
+  const stats = await deleteUnreferencedOriginals(config, profileId, keys, deleteKeys)
+  if (stats === undefined) return jsonError(res, 409, 'registry-unavailable')
   jsonOk(res, stats)
 }
 
 type VaultPayload = { profileId?: unknown; keys?: unknown; deleteKeys?: unknown; confirm?: unknown }
+
+function validKeys(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((key): key is string => typeof key === 'string' && isValidVaultKey(key))
+}
 
 async function readJson(req: IncomingMessage, res: ServerResponse): Promise<VaultPayload | undefined> {
   let body: string

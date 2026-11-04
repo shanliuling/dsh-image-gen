@@ -18,9 +18,11 @@ afterEach(async () => {
 
 describe('raw image vault store', () => {
   it('resolves relative overrides below the DSH home, not the process cwd', () => {
-    expect(resolveVaultPath('raw-images', '/srv/dsh')).toBe('/srv/dsh/raw-images')
-    expect(resolveVaultPath('', '/srv/dsh')).toBe('/srv/dsh/image-gen/vault')
-    expect(resolveVaultPath('/var/vault', '/srv/dsh')).toBe('/var/vault')
+    const home = join(tmpdir(), 'dsh-path-test')
+    const absolute = join(tmpdir(), 'vault-absolute')
+    expect(resolveVaultPath('raw-images', home)).toBe(join(home, 'raw-images'))
+    expect(resolveVaultPath('', home)).toBe(join(home, 'image-gen', 'vault'))
+    expect(resolveVaultPath(absolute, home)).toBe(absolute)
   })
 
   it('saves content-addressed originals, dedupes and reads them back', async () => {

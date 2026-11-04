@@ -1,10 +1,28 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { serveVault, serveVaultDelete, serveVaultRefs } from '../src/vault-route.js'
 import { readOriginal, saveOriginal, type VaultConfig } from '../src/vault-store.js'
+
+const io = vi.hoisted(() => ({
+  beforeReadDirectory: undefined as ((path: string) => Promise<void>) | undefined,
+  beforeRename: undefined as ((target: string) => void) | undefined,
+}))
+vi.mock('node:fs/promises', async original => {
+  const actual = await original<typeof import('node:fs/promises')>()
+  return { ...actual,
+    readdir: async (...args: Parameters<typeof actual.readdir>) => {
+      await io.beforeReadDirectory?.(String(args[0]))
+      return actual.readdir(...args)
+    },
+    rename: async (...args: Parameters<typeof actual.rename>) => {
+      io.beforeRename?.(String(args[1]))
+      return actual.rename(...args)
+    },
+  }
+})
 
 class FakeResponse {
   chunks: Buffer[] = []
@@ -51,6 +69,8 @@ async function makeConfig(): Promise<VaultConfig> {
 }
 
 afterEach(async () => {
+  io.beforeReadDirectory = undefined
+  io.beforeRename = undefined
   for (const config of configs.splice(0)) await rm(config.dir, { recursive: true, force: true })
 })
 
@@ -186,5 +206,103 @@ describe('raw vault routes', () => {
     })), res as unknown as ServerResponse, config)
     expect(res.status).toBe(409)
     expect(await readOriginal(config, original!.key)).toBeDefined()
+  })
+
+  it.each([
+    { keys: 'not-an-array', updatedAt: 1 },
+    { keys: ['invalid-key'], updatedAt: 1 },
+    { keys: [], updatedAt: 'invalid-time' },
+  ])('preserves files and the registry when another profile is malformed: %j', async malformed => {
+    const config = await makeConfig()
+    const original = await saveOriginal(config, { data: new Uint8Array([4, 5]), mediaType: 'image/png' })
+    const contents = JSON.stringify({ version: 1, profiles: {
+      'profile-a-1234': { keys: [original!.key], updatedAt: 1 },
+      'profile-b-5678': malformed,
+    } })
+    await writeFile(join(config.dir, '.refs.json'), contents)
+    const res = new FakeResponse()
+    await serveVaultDelete(request('POST', '/plugins/dsh-image-gen/vault-delete', JSON.stringify({
+      profileId: 'profile-a-1234', keys: [], deleteKeys: [original!.key], confirm: true,
+    })), res as unknown as ServerResponse, config)
+    expect(res.status).toBe(409)
+    expect(await readFile(join(config.dir, '.refs.json'), 'utf8')).toBe(contents)
+    expect(await readOriginal(config, original!.key)).toBeDefined()
+  })
+
+  it('refuses deletion when no reference registry exists', async () => {
+    const config = await makeConfig()
+    const original = await saveOriginal(config, { data: new Uint8Array([3]), mediaType: 'image/png' })
+    const res = new FakeResponse()
+    await serveVaultDelete(request('POST', '/plugins/dsh-image-gen/vault-delete', JSON.stringify({
+      profileId: 'profile-a-1234', keys: [], deleteKeys: [original!.key], confirm: true,
+    })), res as unknown as ServerResponse, config)
+    expect(res.status).toBe(409)
+    expect(await readOriginal(config, original!.key)).toBeDefined()
+  })
+
+  it('never acknowledges a new reference to an original removed by a racing deletion', async () => {
+    const config = await makeConfig()
+    const original = await saveOriginal(config, { data: new Uint8Array([8, 9]), mediaType: 'image/png' })
+    await serveVaultRefs(request('POST', '/plugins/dsh-image-gen/vault-refs', JSON.stringify({
+      profileId: 'profile-a-1234', keys: [original!.key],
+    })), new FakeResponse() as unknown as ServerResponse, config)
+    let entered!: () => void, release!: () => void
+    const held = new Promise<void>(resolve => { entered = resolve })
+    const resume = new Promise<void>(resolve => { release = resolve })
+    let paused = false
+    io.beforeReadDirectory = async path => {
+      if (path !== config.dir || paused) return
+      paused = true
+      entered()
+      await resume
+    }
+    const deleted = new FakeResponse(), synced = new FakeResponse()
+    const deleting = serveVaultDelete(request('POST', '/plugins/dsh-image-gen/vault-delete', JSON.stringify({
+      profileId: 'profile-a-1234', keys: [], deleteKeys: [original!.key], confirm: true,
+    })), deleted as unknown as ServerResponse, config)
+    await held
+    const syncing = serveVaultRefs(request('POST', '/plugins/dsh-image-gen/vault-refs', JSON.stringify({
+      profileId: 'profile-b-5678', keys: [original!.key],
+    })), synced as unknown as ServerResponse, config)
+    release()
+    await Promise.all([deleting, syncing])
+    const retained = await readOriginal(config, original!.key)
+    if (synced.status === 200) expect(retained).toBeDefined()
+    else expect(synced.status).toBe(409)
+    expect(deleted.status).toBe(200)
+  })
+
+  it('retains the old registry and original if the atomic replacement fails', async () => {
+    const config = await makeConfig()
+    const original = await saveOriginal(config, { data: new Uint8Array([1, 2, 3]), mediaType: 'image/png' })
+    await serveVaultRefs(request('POST', '/plugins/dsh-image-gen/vault-refs', JSON.stringify({
+      profileId: 'profile-a-1234', keys: [original!.key],
+    })), new FakeResponse() as unknown as ServerResponse, config)
+    const previous = await readFile(join(config.dir, '.refs.json'), 'utf8')
+    io.beforeRename = target => {
+      if (target === join(config.dir, '.refs.json')) throw Object.assign(new Error('file locked'), { code: 'EPERM' })
+    }
+    const res = new FakeResponse()
+    await serveVaultDelete(request('POST', '/plugins/dsh-image-gen/vault-delete', JSON.stringify({
+      profileId: 'profile-a-1234', keys: [], deleteKeys: [original!.key], confirm: true,
+    })), res as unknown as ServerResponse, config)
+    expect(res.status).toBe(409)
+    expect(await readFile(join(config.dir, '.refs.json'), 'utf8')).toBe(previous)
+    expect(await readOriginal(config, original!.key)).toBeDefined()
+  })
+
+  it('refuses nonexistent new references without replacing the previous registry', async () => {
+    const config = await makeConfig()
+    const original = await saveOriginal(config, { data: new Uint8Array([4]), mediaType: 'image/png' })
+    await serveVaultRefs(request('POST', '/plugins/dsh-image-gen/vault-refs', JSON.stringify({
+      profileId: 'profile-a-1234', keys: [original!.key],
+    })), new FakeResponse() as unknown as ServerResponse, config)
+    const previous = await readFile(join(config.dir, '.refs.json'), 'utf8')
+    const res = new FakeResponse()
+    await serveVaultRefs(request('POST', '/plugins/dsh-image-gen/vault-refs', JSON.stringify({
+      profileId: 'profile-b-5678', keys: ['f'.repeat(64)],
+    })), res as unknown as ServerResponse, config)
+    expect(res.status).toBe(409)
+    expect(await readFile(join(config.dir, '.refs.json'), 'utf8')).toBe(previous)
   })
 });
