@@ -8,9 +8,9 @@
 
 # 🎨 dsh-image-gen
 
-### DeepSeek Harness 的原生 AI 图像创作套件
+### 在 DeepSeek Harness 里，用说话的方式画图
 
-<p><b>AI 创作画布 · 对话生图与编辑 · Studio 批量创作 · 多模型对比 · 500+ Prompt 灵感 · 图库管理 · 本地 ComfyUI · 订阅免 Key</b></p>
+<p><b>对话批量生图 · 看得懂草图的 AI 画布 · Agent 自动套用 500+ Prompt 灵感 · 订阅账号免 Key</b></p>
 
 <p>
   <a href="https://www.npmjs.com/package/dsh-image-gen"><img src="https://img.shields.io/npm/v/dsh-image-gen?style=flat-square&color=4f6ef7" alt="npm version" /></a>
@@ -27,6 +27,7 @@
 </p>
 
 <p>
+  <a href="#一句话就能做到">一句话就能做到</a> ·
   <a href="#快速开始">快速开始</a> ·
   <a href="#核心能力">核心能力</a> ·
   <a href="#provider-支持情况">Provider 支持</a> ·
@@ -35,25 +36,22 @@
 
 <br />
 
-<img src="docs/assets/readme/canvas-generate.webp" alt="在无限画布中绘制草稿，并通过对话生成成图" width="46%" />
-<img src="docs/assets/readme/canvas-edit.webp" alt="基于已有结果继续对话修改，在画布中持续迭代创作" width="46%" />
-<br />
-<sub>左：在画布中绘制草稿、摆放参考图，并通过对话生成成图。 · 右：基于已有结果继续对话修改，在画布中持续迭代创作。</sub>
-
-<br />
-
-<img src="docs/assets/readme/chat-generate.webp" alt="在对话中直接描述并生成图片" width="46%" />
-<img src="docs/assets/readme/other-features.webp" alt="工作台批量创作、灵感库与图库等更多功能" width="46%" />
-<br />
-<sub>左：在对话中直接描述并生成图片。 · 右：工作台批量创作、灵感库与图库等更多功能。</sub>
+<table>
+  <tr>
+    <td width="50%" align="center"><b>🔁 一句话，一整组图</b><br /><sub>一条消息Agent 批量生成几十张图片</sub></td>
+    <td width="50%" align="center"><b>✏️ 画个草图、圈个地方，AI 就懂</b><br /><sub>圈出剑 → 换成斧头 · 火柴人 → 成图</sub></td>
+  </tr>
+  <tr>
+    <td><a href="#chat-batch"><img src="docs/assets/readme/hero-batch.webp" alt="一条消息写 5 个画面，Agent 逐张生成并收进图库" width="100%" /></a></td>
+    <td><a href="#ai-canvas"><img src="docs/assets/readme/hero-canvas.webp" alt="在画布上圈出剑换成战斧，再把火柴人草图变成二次元剑士" width="100%" /></a></td>
+  </tr>
+</table>
 
 </div>
 
-**为 DeepSeek Harness 带来完整的 AI 图像创作工作流。**
+<br />
 
-`dsh-image-gen` 不只是简单的对话生图，而是为 DSH 补齐从 **对话生成与连续修图**、**AI 创作画布**、**Studio 批量创作**、**多模型横向对比**，到 **Prompt 灵感库** 与 **本地 ComfyUI** 的完整图像创作能力。
-
-支持主流云端图像模型与本地私有化工作流，既可使用 BYOK（自带 Key），也支持通过订阅账号直接使用，生成结果支持按工作区隔离存储。
+`dsh-image-gen` 是 DeepSeek Harness 的原生图像创作插件。它不是在对话框里塞一个生图按钮，而是让 **Agent 本身学会画图**：它能一次规划并生成一整组图，能看懂你在画布上的涂鸦和圈选，能自己去灵感库里找合适的风格模板。需要精细控制时，还有 Studio 工作台、多模型对比和图库。
 
 > **已有 ChatGPT、Grok 或 Google 订阅？直接登录即可生图，无需额外购买 API Key。**
 
@@ -63,21 +61,24 @@
 pnpm dsh plugin --profile web add dsh-image-gen@latest
 ```
 
-> **版本更新提示：** 本次版本变化较大，老用户请更新至最新版本。
-
-<img src="docs/assets/readme/workflow-overview.webp" alt="dsh-image-gen 完整 AI 图像创作工作流" width="100%" />
+> 每个版本的更新内容见 [Releases](https://github.com/shanliuling/dsh-image-gen/releases)。
 
 ---
 
-## 一个插件，覆盖完整 AI 图像创作流程
+## 一句话就能做到
 
-| 入口          | 最适合           | 你可以做什么                             |
-| :------------ | :--------------- | :--------------------------------------- |
-| 💬 **对话**   | 快速表达想法     | 文生图、图生图、连续编辑、版本迭代       |
-| ✏️ **画布**   | 表达视觉创意     | 草稿生成、参考图组合、空间创作、持续修改 |
-| 🎛️ **工作台** | 精细控制创作参数 | 批量生成、多图参考、高级参数调整         |
-| ✨ **灵感**   | 寻找创作方向     | Prompt 案例、风格探索、一键复用          |
-| 🖼️ **图库**   | 管理生成结果     | 搜索、收藏、下载、重新使用               |
+不用学参数，也不用切页面，直接在 DSH 对话里说：
+
+| 你在对话里说                                                  | 插件会做什么                                                                   |
+| :------------------------------------------------------------ | :----------------------------------------------------------------------------- |
+| 「给《咖啡店开业》这篇文章配 4 张插图，统一扁平插画风，16:9」 | 🔁 **对话批量生图**：Agent 把需求拆成 4 个 Prompt 逐张生成，一条消息收齐整组图 |
+| 「用手绘风格 #123 画一张咖啡店菜单」                          | ✨ **自动套用灵感**：Agent 先在 500+ 案例库里检索对应风格，再套用模板出图      |
+| 「把我在画布上画的草图变成正式插画」                          | ✏️ **看懂画布**：Agent 读取画布选区，把草稿变成成图                            |
+| 「把我圈出来的剑换成斧头，其他不变」                          | 🎯 **圈哪改哪**：只改你标出的局部                                              |
+| 「保持这个角色不变，换到雪地场景」                            | 🎭 **角色一致性**：图生图时保持同一个人物或物体，不会换成长得相似的另一个      |
+| 「同一个 Prompt，GPT 和 Gemini 各出一张对比」                 | ⚖️ **多模型对比**：并发调用多个模型，放在同一张画布上比较                      |
+
+<img src="docs/assets/readme/workflow-overview.webp" alt="dsh-image-gen 完整 AI 图像创作工作流" width="100%" />
 
 ---
 
@@ -119,17 +120,17 @@ pnpm dsh plugin --profile web add ./dsh-image-gen
 
 **插件面板 → 已安装 → dsh-image-gen**
 
-<div align="center">
-  <img src="docs/assets/readme/plugins-entry.webp" alt="在左侧边栏点击「插件」，于「已安装」分区点击 dsh-image-gen 进入详情页" width="100%" />
-  <br />
-  <sub>点击左侧边栏「插件」图标，在「已安装」分区点击 dsh-image-gen 进入插件详情页。</sub>
-</div>
-
 > DSH 0.1.5 及更早版本没有插件面板，入口仍为「设置 → 插件 → 插件配置 → 图像生成」；插件已同时兼容两种入口。
 
 选择 Provider，填写自己的 API Key，并按需调整模型、Endpoint / Base URL 与工作区保存选项。填好 Key 后可点击**「测试连接」**验证可用性，或点击**「拉取模型」**一键获取该厂商支持的全部生图模型，无需手动查文档。使用 ComfyUI 时，请填写 DSH Host 可访问的服务地址，并导入 **API Format Workflow JSON**。
 
 已有 ChatGPT、Grok 或 Google 订阅？无需填写 API Key：展开对应的订阅 Provider 行，点击**「登录」**并在浏览器完成授权，即可直接开始文生图与图生图。
+
+<div align="center">
+  <img src="docs/assets/readme/config.webp" alt="插件详情页选择默认 Provider、查看各渠道状态，并在对话输入框旁切换渠道" width="100%" />
+  <br />
+  <sub>选默认 Provider → 查看各渠道的 Key / 登录状态 → 在对话输入框旁随手切换。</sub>
+</div>
 
 ### 3. 开始创作
 
@@ -137,6 +138,12 @@ pnpm dsh plugin --profile web add ./dsh-image-gen
 
 ```text
 画一张雨夜霓虹街头的赛博朋克猫咪，电影感光线，16:9。
+```
+
+想要一整组图？直接说数量和统一风格：
+
+```text
+给我的小红书笔记《周末露营清单》配 5 张图：帐篷、炉具、睡袋、照明、零食，统一日系手绘风，3:4。
 ```
 
 也可以直接上传参考图，让 Agent 进行风格重构或局部编辑：
@@ -148,10 +155,9 @@ pnpm dsh plugin --profile web add ./dsh-image-gen
 <br />
 
 <div align="center">
-  <img src="docs/assets/readme/plugin-detail.webp" alt="dsh-image-gen 插件详情页中的 Provider 配置表单" width="46%" />
-  <img src="docs/assets/readme/chat-example.webp" alt="对话生图与风格重构效果" width="46%" />
+  <img src="docs/assets/readme/chat-example.webp" alt="对话生图与风格重构效果" width="60%" />
   <br />
-  <sub>左：插件详情页中的 Provider 配置 · 右：在 DSH 对话中直接生图、图生图与连续编辑。</sub>
+  <sub>在对话中直接生图、图生图与连续编辑。</sub>
 </div>
 
 <br />
@@ -162,9 +168,54 @@ pnpm dsh plugin --profile web add ./dsh-image-gen
 
 ## 核心能力
 
+<a id="chat-batch"></a>
+
+### 🔁 对话批量生图：一句话，一整组图
+
+配图、分镜、系列插画、同一主题的多个变体，不用一张一张地催。
+
+- 用一句话描述数量和统一要求，Agent 会自己规划出一组 Prompt，**单次最多 10 张**，图片按顺序附在同一条回复里。
+- 比例、清晰度、模型、Provider 可以对整组统一指定，保证风格一致。
+- 逐张生成，**某一张失败不会影响其余图片**，最后会汇报「成功 X / 共 Y」并列出失败原因。
+- 本地 ComfyUI 和订阅通道同样支持批量。
+
+<div align="center">
+  <img src="docs/assets/readme/chat-batch.webp" alt="一条消息让 Agent 批量生成 5 张二次元插画，失败的那张自动重跑，最后整组进入图库" width="100%" />
+  <br />
+  <sub>一条消息写 5 个画面 → Agent 规划成两批生成 → 逐张出图，失败的那张自动单独重跑 → 整组进入图库。（等待部分已加速）</sub>
+</div>
+
+> **对话批量和 Studio 批量有什么区别？** 对话批量是 Agent 帮你规划**一组不同的画面**（例如 4 张不同场景的插图）；Studio 批量是**同一个 Prompt 出多张候选**，由你挑选满意的保存。
+
+<br />
+
+<a id="ai-canvas"></a>
+
+### ✏️ 看得懂草图的 AI 画布
+
+在无限画布上画草图、摆参考图、圈出要改的地方，然后直接用对话告诉 AI 你想要什么。**Agent 能看到画布上的内容和你当前的选区**，不需要你截图、上传或者描述位置。
+
+- **草图 → 成图**：随手画个轮廓，选中它说「画成卡通角色」。
+- **圈哪改哪**：在已有图片上用画笔圈出局部，说「把这里换成斧头」，只改圈出的部分。
+- **组合参考**：把「最近生成」或图库里的图拖进画布，或点击缩略图上的「发送到画布」，多张一起选中作为参考。同一张历史图片重复导入会自动去重。
+- 每一步结果都留在画布上，随时可以从任意一版继续往下迭代。
+
+<div align="center">
+  <img src="docs/assets/readme/canvas-edit.webp" alt="在画布上圈出剑，说一句话，Agent 只把剑换成战斧" width="100%" />
+  <br />
+  <sub><b>圈哪改哪</b>：圈出女剑士手里的剑，说「变成一把斧头」，Agent 先确认圈的是什么，再只改那一处。</sub>
+  <br /><br />
+  <img src="docs/assets/readme/canvas-sketch.webp" alt="在画布上画火柴人草图，Agent 按草图姿势生成二次元剑士" width="100%" />
+  <br />
+  <sub><b>草图 → 成图</b>：随手画个持剑的火柴人，框选后说「按照之前风格生成」，姿势和构图都照着草图来。（等待部分已加速）</sub>
+</div>
+
+<br />
+
 ### 💬 对话生图、编辑与版本切换
 
 - 用自然语言完成文生图、图生图、多图参考和风格迁移。
+- **角色一致性**：要求「保持这个人物 / 角色 / 物体不变」时，插件会让模型沿用参考图里的同一主体，只改场景、服装、姿势或风格，而不是重新画一个相似的人。
 - 直接修改原图 Prompt 重新生成，并在同一卡片中切换历史版本。
 
 <br />
@@ -178,37 +229,43 @@ pnpm dsh plugin --profile web add ./dsh-image-gen
 
 <br />
 
-### ✏️ 从草稿到成图：AI 创作画布
+### ✨ 500+ Prompt 灵感：Agent 会自己去找
 
-在无限画布中表达你的创意，通过对话将草稿、构图和想法转化为真实图片。
+内置手绘风格手册（风格 / 排版 / 单色主题色）和 awesome-gpt-image-2 案例集，共 500+ 个可直接复用的 Prompt。
 
-- 在画布中自由绘制草稿、添加参考素材并组织创意。
-- 将「最近生成」或图库中的图片拖入画布，或点击缩略图上的「发送到画布」。请先打开无限画布并等待图片加载完成；同一张历史图片重复导入会自动去重。
-- 通过自然语言与 AI 对话，让草稿快速变成完整作品。
-- 基于已有结果持续编辑、修改和生成新的方向，保留创作过程，让每一次探索都可以继续迭代。
+- **在对话里直接点名**：说「用风格 #123」「做成信息图排版」「莫兰迪色系」，Agent 会先在灵感库里检索，再把模板套到你的主题上出图。风格、排版、主题色还可以组合使用。
+- **在界面里浏览**：筛选、收藏、复制，或一键带入工作台（见下方 Studio 演示）。
+- 图片缓存在本地，浏览和学习不消耗 Token 或生成额度。
 
 <br />
 
 <div align="center">
-  <img src="docs/assets/readme/canvas-generate.webp" alt="在无限画布中绘制草稿，并通过对话生成成图" width="46%" />
-  <img src="docs/assets/readme/canvas-edit.webp" alt="基于已有结果继续对话修改，在画布中持续迭代创作" width="46%" />
+  <img src="docs/assets/readme/inspiration-library.webp" alt="Prompt 灵感素材库" width="100%" />
   <br />
-  <sub>左：在画布中绘制草稿、摆放参考图，并通过对话生成成图。 · 右：基于已有结果继续对话修改，在画布中持续迭代创作。</sub>
+  <sub>先找灵感，再把 Prompt 带入工作台；全本地缓存，浏览或复制不消耗生成额度。</sub>
 </div>
 
 <br />
 
-### 🎛️ Studio 批量创作
+### 🎛️ Studio 工作台：不用对话，自己调参数
 
-- 支持多张参考图，一次生成多张候选图。
-- 自由控制 Provider、模型、比例和清晰度，只保存满意的结果。
+想精细控制时，打开会话顶部的 **画廊 → 工作台**，所有参数都摆在面前。
+
+- **从灵感直接开工**：在灵感库里点「带入工作台」，Prompt 自动填好。
+- **参数一目了然**：Provider、模型、比例、生成质量、水印都能单独选；一次出 1–4 张候选，满意的才保存。
+- **拿历史结果继续改**：从「最近生成」拖一张图进来，点「继续编辑（垫图）」，它就自动成为图生图的参考图（最多 5 张）。
+- 单模型 / 多模型对比一键切换。
 
 <br />
 
 <div align="center">
-  <img src="docs/assets/readme/studio-workbench.webp" alt="dsh-image-gen Studio 工作台" width="100%" />
+  <img src="docs/assets/readme/studio.webp" alt="从灵感库挑选 Prompt 带入工作台，调整参数后生成海报" width="100%" />
   <br />
-  <sub>在同一个 Studio 中完成参考图导入、参数控制、批量生成、结果筛选与保存。</sub>
+  <sub>灵感库挑一个 Prompt → 带入工作台 → 选好参数开始生成 → 出图后再决定保存。（等待部分已加速）</sub>
+  <br /><br />
+  <img src="docs/assets/readme/studio-ref.webp" alt="从最近生成拖入一张图，点继续编辑后自动切到图生图并作为参考图" width="100%" />
+  <br />
+  <sub>从「最近生成」拖一张图进来 → 「继续编辑（垫图）」→ 自动切到图生图，写一句要改什么就行。</sub>
 </div>
 
 <br />
@@ -223,21 +280,6 @@ pnpm dsh plugin --profile web add ./dsh-image-gen
   <img src="docs/assets/readme/multi-model-compare.webp" alt="同一 Prompt 的多模型生成对比" width="100%" />
   <br />
   <sub>在同一画布中比较不同模型结果，再批量保存满意的图片。</sub>
-</div>
-
-<br />
-
-### ✨ 500+ Prompt 灵感案例
-
-- 浏览和筛选 **500+ Prompt 案例**，支持收藏、复制及一键带入 Studio。
-- 图片缓存在本地，浏览和学习不消耗 Token 或生成额度。
-
-<br />
-
-<div align="center">
-  <img src="docs/assets/readme/inspiration-library.webp" alt="Prompt 灵感素材库" width="100%" />
-  <br />
-  <sub>先找灵感，再把 Prompt 带入工作台；全本地缓存，浏览或复制不消耗生成额度。</sub>
 </div>
 
 <br />
@@ -262,7 +304,7 @@ pnpm dsh plugin --profile web add ./dsh-image-gen
 灵活调用本地 GPU 算力，让私有化绘图无缝融入 Agent 对话。
 
 - 导入并管理多个命名工作流，支持预设 Prompt 和常用占位符。
-- Agent 可按名称选择工作流，在对话中完成文生图和图生图。
+- Agent 可按名称选择工作流，在对话中完成文生图、图生图和批量生图。
 
 > ComfyUI 暂未接入 Studio 和多模型对比。
 
@@ -280,70 +322,25 @@ pnpm dsh plugin --profile web add ./dsh-image-gen
 
 ## Provider 支持情况
 
-| Provider                          | 对话生图 | 对话编辑 | Studio | 多模型对比 |
-| :-------------------------------- | :------: | :------: | :----: | :--------: |
-| **Google Gemini**                 |    ✅    | ✅ 多图  |   ✅   |     ✅     |
-| **OpenAI Images**                 |    ✅    | ✅ 多图  |   ✅   |     ✅     |
-| **OpenAI Compatible（中转站）**   |    ✅    | ✅ 多图  |   ✅   |     ✅     |
-| **ByteDance Seedream / 火山方舟** |    ✅    | ✅ 多图  |   ✅   |     ✅     |
-| **Aliyun DashScope / Qwen Image** |    ✅    | ✅ 多图  |   ✅   |     ✅     |
-| **xAI Grok Imagine**              |    ✅    | ⚠️ 有限  |   ✅   |     ✅     |
-| **智谱 GLM-Image**                |    ✅    |    —     |   ✅   |     ✅     |
-| **Local ComfyUI**                 |    ✅    | ✅ 单图  |   —    |     —      |
-| **ChatGPT 订阅（免 Key）**       |    ✅    | ✅ 多图  |   ✅   |     ✅     |
-| **Grok 订阅（免 Key）**          |    ✅    | ✅ 多图  |   ✅   |     ✅     |
-| **Google 订阅（免 Key）**        |    ✅    | ✅ 多图  |   ✅   |     ✅     |
+| Provider                          | 对话生图 | 对话批量 | 对话编辑 | Studio | 多模型对比 |
+| :-------------------------------- | :------: | :------: | :------: | :----: | :--------: |
+| **Google Gemini**                 |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |
+| **OpenAI Images**                 |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |
+| **OpenAI Compatible（中转站）**   |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |
+| **ByteDance Seedream / 火山方舟** |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |
+| **Aliyun DashScope / Qwen Image** |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |
+| **xAI Grok Imagine**              |    ✅    |    ✅    | ⚠️ 有限  |   ✅   |     ✅     |
+| **智谱 GLM-Image**                |    ✅    |    ✅    |    —     |   ✅   |     ✅     |
+| **Local ComfyUI**                 |    ✅    |    ✅    | ✅ 单图  |   —    |     —      |
+| **ChatGPT 订阅（免 Key）**        |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |
+| **Grok 订阅（免 Key）**           |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |
+| **Google 订阅（免 Key）**         |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |
 
 > Studio 与多模型对比目前只支持云端 Provider（含订阅通道）；多模型对比调用的是各 Provider 在设置中已配置的模型。
 > 智谱 GLM-Image 上游本身不支持图生图；xAI 图生图走 OpenAI 兼容协议（multipart），部分网关可能需等待后续适配。
-> 订阅通道通过账号登录使用（免 API Key），支持对话文生图 / 图生图、Studio 批量生成与多模型对比；图生图走各订阅渠道的编辑接口（最多 5 张参考图），比例与清晰度可在 Studio 中直接选择。
+> 订阅通道通过账号登录使用（免 API Key），图生图走各订阅渠道的编辑接口（最多 5 张参考图），比例与清晰度可在 Studio 中直接选择。
 
-<details>
-<summary><strong>当前默认模型与 Endpoint（均可修改）</strong></summary>
-
-| Provider           | 默认模型                     | 默认 Endpoint / Base URL                                        |
-| :----------------- | :--------------------------- | :-------------------------------------------------------------- |
-| Google Gemini      | `gemini-3.1-flash-image`     | `https://generativelanguage.googleapis.com/v1beta/interactions` |
-| OpenAI Images      | `gpt-image-2`                | `https://api.openai.com/v1`                                     |
-| OpenAI Compatible  | 自定义                       | 自定义 Base URL                                                 |
-| ByteDance Seedream | `doubao-seedream-5-0-260128` | `https://ark.cn-beijing.volces.com/api/v3`                      |
-| Aliyun DashScope   | `qwen-image-3.0`             | `https://dashscope.aliyuncs.com/api/v1`                         |
-| xAI Grok Imagine   | `grok-imagine-image`         | `https://api.x.ai/v1`                                           |
-| 智谱 GLM-Image     | `glm-image`                  | `https://open.bigmodel.cn/api/paas/v4`                         |
-| Local ComfyUI      | 用户导入的 API Workflow      | `http://127.0.0.1:8188`                                         |
-| ChatGPT 订阅       | `gpt-image-2.5-flare`（通道固定） | 账号登录，无需配置                                        |
-| Grok 订阅         | `grok-imagine-image-2.0`（通道固定） | 账号登录，无需配置                                    |
-| Google 订阅       | `gemini-3.1-flash-image`（通道固定） | 账号登录，无需配置                                        |
-
-</details>
-
-<details>
-<summary><strong>各 Provider 可选比例与清晰度</strong></summary>
-
-| Provider           | 比例                                                              | 清晰度                                  |
-| :----------------- | :---------------------------------------------------------------- | :-------------------------------------- |
-| Google Gemini      | 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 4:5 · 5:4 · 16:9 · 9:16 · 21:9      | 1K / 2K / 4K                            |
-| OpenAI Images      | gpt-image-2 系列支持 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 | 分辨率 1K / 2K（宽屏、竖屏另有 4K）；生成质量独立选择 auto / low / medium / high |
-| OpenAI Compatible  | 由 `openaiCompatSizes` 配置决定（默认 1:1 · 3:2 · 2:3）           | 分辨率由尺寸表决定；生成质量独立配置，默认不发送 |
-| ByteDance Seedream | 自动 · 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 · 21:9           | 2K / 3K / 4K                            |
-| Aliyun DashScope   | 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16                         | 标准                                    |
-| xAI Grok Imagine   | 自动 · 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 · 21:9           | 1K / 2K                                 |
-| 智谱 GLM-Image     | 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16                         | 高清                                    |
-| ChatGPT 订阅       | 自动 · 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16                  | 自动 / low / medium / high / xhigh / max |
-| Grok 订阅          | 自动 · 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 · 21:9           | 1K / 2K                                 |
-| Google 订阅        | 自动 · 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 4:5 · 5:4 · 16:9 · 9:16 · 21:9 | 标准 / 高清（4K）                     |
-
-> 「自动」比例表示由模型按 Prompt 自行决定构图；上游已移除的档位（如 Seedream 5.0 的 1K）插件不会暴露。
-> Google 订阅会使用有效的平台枚举发现账号项目，并提供普通 daily 入口作为兼容回退。项目发现未返回项目且提示 `UNSUPPORTED_CLIENT` 时，会再用 Antigravity 客户端身份重试；该过程不自动开户。仍未返回项目时保留旧兼容项目尝试，但不会把它缓存成账号真实项目；若生图仍失败，错误会保留项目发现、账号资格及各生图入口的脱敏响应，避免只显示最后一个 429。设置中的订阅「测试连接」只检查登录记录，实际生图成功才验证该账号的生图链路；`UNSUPPORTED_CLIENT` 的 Code Assist 提示也不单独判定生图不可用。
-> OpenAI 与兼容渠道的 Studio 控件分别显示「比例 / 分辨率 / 生成质量」，分辨率选项会显示实际像素。多模型对比及再次生成也保留这两类参数。
-> OpenAI 官方可通过设置中的 `openaiSizes` 自定义尺寸表，格式为「比例 → 档位 → 像素」，例如 `{ "16:9": { "2K": "2048x1152", "4K": "3840x2160" } }`。gpt-image-2 系列按官方限制校验：边长为 16 的倍数、最大 3840、比例在 1:3 到 3:1、总像素 655360–8294400；超过 3686400 像素的输出属于上游实验支持。[官方说明](https://developers.openai.com/api/reference/resources/images/methods/generate)。旧版 GPT Image 模型仍只使用三种标准尺寸。
-> OpenAI Compatible 的尺寸表为 `openaiCompatSizes`，格式相同；留空时保持原来的标准尺寸。`openaiCompatQuality` 设置默认生成质量（留空不发送），`openaiCompatQualityOptions` 设置 Studio 可选值。选择「渠道默认（不发送）」可在单次请求中省略 quality；对话工具也支持独立的 `size` 和 `quality` 参数。
-> 兼容渠道的「文生图额外字段」对应 `openaiCompatExtraBody`，例如 `{ "watermark": false }`。它仅用于文生图，在常规字段之后合并，可覆盖同名参数；`false` 和嵌套对象都会保留。图生图继续使用 `openaiCompatEditExtra`；JSON 图片 URL 数组格式的 `openaiCompatEditSizeMode` 默认 `auto`，改为 `selected` 才发送所选尺寸，EditExtra 仍可覆盖该尺寸。
-> 兼容渠道可设置独立的「图生图模型」`openaiCompatEditModel`，留空沿用文生图模型；对话中的显式 `model` 仍可覆盖单次编辑。硅基流动官方 `/v1` 地址自动使用 `siliconflowJson` 编辑格式，其他采用同一协议的中转可手动选择：通过 `/images/generations` 发送 `image` 字符串。`Qwen/Qwen-Image-Edit` 支持一张参考图，`Qwen/Qwen-Image-Edit-2509` 最多三张，依次使用 `image`、`image2`、`image3`。编辑不发送通用尺寸和质量字段；图生图额外字段中的 `size`、`image_size`、`quality` 会给出明确错误，图片字段由插件填入。协议以[硅基流动官方文档](https://docs.siliconflow.cn/docs/api/images-generations-post)为准。
-> 普通对话生图无需指定 provider 或 model，会使用已保存的默认渠道；模型可读取随配置更新的默认渠道及参数提示。无关可选字段应省略，空白尺寸会按未提供处理；两个有效的 `size` / `aspect_ratio` 仍互斥。ChatGPT 订阅不支持 `image_size`，请使用 `size` 或 `aspect_ratio`，不要填入 `1K` 等档位。
-> 工作台在比例、分辨率旁提供「可见水印：渠道默认 / 关闭 / 开启」，分别判断文生图和图生图支持情况。Seedream、通义原生 Qwen Image，以及已确认的商汤和通义官方兼容接口自动启用；官方兼容接口同时自动使用对应的 JSON 编辑格式。商汤匹配 `https://token.sensenova.cn/v1` 与 `sensenova-u1.5-lite`；通义匹配官方工作空间域名的 `/compatible-mode/v1` 与 Qwen Image 3.0/3.0 Pro、2.1 Pro/Turbo。其他兼容渠道可通过对应操作的额外字段绑定布尔值 `watermark`、`watermark_enabled` 或 `parameters.watermark`；图生图绑定仅用于 JSON 编辑格式。未知渠道和智谱显示禁用的「支持未确认」，无已确认开关的接口也显示说明。不会仅凭模型名识别未知中转。渠道默认保留原配置或省略参数，单次选择只覆盖水印字段；批量生成、支持该操作的对比模型及再次生成会保留选择。
-
-</details>
+📖 **默认模型与 Endpoint、各 Provider 的比例 / 清晰度、尺寸表、水印、中转站编辑格式等高级配置，见 [Provider 配置参考](docs/providers.md)。**
 
 ---
 
@@ -375,6 +372,13 @@ dsh --profile web --dump-config
 </details>
 
 <details>
+<summary><strong>一次最多能批量生成多少张？</strong></summary>
+
+对话批量单次调用最多 10 张，超过时插件会提示 Agent 拆成多次调用。图片是逐张生成的，单张失败不会中断其余图片，失败的会在结果里单独列出原因。
+
+</details>
+
+<details>
 <summary><strong>生成图片保存在哪里？</strong></summary>
 
 开启“保存到工作区”后，对话生成结果默认保存在当前工作区的 `dsh-image-gen/` 子目录，也可以在设置中修改。Studio 候选图先留在临时画布，只有用户选中的结果才会进入图库并保存。
@@ -393,7 +397,7 @@ dsh --profile web --dump-config
 <details>
 <summary><strong>为什么 ComfyUI 没有出现在 Studio 中？</strong></summary>
 
-当前 Studio 与多模型对比仅支持云端 Provider，暂未接入 ComfyUI。ComfyUI 已支持在 Agent 对话中进行文生图、单图编辑以及多个命名工作流。
+当前 Studio 与多模型对比仅支持云端 Provider，暂未接入 ComfyUI。ComfyUI 已支持在 Agent 对话中进行文生图、单图编辑、批量生图以及多个命名工作流。
 
 </details>
 
@@ -431,11 +435,7 @@ pnpm run pack:check
 pnpm run test:package
 ```
 
-新 DSH 的设置保存需要实际加载的 `@deepseek-ai/schemastery >=3.18.4 <4`。设置卡会区分加载中、宿主未提供设置、远程连接不可保存及依赖不兼容；旧 DSH 的设置接口仍保留。更新依赖时应检查插件所在 profile 的实际依赖，而不只检查源码目录。
-
-`test:package` 需要网络，会在临时目录安装当前构建的插件 tarball 和指定版本的 DSH 0.2 设置服务，通过真实 React 渲染验证卡片状态和保存处理、配置文件写入、重新打开表单和宿主重启后的读取，并验证旧 schemastery 的明确拒绝提示。图片 API、浏览器 DOM 和 RPC 传输不属于此测试；CI 同时在 Windows 和 Linux 执行。
-
-欢迎通过 [Issues](https://github.com/shanliuling/dsh-image-gen/issues) 反馈问题，或阅读 [CONTRIBUTING.md](CONTRIBUTING.md) 后提交 Pull Request。
+依赖要求与 `test:package` 的测试范围等维护者说明见 [CONTRIBUTING.md](CONTRIBUTING.md)。欢迎通过 [Issues](https://github.com/shanliuling/dsh-image-gen/issues) 反馈问题，或阅读贡献指南后提交 Pull Request。
 
 ## 鸣谢
 

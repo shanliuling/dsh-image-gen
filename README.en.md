@@ -8,9 +8,9 @@
 
 # 🎨 dsh-image-gen
 
-### Native AI image creation suite for DeepSeek Harness
+### Draw by talking, right inside DeepSeek Harness
 
-<p><b>AI Creative Canvas · In-chat generation and editing · Studio batch creation · Multi-model comparison · 500+ prompt inspirations · Gallery management · Local ComfyUI · Subscription no-key</b></p>
+<p><b>Batch generation from one message · A canvas the AI can actually read · Agent-picked prompts from 500+ examples · Subscription sign-in, no API key</b></p>
 
 <p>
   <a href="https://www.npmjs.com/package/dsh-image-gen"><img src="https://img.shields.io/npm/v/dsh-image-gen?style=flat-square&color=4f6ef7" alt="npm version" /></a>
@@ -27,6 +27,7 @@
 </p>
 
 <p>
+  <a href="#just-say-it">Just say it</a> ·
   <a href="#quick-start">Quick Start</a> ·
   <a href="#core-capabilities">Core Capabilities</a> ·
   <a href="#provider-support">Provider Support</a> ·
@@ -35,25 +36,22 @@
 
 <br />
 
-<img src="docs/assets/readme/canvas-generate.webp" alt="Sketching on the infinite canvas and generating a final image through conversation" width="46%" />
-<img src="docs/assets/readme/canvas-edit.webp" alt="Continuing to edit and iterate through conversation based on existing results" width="46%" />
-<br />
-<sub>Left: Sketch and place reference images on the canvas, then generate through conversation. · Right: Keep iterating on existing results through conversation.</sub>
-
-<br />
-
-<img src="docs/assets/readme/chat-generate.webp" alt="Generating images directly in conversation" width="46%" />
-<img src="docs/assets/readme/other-features.webp" alt="Studio batch creation, inspiration library, gallery and more" width="46%" />
-<br />
-<sub>Left: Describe and generate images right in the conversation. · Right: Studio batch creation, inspiration library, gallery, and more.</sub>
+<table>
+  <tr>
+    <td width="50%" align="center"><b>🔁 One message, a whole set</b><br /><sub>5 scenes in one message, generated one by one</sub></td>
+    <td width="50%" align="center"><b>✏️ Sketch it, circle it, done</b><br /><sub>Circle the sword → an axe · stick figure → finished art</sub></td>
+  </tr>
+  <tr>
+    <td><a href="#chat-batch"><img src="docs/assets/readme/hero-batch.webp" alt="One message with 5 scenes; the Agent generates each and collects them in the Gallery" width="100%" /></a></td>
+    <td><a href="#ai-canvas"><img src="docs/assets/readme/hero-canvas.webp" alt="Circling a sword on the canvas to turn it into an axe, then turning a stick figure into an anime swordswoman" width="100%" /></a></td>
+  </tr>
+</table>
 
 </div>
 
-**A complete AI image creation workflow for DeepSeek Harness.**
+<br />
 
-`dsh-image-gen` goes far beyond basic in-chat image generation. It brings **in-chat generation with continuous editing**, an **AI creative canvas**, **Studio batch creation**, **side-by-side multi-model comparison**, a **prompt inspiration library**, and **local ComfyUI** workflows into DSH.
-
-It supports mainstream cloud image models and private local workflows, works with BYOK (bring your own key) or subscription accounts, and can isolate generated assets by workspace.
+`dsh-image-gen` is a native image creation plugin for DeepSeek Harness. Instead of bolting an image button onto the chat, it **teaches the Agent itself to make images**: it can plan and generate a whole set in one go, read your sketches and selections on the canvas, and pull the right style template from the inspiration library on its own. When you want fine-grained control, Studio, multi-model comparison, and the Gallery are one click away.
 
 > **Already paying for ChatGPT, Grok, or Google? Just sign in and start generating—no separate API key purchase needed.**
 
@@ -63,21 +61,24 @@ Supports: Gemini · OpenAI / Compatible · Seedream · DashScope · Grok Imagine
 pnpm dsh plugin --profile web add dsh-image-gen@latest
 ```
 
-> **Update notice:** This release includes major changes. Existing users should update to the latest version.
-
-<img src="docs/assets/readme/workflow-overview-en.webp" alt="dsh-image-gen complete AI image creation workflow" width="100%" />
+> See [Releases](https://github.com/shanliuling/dsh-image-gen/releases) for what changed in each version.
 
 ---
 
-## One plugin, the complete AI image creation workflow
+## Just say it
 
-| Entry | Best for | What you can do |
-| :--- | :--- | :--- |
-| 💬 **Chat** | Expressing ideas quickly | Text-to-image, image-to-image, continuous editing, and revision iteration |
-| ✏️ **Canvas** | Expressing visual creativity | Sketch-to-image, reference composition, spatial creation, and continuous refinement |
-| 🎛️ **Studio** | Fine-grained control over creation parameters | Batch generation, multi-image reference, and advanced parameter tuning |
-| ✨ **Inspiration** | Finding creative direction | Prompt examples, style exploration, and one-click reuse |
-| 🖼️ **Gallery** | Managing generated results | Search, favorite, download, and reuse |
+No parameters to learn, no pages to switch. Just say it in a DSH chat:
+
+| You say | What the plugin does |
+| :-- | :-- |
+| "Make 4 illustrations for my *Coffee Shop Grand Opening* post, consistent flat style, 16:9" | 🔁 **Batch generation in chat**: the Agent splits the request into 4 prompts and generates them one by one, all delivered in a single reply |
+| "Draw a coffee shop menu in hand-drawn style #123" | ✨ **Inspiration on autopilot**: the Agent searches the 500+ example library for that style, then applies the template |
+| "Turn the sketch I drew on the canvas into a finished illustration" | ✏️ **Reads the canvas**: the Agent looks at your canvas selection and turns the draft into an image |
+| "Turn the sword I circled into an axe, keep everything else" | 🎯 **Edit what you circle**: only the marked area changes |
+| "Keep this character exactly the same, but put them in a snowy scene" | 🎭 **Identity consistency**: edits keep the same person or object instead of a lookalike |
+| "Same prompt, one from GPT and one from Gemini, side by side" | ⚖️ **Multi-model comparison**: runs several models concurrently and lays the results out on one canvas |
+
+<img src="docs/assets/readme/workflow-overview-en.webp" alt="dsh-image-gen complete AI image creation workflow" width="100%" />
 
 ---
 
@@ -119,17 +120,17 @@ After restarting DSH, click the **Plugins** icon in the left sidebar, then click
 
 **Plugins panel → Installed → dsh-image-gen**
 
-<div align="center">
-  <img src="docs/assets/readme/plugins-entry.webp" alt="Click Plugins in the left sidebar, then dsh-image-gen under Installed" width="100%" />
-  <br />
-  <sub>Click the Plugins icon in the left sidebar, then dsh-image-gen under Installed to open its detail page.</sub>
-</div>
-
 > DSH 0.1.5 and earlier have no Plugins panel; the entry there is **Settings → Plugins → Plugin Configuration → Image Generation**. The same plugin build supports both.
 
 Choose a Provider, enter your API key, and adjust the model, Endpoint / Base URL, and workspace-save options as needed. Once the key is stored, click **Test connection** to verify it, or **Fetch models** to pull every image-capable model the provider offers—no manual lookups needed. For ComfyUI, enter an address reachable by the DSH Host and import an **API Format Workflow JSON** file.
 
 Already paying for ChatGPT, Grok, or Google? No API key needed: expand the matching subscription Provider row, click **Sign in** and complete the authorization in your browser, then start generating (and editing) right away.
+
+<div align="center">
+  <img src="docs/assets/readme/config.webp" alt="Choosing the default Provider on the plugin detail page, checking channel status, and switching channels from the chat input" width="100%" />
+  <br />
+  <sub>Pick a default Provider → check each channel's key / sign-in status → switch channels right from the chat input.</sub>
+</div>
 
 ### 3. Start creating
 
@@ -137,6 +138,12 @@ Describe the image you want directly in chat:
 
 ```text
 Create a cinematic cyberpunk cat on a neon street at night, 16:9.
+```
+
+Want a whole set? Just say how many and what should stay consistent:
+
+```text
+Make 5 images for my "Weekend Camping Checklist" post: tent, stove, sleeping bag, lights, snacks. Consistent Japanese hand-drawn style, 3:4.
 ```
 
 You can also upload a reference image directly for style transfer or editing:
@@ -148,10 +155,9 @@ Keep the character and composition unchanged, then add black sunglasses to the c
 <br />
 
 <div align="center">
-  <img src="docs/assets/readme/plugin-detail.webp" alt="Provider settings form on the dsh-image-gen detail page" width="46%" />
-  <img src="docs/assets/readme/chat-example.webp" alt="Chat generation and editing example" width="46%" />
+  <img src="docs/assets/readme/chat-example.webp" alt="Chat generation and editing example" width="60%" />
   <br />
-  <sub>Left: Provider settings on the plugin detail page · Right: In-chat generation, editing, and continuous refinement.</sub>
+  <sub>In-chat generation, editing, and continuous refinement.</sub>
 </div>
 
 <br />
@@ -162,9 +168,54 @@ For more precise parameter control, open **Gallery** from the conversation heade
 
 ## Core Capabilities
 
+<a id="chat-batch"></a>
+
+### 🔁 Batch generation in chat: one message, a whole set
+
+Post illustrations, storyboards, series art, or several variations on a theme—without asking for them one at a time.
+
+- Describe how many images you want and what they share. The Agent plans the set of prompts itself, **up to 10 images per call**, attached in order to a single reply.
+- Aspect ratio, resolution, model, and Provider can be set once for the whole set to keep it consistent.
+- Images generate one after another, and **one failure never stops the rest**: the reply reports "X of Y generated" and lists what failed and why.
+- Works with local ComfyUI and subscription channels too.
+
+<div align="center">
+  <img src="docs/assets/readme/chat-batch.webp" alt="One message asks the Agent for 5 anime illustrations; a failed one is retried and the set lands in the Gallery" width="100%" />
+  <br />
+  <sub>One message with 5 scenes → the Agent plans two batches → images arrive one by one, the failed one is retried on its own → the whole set lands in the Gallery. (Waiting sped up.)</sub>
+</div>
+
+> **How is this different from Studio batches?** Chat batches are a **set of different images** the Agent plans for you (say, 4 illustrations of different scenes). Studio batches are **several candidates for the same prompt**, and you keep the ones you like.
+
+<br />
+
+<a id="ai-canvas"></a>
+
+### ✏️ A canvas the AI can actually read
+
+Sketch on an infinite canvas, lay out references, circle what should change, then just tell the AI what you want. **The Agent sees what is on the canvas and what you have selected**, so there is no need to screenshot, upload, or describe positions.
+
+- **Sketch → image**: draw a rough outline, select it, and say "make this a cartoon character".
+- **Edit what you circle**: mark an area on an existing image and say "turn this into an axe"; only the circled part changes.
+- **Combine references**: drag images from Recent generations or the Gallery onto the canvas, or click Send to canvas on a thumbnail, then select several together as references. Repeated imports of the same history item are deduplicated.
+- Every result stays on the canvas, so you can keep iterating from any version.
+
+<div align="center">
+  <img src="docs/assets/readme/canvas-edit.webp" alt="Circle the sword on the canvas, say one sentence, and the Agent swaps only the sword for an axe" width="100%" />
+  <br />
+  <sub><b>Edit what you circle</b>: circle the swordswoman's blade, ask for an axe, and the Agent confirms what you marked, then changes only that.</sub>
+  <br /><br />
+  <img src="docs/assets/readme/canvas-sketch.webp" alt="Draw a stick-figure sketch on the canvas and the Agent turns it into an anime swordswoman with the same pose" width="100%" />
+  <br />
+  <sub><b>Sketch → image</b>: doodle a stick figure holding a sword, select it, ask for "the previous style", and the pose and framing follow your sketch. (Waiting sped up.)</sub>
+</div>
+
+<br />
+
 ### 💬 In-chat generation, editing, and revision switching
 
 - Use natural language for text-to-image, image-to-image, multi-image reference, and style transfer.
+- **Identity consistency**: when you ask to keep a person, character, or object the same, the plugin tells the model to reuse the subject from the references and change only the scene, clothing, pose, or style, rather than drawing a similar-looking replacement.
 - Edit the original prompt to regenerate, then switch between revisions on the same image card.
 
 <br />
@@ -178,58 +229,12 @@ For more precise parameter control, open **Gallery** from the conversation heade
 
 <br />
 
-### ✏️ From sketch to image: AI creative canvas
+### ✨ 500+ prompt inspirations, and the Agent finds them for you
 
-Express your ideas on an infinite canvas and turn drafts, compositions, and thoughts into real images through conversation.
+Ships with a hand-drawn style cookbook (styles / layouts / theme colors) and the awesome-gpt-image-2 example set: 500+ ready-to-reuse prompts.
 
-- Freely sketch, add reference materials, and organize your ideas on the canvas.
-- Drag images from Recent generations or the Gallery onto the canvas, or click Send to canvas on a thumbnail. Open the infinite canvas and wait for the image to load first; repeated imports of the same history item are deduplicated.
-- Talk to the AI in natural language to turn a draft into a finished piece.
-- Keep editing, refining, and exploring new directions from existing results—your creative process is preserved so every exploration stays iterable.
-
-<br />
-
-<div align="center">
-  <img src="docs/assets/readme/canvas-generate.webp" alt="Sketching on the infinite canvas and generating a final image through conversation" width="46%" />
-  <img src="docs/assets/readme/canvas-edit.webp" alt="Continuing to edit and iterate through conversation based on existing results" width="46%" />
-  <br />
-  <sub>Left: Sketch and place reference images on the canvas, then generate through conversation. · Right: Keep iterating on existing results through conversation.</sub>
-</div>
-
-<br />
-
-### 🎛️ Studio batch creation
-
-- Support multiple reference images, and generate multiple candidates at a time.
-- Control the Provider, model, aspect ratio, and quality, then save only the results you want.
-
-<br />
-
-<div align="center">
-  <img src="docs/assets/readme/studio-workbench.webp" alt="dsh-image-gen Studio workbench" width="100%" />
-  <br />
-  <sub>Import references, control parameters, generate batches, select results, and save—all within one Studio.</sub>
-</div>
-
-<br />
-
-### ⚖️ Side-by-side multi-model comparison
-
-Run the same prompt and reference images across multiple models, then compare and save the results on one canvas.
-
-<br />
-
-<div align="center">
-  <img src="docs/assets/readme/multi-model-compare.webp" alt="Comparing the same prompt across multiple image models" width="100%" />
-  <br />
-  <sub>Compare results from different models on one canvas, then save the images you prefer in a batch.</sub>
-</div>
-
-<br />
-
-### ✨ 500+ prompt inspiration examples
-
-- Browse and filter **500+ prompt examples**, then favorite, copy, or send them directly to Studio.
+- **Name it in chat**: say "use style #123", "make it an infographic layout", or "Morandi palette", and the Agent searches the library first, then applies the template to your topic. Styles, layouts, and theme colors can be combined.
+- **Browse in the UI**: filter, favorite, copy, or send a prompt straight to Studio (see the Studio demo below).
 - Images are cached locally, so browsing and learning consume no tokens or generation quota.
 
 <br />
@@ -238,6 +243,43 @@ Run the same prompt and reference images across multiple models, then compare an
   <img src="docs/assets/readme/inspiration-library.webp" alt="Prompt inspiration library" width="100%" />
   <br />
   <sub>Find inspiration first, then send a prompt to Studio. Browsing and copying from the local cache consume no generation quota.</sub>
+</div>
+
+<br />
+
+### 🎛️ Studio: hands-on control, no chat needed
+
+When you want precise control, open **Gallery → Studio** from the conversation header and every parameter is right there.
+
+- **Start from inspiration**: click "Send to Studio" in the inspiration library and the prompt is filled in.
+- **Every parameter in view**: pick the Provider, model, aspect ratio, quality, and watermark separately; generate 1–4 candidates and save only the ones you like.
+- **Keep editing past results**: drag an image in from Recent generations and click "Continue editing" to make it the image-to-image reference (up to 5).
+- Switch between single model and multi-model comparison in one click.
+
+<br />
+
+<div align="center">
+  <img src="docs/assets/readme/studio.webp" alt="Picking a prompt from the inspiration library, sending it to Studio, and generating a poster" width="100%" />
+  <br />
+  <sub>Pick a prompt from the library → send it to Studio → set parameters and generate → decide what to keep. (Waiting sped up.)</sub>
+  <br /><br />
+  <img src="docs/assets/readme/studio-ref.webp" alt="Dragging an image in from Recent generations and clicking Continue editing to use it as a reference" width="100%" />
+  <br />
+  <sub>Drag an image in from Recent generations → "Continue editing" → Studio switches to image-to-image with it as the reference.</sub>
+</div>
+
+<br />
+
+### ⚖️ Side-by-side multi-model comparison
+
+Run the same prompt and reference images across multiple models concurrently, then compare and save the results on one canvas.
+
+<br />
+
+<div align="center">
+  <img src="docs/assets/readme/multi-model-compare.webp" alt="Comparing the same prompt across multiple image models" width="100%" />
+  <br />
+  <sub>Compare results from different models on one canvas, then save the images you prefer in a batch.</sub>
 </div>
 
 <br />
@@ -262,7 +304,7 @@ Run the same prompt and reference images across multiple models, then compare an
 Bring private image generation on your local GPU directly into Agent conversations.
 
 - Import and manage multiple named workflows with prompt presets and common placeholders.
-- Let the Agent select a workflow by name for text-to-image or image-to-image generation in chat.
+- Let the Agent select a workflow by name for text-to-image, image-to-image, or batch generation in chat.
 
 > ComfyUI is not yet integrated into Studio or multi-model comparison.
 
@@ -280,70 +322,25 @@ Bring private image generation on your local GPU directly into Agent conversatio
 
 ## Provider Support
 
-| Provider | Chat generation | Chat editing | Studio | Multi-model comparison |
-| :--- | :---: | :---: | :---: | :---: |
-| **Google Gemini** | ✅ | ✅ Multiple | ✅ | ✅ |
-| **OpenAI Images** | ✅ | ✅ Multiple | ✅ | ✅ |
-| **OpenAI Compatible (relay)** | ✅ | ✅ Multiple | ✅ | ✅ |
-| **ByteDance Seedream / Volcengine Ark** | ✅ | ✅ Multiple | ✅ | ✅ |
-| **Aliyun DashScope / Qwen Image** | ✅ | ✅ Multiple | ✅ | ✅ |
-| **xAI Grok Imagine** | ✅ | ⚠️ Limited | ✅ | ✅ |
-| **Zhipu GLM-Image** | ✅ | — | ✅ | ✅ |
-| **Local ComfyUI** | ✅ | ✅ Single | — | — |
-| **ChatGPT subscription (key-free)** | ✅ | ✅ Multiple | ✅ | ✅ |
-| **Grok subscription (key-free)** | ✅ | ✅ Multiple | ✅ | ✅ |
-| **Google subscription (key-free)** | ✅ | ✅ Multiple | ✅ | ✅ |
+| Provider | Chat generation | Chat batch | Chat editing | Studio | Multi-model comparison |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Google Gemini** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ |
+| **OpenAI Images** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ |
+| **OpenAI Compatible (relay)** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ |
+| **ByteDance Seedream / Volcengine Ark** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ |
+| **Aliyun DashScope / Qwen Image** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ |
+| **xAI Grok Imagine** | ✅ | ✅ | ⚠️ Limited | ✅ | ✅ |
+| **Zhipu GLM-Image** | ✅ | ✅ | — | ✅ | ✅ |
+| **Local ComfyUI** | ✅ | ✅ | ✅ Single | — | — |
+| **ChatGPT subscription (key-free)** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ |
+| **Grok subscription (key-free)** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ |
+| **Google subscription (key-free)** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ |
 
 > Studio and multi-model comparison currently support cloud Providers only (subscription channels included). Multi-model comparison uses the model configured for each Provider in Settings.
 > Zhipu GLM-Image does not support image-to-image upstream. xAI image editing goes through the OpenAI-compatible protocol (multipart); some gateways may need further adaptation.
-> Subscription channels work through account sign-in (no API key). They support in-chat text-to-image / image-to-image, Studio batch generation, and multi-model comparison; edits ride each channel's edit endpoint (up to 5 reference images), with aspect ratio and quality selectable directly in Studio.
+> Subscription channels work through account sign-in (no API key). Edits ride each channel's edit endpoint (up to 5 reference images), with aspect ratio and quality selectable directly in Studio.
 
-<details>
-<summary><strong>Current default models and endpoints (all configurable)</strong></summary>
-
-| Provider | Default model | Default Endpoint / Base URL |
-| :--- | :--- | :--- |
-| Google Gemini | `gemini-3.1-flash-image` | `https://generativelanguage.googleapis.com/v1beta/interactions` |
-| OpenAI Images | `gpt-image-2` | `https://api.openai.com/v1` |
-| OpenAI Compatible | Custom | Custom Base URL |
-| ByteDance Seedream | `doubao-seedream-5-0-260128` | `https://ark.cn-beijing.volces.com/api/v3` |
-| Aliyun DashScope | `qwen-image-3.0` | `https://dashscope.aliyuncs.com/api/v1` |
-| xAI Grok Imagine | `grok-imagine-image` | `https://api.x.ai/v1` |
-| Zhipu GLM-Image | `glm-image` | `https://open.bigmodel.cn/api/paas/v4` |
-| Local ComfyUI | Imported API Workflow | `http://127.0.0.1:8188` |
-| ChatGPT subscription | `gpt-image-2.5-flare` (channel-fixed) | Account sign-in, no configuration |
-| Grok subscription | `grok-imagine-image-2.0` (channel-fixed) | Account sign-in, no configuration |
-| Google subscription | `gemini-3.1-flash-image` (channel-fixed) | Account sign-in, no configuration |
-
-</details>
-
-<details>
-<summary><strong>Aspect ratios and quality tiers per Provider</strong></summary>
-
-| Provider | Aspect ratios | Quality tiers |
-| :--- | :--- | :--- |
-| Google Gemini | 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 4:5 · 5:4 · 16:9 · 9:16 · 21:9 | 1K / 2K / 4K |
-| OpenAI Images | gpt-image-2 family: 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 | Resolution: 1K / 2K (also 4K for landscape/portrait widescreen); separate quality: auto / low / medium / high |
-| OpenAI Compatible | Driven by `openaiCompatSizes` (default 1:1 · 3:2 · 2:3) | Resolution from the size table; separate configurable quality, omitted by default |
-| ByteDance Seedream | auto · 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 · 21:9 | 2K / 3K / 4K |
-| Aliyun DashScope | 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 | standard |
-| xAI Grok Imagine | auto · 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 · 21:9 | 1K / 2K |
-| Zhipu GLM-Image | 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 | hd |
-| ChatGPT subscription | auto · 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 | auto / low / medium / high / xhigh / max |
-| Grok subscription | auto · 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 · 21:9 | 1K / 2K |
-| Google subscription | auto · 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 4:5 · 5:4 · 16:9 · 9:16 · 21:9 | standard / HD (4K) |
-
-> An `auto` ratio lets the model pick the framing from the prompt; tiers the upstream dropped (e.g. Seedream 5.0's 1K) are never exposed.
-> Google subscription discovers account projects with valid platform enums and includes the ordinary daily endpoint as a compatibility fallback. When discovery returns no project with `UNSUPPORTED_CLIENT`, it retries using the Antigravity client identity without automatically onboarding the account. If discovery still returns no project, the legacy compatibility project is still tried but is not cached as an actual account project. Generation failures retain redacted discovery, eligibility, and per-endpoint diagnostics instead of only the last 429. The subscription “Test connection” checks stored sign-in status; successful generation verifies image access for that account. A Code Assist `UNSUPPORTED_CLIENT` response alone does not establish that image generation is unavailable.
-> Studio exposes separate aspect ratio, resolution, and generation quality controls for OpenAI and compatible providers. Resolution labels show pixel dimensions. Comparison and regeneration preserve these separate parameters.
-> Official OpenAI size presets can be customized with `openaiSizes`, shaped as ratio → tier → pixels, e.g. `{ "16:9": { "2K": "2048x1152", "4K": "3840x2160" } }`. For the gpt-image-2 family, dimensions must be multiples of 16, the longest edge at most 3840, aspect ratio within 1:3–3:1, and total pixels within 655360–8294400. Outputs above 3686400 pixels have experimental upstream support. See the [official API reference](https://developers.openai.com/api/reference/resources/images/methods/generate). Older GPT Image models retain their three standard sizes.
-> Compatible providers use `openaiCompatSizes` in the same format; an empty table retains the legacy sizes. `openaiCompatQuality` sets the default generation quality (empty means omitted), and `openaiCompatQualityOptions` sets Studio choices. Choosing “Provider default (omit)” omits quality for that request. Conversation tools also accept independent `size` and `quality` parameters.
-> “Generation extra fields” maps to `openaiCompatExtraBody`, e.g. `{ "watermark": false }`. These fields apply only to generation, merge after standard fields, and can override matching keys; `false` and nested objects are preserved. Editing continues to use `openaiCompatEditExtra`. For JSON image URL array edits, `openaiCompatEditSizeMode` defaults to `auto`; set it to `selected` to send the selected dimensions. EditExtra can still override size.
-> Compatible channels can set a separate editing model with `openaiCompatEditModel`; empty reuses the generation model, and an explicit conversation-tool `model` still overrides one edit. Official SiliconFlow `/v1` endpoints automatically use `siliconflowJson`; relays implementing the same contract can select it manually. Edits post an `image` string to `/images/generations`. `Qwen/Qwen-Image-Edit` supports one reference; `Qwen/Qwen-Image-Edit-2509` supports up to three using `image`, `image2`, and `image3` in order. Generic size and quality fields are omitted; `size`, `image_size`, or `quality` in editing extras produce an actionable error, and the plugin fills reference fields. See the [SiliconFlow API reference](https://docs.siliconflow.cn/docs/api/images-generations-post).
-> Ordinary conversation requests should omit provider and model to use the saved default. The model receives live default-provider and parameter instructions. Omit unused optional fields; blank dimensions are treated as absent, while two nonempty `size` / `aspect_ratio` values still conflict. ChatGPT subscription does not accept `image_size`; use `size` or `aspect_ratio` rather than a tier such as `1K`.
-> The workbench shows “Visible watermark: Channel default / Off / On” beside ratio and resolution, checking generation and editing separately. Seedream, native DashScope Qwen Image, and recognized official SenseNova and Qwen compatible endpoints enable it automatically; recognized compatible endpoints also select their JSON edit contracts automatically. SenseNova matches `https://token.sensenova.cn/v1` and `sensenova-u1.5-lite`; Qwen matches official workspace hosts under `/compatible-mode/v1` with Qwen Image 3.0/3.0 Pro or 2.1 Pro/Turbo. Other compatible channels can bind a boolean `watermark`, `watermark_enabled`, or `parameters.watermark` through the matching operation's extra fields; editing requires a JSON format. Unknown channels and Zhipu display a disabled “Support unconfirmed” control; interfaces without a confirmed switch also show an explanation. A model name alone does not identify an unknown relay. Channel default preserves configured fields or omits the parameter; an explicit choice overrides only the watermark field and is retained for batches, comparison models supporting the operation, and regeneration.
-
-</details>
+📖 **For default models and endpoints, per-Provider aspect ratios and quality tiers, size tables, watermarks, relay edit formats, and other advanced settings, see the [Provider configuration reference](docs/providers.en.md).**
 
 ---
 
@@ -375,6 +372,13 @@ If `dsh-image-gen` is absent from the output, run the installation command again
 </details>
 
 <details>
+<summary><strong>How many images can one batch generate?</strong></summary>
+
+Up to 10 per batch call; beyond that, the plugin tells the Agent to split the request into several calls. Images generate one at a time, a single failure does not stop the others, and any failures are listed with their reasons.
+
+</details>
+
+<details>
 <summary><strong>Where are generated images saved?</strong></summary>
 
 When “Save to workspace” is enabled, chat results are saved to the `dsh-image-gen/` subdirectory of the current workspace by default. You can change this directory in Settings. Studio candidates remain on the temporary canvas until you select which results should enter the gallery and be saved.
@@ -393,7 +397,7 @@ The configuration field is `googleNative: true`. It defaults to `false`, keeping
 <details>
 <summary><strong>Why is ComfyUI not available in Studio?</strong></summary>
 
-Studio and multi-model comparison currently support cloud Providers only; ComfyUI is not yet integrated. ComfyUI supports text-to-image, single-image editing, and multiple named workflows through Agent chat.
+Studio and multi-model comparison currently support cloud Providers only; ComfyUI is not yet integrated. ComfyUI supports text-to-image, single-image editing, batch generation, and multiple named workflows through Agent chat.
 
 </details>
 
@@ -431,11 +435,7 @@ pnpm run pack:check
 pnpm run test:package
 ```
 
-Saving settings on modern DSH requires the actually loaded `@deepseek-ai/schemastery >=3.18.4 <4`. The card distinguishes loading, missing host forms, remote connections that cannot persist, and incompatible schemas. Legacy DSH settings interfaces are retained. Check the dependencies resolved in the plugin profile when updating, as well as those in the source checkout.
-
-`test:package` requires network access. It installs the current build's tarball and pinned published DSH 0.2 settings services in a temporary directory, then uses real React rendering to verify card state, the bundled save handler, profile file persistence, a fresh form, host restart, and actionable refusal with old schemastery. Image APIs, browser DOM, and RPC transport are outside this test. CI runs it on Windows and Linux.
-
-Feedback is welcome through [Issues](https://github.com/shanliuling/dsh-image-gen/issues). Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a Pull Request.
+Maintainer notes on dependency requirements and the scope of `test:package` are in [CONTRIBUTING.md](CONTRIBUTING.md). Feedback is welcome through [Issues](https://github.com/shanliuling/dsh-image-gen/issues); read the contributing guide before opening a Pull Request.
 
 ## Acknowledgements
 
