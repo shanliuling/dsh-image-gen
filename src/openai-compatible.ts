@@ -254,6 +254,21 @@ function firstImage(value: unknown): { b64_json?: string; url?: string; mime_typ
       : undefined
 }
 
+// Some servers answer with a relative image URL instead of an absolute one:
+// SGLang returns `/v1/images/<id>/content` unless an object store is configured (#105).
+function resolveImageUrl(url: string, baseURL: string, provider: string): string {
+  if (URL.canParse(url)) return url
+  let resolved: URL
+  try { resolved = new URL(url, baseURL.endsWith('/') ? baseURL : `${baseURL}/`) } catch {
+    throw new Error(`${provider} image request returned an invalid image URL: ${url.slice(0, 120)}`)
+  }
+  // A relative path must not be able to switch schemes (file:, data:, ...)
+  if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') {
+    throw new Error(`${provider} image request returned an unsupported image URL: ${url.slice(0, 120)}`)
+  }
+  return resolved.toString()
+}
+
 async function downloadImage(
   url: string | undefined,
   provider: string,
@@ -266,15 +281,16 @@ async function downloadImage(
     const data = decodeBase64(parsed.base64, provider)
     return { data, mediaType: detectImageMediaType(data) ?? imageMediaType(parsed.mediaType) ?? 'image/png' }
   }
-  const sameOrigin = new URL(url).origin === new URL(input.baseURL).origin
-  let response = await guardedFetch(`${provider} image download`, input.signal, () => fetch(url, {
+  const target = resolveImageUrl(url, input.baseURL, provider)
+  const sameOrigin = new URL(target).origin === new URL(input.baseURL).origin
+  let response = await guardedFetch(`${provider} image download`, input.signal, () => fetch(target, {
     redirect: 'follow', signal: input.signal,
     ...(input.apiKey === undefined || !sameOrigin ? {} : { headers: { authorization: `Bearer ${input.apiKey}` } }),
   }), input.apiKey)
   // Some same-origin relays reject Authorization on public image URLs, so the
   // legacy retry remains available without ever sending the key to another origin.
   if (!response.ok && input.apiKey !== undefined && sameOrigin) {
-    response = await guardedFetch(`${provider} image download`, input.signal, () => fetch(url, { redirect: 'follow', signal: input.signal }), input.apiKey)
+    response = await guardedFetch(`${provider} image download`, input.signal, () => fetch(target, { redirect: 'follow', signal: input.signal }), input.apiKey)
   }
   if (!response.ok) throw new Error(`${provider} image download failed (${response.status})`)
   const data = await readBoundedBytes(response, input.maxBytes)
