@@ -228,7 +228,13 @@ async function parseImageResponse(
 }
 
 function imageEndpoint(baseURL: string, operation: 'generations' | 'edits'): string {
-  try { return new URL(`images/${operation}`, baseURL.endsWith('/') ? baseURL : `${baseURL}/`).toString() } catch { throw new Error('Image endpoint must be an absolute URL') }
+  let endpoint: URL
+  try { endpoint = new URL(`images/${operation}`, baseURL.endsWith('/') ? baseURL : `${baseURL}/`) } catch { throw new Error('Image endpoint must be an absolute URL') }
+  // #108 review: a configured base URL that carries userinfo would reach fetch,
+  // and Node echoes the URL — password included — into an error the conversation
+  // then shows. Reject it before the request instead of leaking it after.
+  if (endpoint.username !== '' || endpoint.password !== '') throw new Error('Image endpoint must not include credentials')
+  return endpoint.toString()
 }
 
 function toDataUrl(image: CompatibleReferenceImage): string {
@@ -287,7 +293,17 @@ async function downloadImage(
     return { data, mediaType: detectImageMediaType(data) ?? imageMediaType(parsed.mediaType) ?? 'image/png' }
   }
   const target = resolveImageUrl(url, input.baseURL, provider, input.apiKey)
-  const sameOrigin = new URL(target).origin === new URL(input.baseURL).origin
+  // #108 review: a URL that carries userinfo (`//user:password@host/...`, or a
+  // relative path resolved against a base URL that has basic auth) would reach
+  // fetch, and Node's rejection echoes the URL — password included — into the
+  // error guardedFetch rethrows into the conversation. redactSecrets only strips
+  // key-shaped values and known keys, so reject the target instead, without
+  // naming it. Credentialed URLs can never be fetched, so nothing regresses.
+  const parsedTarget = new URL(target)
+  if (parsedTarget.username !== '' || parsedTarget.password !== '') {
+    throw new Error(`${provider} image request returned an invalid image URL`)
+  }
+  const sameOrigin = parsedTarget.origin === new URL(input.baseURL).origin
   let response = await guardedFetch(`${provider} image download`, input.signal, () => fetch(target, {
     redirect: 'follow', signal: input.signal,
     ...(input.apiKey === undefined || !sameOrigin ? {} : { headers: { authorization: `Bearer ${input.apiKey}` } }),

@@ -340,4 +340,42 @@ describe('OpenAI-compatible relative image URLs (#105)', () => {
     expect(failure?.message).toContain('[REDACTED]')
     expect(failure?.message).not.toContain('live-secret-value-1234')
   })
+
+  // #108 review (second round): userinfo is neither key-shaped nor the live key,
+  // so redaction cannot catch it — the URL has to be rejected before fetch, where
+  // Node would echo it (password included) into the error the conversation sees.
+  async function credentialFailure(imageUrl: string, baseURL = 'https://relay.example/v1') {
+    // Mirror Node: a URL that carries userinfo is rejected outright, and the
+    // rejection text repeats the whole URL. Without an explicit guard that text
+    // is what reaches the conversation.
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const requestUrl = String(input)
+      const requestTarget = new URL(requestUrl)
+      if (requestTarget.username !== '' || requestTarget.password !== '') {
+        throw new Error(`Request cannot be constructed from a URL that includes credentials: ${requestUrl}`)
+      }
+      return okJson(imageUrl)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const failure = await generateOpenAICompatibleImage({
+      provider: 'openai-compat', apiKey: 'key', baseURL, model: 'image-model',
+      prompt: 'a cat', size: '1024x1024', maxBytes: 1024, signal,
+    }).then(() => undefined, (error: unknown) => error as Error)
+    return { failure, fetchMock }
+  }
+
+  it('rejects a protocol-relative image URL that carries credentials before fetching it', async () => {
+    const { failure, fetchMock } = await credentialFailure('//user:password@cdn.example/image')
+    expect(failure?.message).toContain('invalid image URL')
+    expect(failure?.message).not.toContain('password')
+    // only the generations request went out: the credentialed URL never reached fetch
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects a base URL that carries credentials instead of echoing them', async () => {
+    const { failure, fetchMock } = await credentialFailure('/v1/images/example/content', 'https://user:password@relay.example/v1')
+    expect(failure?.message).toContain('must not include credentials')
+    expect(failure?.message).not.toContain('password')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
 })
