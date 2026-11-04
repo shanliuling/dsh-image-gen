@@ -256,15 +256,20 @@ function firstImage(value: unknown): { b64_json?: string; url?: string; mime_typ
 
 // Some servers answer with a relative image URL instead of an absolute one:
 // SGLang returns `/v1/images/<id>/content` unless an object store is configured (#105).
-function resolveImageUrl(url: string, baseURL: string, provider: string): string {
+function resolveImageUrl(url: string, baseURL: string, provider: string, apiKey?: string): string {
   if (URL.canParse(url)) return url
+  // The value comes from the provider and ends up in the conversation and the
+  // settings UI, so describe it through redactSecrets: a relay may echo a key
+  // or a signature in the query string. Redact before truncating — slicing
+  // first would cut a secret in half, past the patterns in redact.ts.
+  const describeUrl = (): string => redactSecrets(url, apiKey).slice(0, 120)
   let resolved: URL
   try { resolved = new URL(url, baseURL.endsWith('/') ? baseURL : `${baseURL}/`) } catch {
-    throw new Error(`${provider} image request returned an invalid image URL: ${url.slice(0, 120)}`)
+    throw new Error(`${provider} image request returned an invalid image URL: ${describeUrl()}`)
   }
   // A relative path must not be able to switch schemes (file:, data:, ...)
   if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') {
-    throw new Error(`${provider} image request returned an unsupported image URL: ${url.slice(0, 120)}`)
+    throw new Error(`${provider} image request returned an unsupported image URL: ${describeUrl()}`)
   }
   return resolved.toString()
 }
@@ -281,7 +286,7 @@ async function downloadImage(
     const data = decodeBase64(parsed.base64, provider)
     return { data, mediaType: detectImageMediaType(data) ?? imageMediaType(parsed.mediaType) ?? 'image/png' }
   }
-  const target = resolveImageUrl(url, input.baseURL, provider)
+  const target = resolveImageUrl(url, input.baseURL, provider, input.apiKey)
   const sameOrigin = new URL(target).origin === new URL(input.baseURL).origin
   let response = await guardedFetch(`${provider} image download`, input.signal, () => fetch(target, {
     redirect: 'follow', signal: input.signal,

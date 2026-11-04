@@ -317,4 +317,27 @@ describe('OpenAI-compatible relative image URLs (#105)', () => {
     // cross-origin absolute URL: no key, unchanged from before
     expect((absolute.mock.calls[1]?.[1] as RequestInit | undefined)?.headers).toBeUndefined()
   })
+
+  // #108 review: these errors reach the conversation and the batch tool copies
+  // them into failures[], so the provider URL must be redacted before truncation.
+  async function urlError(url: string, apiKey = 'key'): Promise<Error | undefined> {
+    vi.stubGlobal('fetch', vi.fn(async () => okJson(url)))
+    return generateOpenAICompatibleImage({
+      provider: 'openai-compat', apiKey, baseURL: 'https://relay.example/v1', model: 'image-model',
+      prompt: 'a cat', size: '1024x1024', maxBytes: 1024, signal,
+    }).then(() => undefined, (error: unknown) => error as Error)
+  }
+
+  it('redacts key-shaped URL details from URL-validation errors', async () => {
+    const failure = await urlError('http://relay.example:99999/img?api_key=sk-abcdefgh1234')
+    expect(failure?.message).toContain('invalid image URL')
+    expect(failure?.message).toContain('[REDACTED]')
+    expect(failure?.message).not.toContain('sk-abcdefgh1234')
+  })
+
+  it('redacts the live api key even when the URL carries no key-shaped value', async () => {
+    const failure = await urlError('http://relay.example:99999/img?sign=live-secret-value-1234', 'live-secret-value-1234')
+    expect(failure?.message).toContain('[REDACTED]')
+    expect(failure?.message).not.toContain('live-secret-value-1234')
+  })
 })
