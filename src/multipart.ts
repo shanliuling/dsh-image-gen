@@ -74,7 +74,11 @@ export async function readMultipart(req: IncomingMessage, boundary: string, opti
 
   const consume = async (): Promise<void> => {
     while (true) {
-      if (state === 'done') return
+      if (state === 'done') {
+        // Never retain bytes after the closing boundary.
+        buffer = Buffer.alloc(0)
+        return
+      }
       if (state === 'preamble') {
         const index = buffer.indexOf(first)
         if (index === -1) {
@@ -85,6 +89,7 @@ export async function readMultipart(req: IncomingMessage, boundary: string, opti
         const suffix = buffer.subarray(index + first.length, index + first.length + 2)
         if (suffix.equals(DASH)) {
           state = 'done'
+          buffer = Buffer.alloc(0)
           return
         }
         if (!suffix.equals(CRLF)) throw new MultipartError(400, 'invalid-multipart')
@@ -130,6 +135,7 @@ export async function readMultipart(req: IncomingMessage, boundary: string, opti
         await finishPart()
         if (suffix.equals(DASH)) {
           state = 'done'
+          buffer = Buffer.alloc(0)
           return
         }
         if (!suffix.equals(CRLF)) throw new MultipartError(400, 'invalid-multipart')
@@ -140,6 +146,8 @@ export async function readMultipart(req: IncomingMessage, boundary: string, opti
   }
 
   for await (const chunk of req) {
+    // Once the closing boundary is seen, drain without buffering trailing data.
+    if ((state as string) === 'done') continue
     const incoming = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
     buffer = buffer.length === 0 ? incoming : Buffer.concat([buffer, incoming])
     await consume()

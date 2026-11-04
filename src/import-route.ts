@@ -1,5 +1,8 @@
 /** Upload endpoint turning browser-picked image files into DSH attachments. */
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import { MultipartError, readMultipart } from './multipart.js'
 
@@ -120,11 +123,22 @@ export async function serveImport(req: IncomingMessage, res: ServerResponse, dep
   res.end(JSON.stringify({ images: saved, failures }))
 }
 
+interface SpooledPart {
+  index: number
+  path: string
+  mediaType: ImageMediaType
+  filename?: string
+  bytes: number
+}
+
 async function serveMultipartImport(req: IncomingMessage, res: ServerResponse, deps: ImportRouteDeps, boundary: string): Promise<void> {
   const saved: { attachment: ImageAttachmentRef; original?: { key: string; bytes: number; mediaType: ImageMediaType } }[] = []
   const failures: { index: number; error: string }[] = []
-  let index = 0
+  let tempDir: string | undefined
   try {
+    tempDir = await mkdtemp(join(tmpdir(), 'dsh-image-import-'))
+    const spooled: SpooledPart[] = []
+    let index = 0
     await readMultipart(req, boundary, {
       maxPartBytes: deps.maxImageBytes,
       onPart: async part => {
@@ -136,7 +150,7 @@ async function serveMultipartImport(req: IncomingMessage, res: ServerResponse, d
           return
         }
         if (part.tooLarge || part.bytes === 0 || part.bytes > deps.maxImageBytes) {
-          failures.push({ index: current, error: `size-out-of-range (max ${String(deps.maxImageBytes)} bytes)` })
+          failures.push({ index: current, error: 'size-out-of-range (max ' + String(deps.maxImageBytes) + ' bytes)' })
           return
         }
         const declared = part.mediaType !== undefined && deps.mediaTypes.includes(part.mediaType)
@@ -146,22 +160,41 @@ async function serveMultipartImport(req: IncomingMessage, res: ServerResponse, d
           failures.push({ index: current, error: 'unsupported-media-type: ' + (declared ?? 'unknown') })
           return
         }
-        try {
-          const persisted = await persistImport(deps, part.data, declared as ImageMediaType, part.filename)
-          saved.push(persisted)
-          try {
-            deps.warmThumbnail?.(persisted.attachment)
-          } catch { /* warm-up is best effort */ }
-        } catch {
-          failures.push({ index: current, error: 'save-failed' })
-        }
+        // Spool the complete part before touching the durable attachment store.
+        // A truncated request therefore leaves no unreferenced attachments.
+        const path = join(tempDir!, String(current) + '.part')
+        await writeFile(path, part.data)
+        spooled.push({
+          index: current,
+          path,
+          mediaType: declared as ImageMediaType,
+          ...(part.filename === undefined ? {} : { filename: part.filename }),
+          bytes: part.bytes,
+        })
       },
     })
+
+    // The request body is complete; now commit the batch in order.
+    for (const part of spooled) {
+      try {
+        const data = await readFile(part.path)
+        const persisted = await persistImport(deps, data, part.mediaType, part.filename)
+        saved.push(persisted)
+        try {
+          deps.warmThumbnail?.(persisted.attachment)
+        } catch { /* warm-up is best effort */ }
+      } catch {
+        failures.push({ index: part.index, error: 'save-failed' })
+      }
+    }
   } catch (err) {
     if (err instanceof MultipartError) return jsonError(res, err.status, err.code)
     return jsonError(res, 400, 'invalid-request')
+  } finally {
+    if (tempDir !== undefined) await rm(tempDir, { recursive: true, force: true }).catch(() => undefined)
   }
   if (saved.length === 0 && failures.length === 0) return jsonError(res, 400, 'invalid-image-count')
+  failures.sort((a, b) => a.index - b.index)
   res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
   res.end(JSON.stringify({ images: saved, failures }))
 }

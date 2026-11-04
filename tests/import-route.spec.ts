@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createServer, type AddressInfo, type Server } from 'node:http'
+import { createServer, request as httpRequest, type AddressInfo, type Server } from 'node:http'
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import { serveImport, type ImportRouteDeps } from '../src/import-route.js'
 
@@ -92,6 +92,29 @@ describe('import route', () => {
     expect(payload.failures[0]?.index).toBe(8)
     expect(payload.failures[0]?.error).toBe('invalid-image-count')
     expect(saved).toHaveLength(8)
+  })
+
+  it('commits nothing when the multipart body is truncated', async () => {
+    await listen()
+    const boundary = 'truncated-boundary'
+    const body = Buffer.concat([
+      Buffer.from('--' + boundary + '\r\nContent-Disposition: form-data; name="images"; filename="a.png"\r\nContent-Type: image/png\r\n\r\n'),
+      PNG_BYTES,
+      Buffer.from('\r\n'),
+    ])
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = httpRequest(serverUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'multipart/form-data; boundary=' + boundary, 'content-length': String(body.length) },
+      }, response => {
+        response.resume()
+        response.on('end', () => resolve(response.statusCode ?? 0))
+      })
+      req.on('error', reject)
+      req.end(body)
+    })
+    expect(status).toBe(400)
+    expect(saved).toHaveLength(0)
   })
 
   it('reports an oversized multipart part and keeps the next image', async () => {
