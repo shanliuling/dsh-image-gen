@@ -257,6 +257,9 @@ export async function getGalleryItems(): Promise<GalleryItem[]> {
 }
 
 /** Width, in CSS pixels, of the thumbnail cached for the grid. */
+/** Byte budget for the disposable thumbnail cache; oldest entries go first. */
+export const GALLERY_THUMB_MAX_BYTES = 256 * 1024 * 1024
+
 export const GALLERY_THUMB_WIDTH = 320
 
 /** Cache key for one attachment thumbnail. */
@@ -342,6 +345,68 @@ async function deleteGalleryThumbs(ids: string[]): Promise<void> {
   }
 }
 
+/**
+ * Drop cached thumbnails whose attachment is no longer in the gallery.
+ * Returns how many entries were removed.
+ */
+export async function pruneGalleryThumbs(validAttachmentIds: Iterable<string>, maxBytes = GALLERY_THUMB_MAX_BYTES): Promise<number> {
+  try {
+    const db = await getThumbDB()
+    const valid = new Set(Array.from(validAttachmentIds, String))
+    const keys = await new Promise<string[]>((resolve, reject) => {
+      const req = db.transaction(THUMB_STORE, 'readonly').objectStore(THUMB_STORE).getAllKeys()
+      req.onsuccess = () => resolve((req.result as IDBValidKey[]).map(String))
+      req.onerror = () => reject(req.error)
+    })
+    const stale = keys.filter((key) => {
+      const at = key.lastIndexOf('@')
+      return !valid.has(at > 0 ? key.slice(0, at) : key)
+    })
+    let removed = 0
+    if (stale.length > 0) {
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(THUMB_STORE, 'readwrite')
+        const store = tx.objectStore(THUMB_STORE)
+        for (const key of stale) store.delete(key)
+        tx.oncomplete = () => resolve()
+        tx.onerror = () => reject(tx.error)
+      })
+      removed += stale.length
+    }
+
+    // Enforce the byte budget oldest-first so the disposable cache cannot grow
+    // without bound on libraries with tens of thousands of images.
+    const records = await new Promise<{ key: string; bytes?: number; createdAt?: number }[]>((resolve, reject) => {
+      const req = db.transaction(THUMB_STORE, 'readonly').objectStore(THUMB_STORE).getAll()
+      req.onsuccess = () => resolve((req.result ?? []) as { key: string; bytes?: number; createdAt?: number }[])
+      req.onerror = () => reject(req.error)
+    })
+    let total = records.reduce((sum, record) => sum + (typeof record.bytes === 'number' ? record.bytes : 0), 0)
+    if (total > maxBytes) {
+      const oldestFirst = [...records].sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0))
+      const doomed: string[] = []
+      for (const record of oldestFirst) {
+        if (total <= maxBytes) break
+        doomed.push(String(record.key))
+        total -= typeof record.bytes === 'number' ? record.bytes : 0
+      }
+      if (doomed.length > 0) {
+        await new Promise<void>((resolve, reject) => {
+          const tx = db.transaction(THUMB_STORE, 'readwrite')
+          const store = tx.objectStore(THUMB_STORE)
+          for (const key of doomed) store.delete(key)
+          tx.oncomplete = () => resolve()
+          tx.onerror = () => reject(tx.error)
+        })
+        removed += doomed.length
+      }
+    }
+    return removed
+  } catch {
+    return 0
+  }
+}
+
 /** Drop every cached thumbnail (used when the gallery is cleared). */
 async function clearGalleryThumbs(): Promise<void> {
   try {
@@ -392,11 +457,40 @@ export async function toggleFavoriteGalleryItem(id: string): Promise<boolean> {
 }
 
 /**
+ * Resolve the attachment ids behind gallery record ids. Imported records carry a
+ * synthetic `import-<attachmentId>-<uuid>` id, so the record id is not always
+ * the thumbnail key.
+ */
+async function attachmentIdsFor(db: IDBDatabase, ids: string[]): Promise<string[]> {
+  if (ids.length === 0) return []
+  return new Promise<string[]>((resolve) => {
+    const found: string[] = []
+    try {
+      const tx = db.transaction(STORE_NAME, 'readonly')
+      const store = tx.objectStore(STORE_NAME)
+      for (const id of ids) {
+        const req = store.get(id)
+        req.onsuccess = () => {
+          const item = req.result as GalleryItem | undefined
+          const attachmentId = item?.attachment?.attachmentId
+          if (typeof attachmentId === 'string') found.push(attachmentId)
+        }
+      }
+      tx.oncomplete = () => resolve(found)
+      tx.onerror = () => resolve(found)
+    } catch {
+      resolve(found)
+    }
+  })
+}
+
+/**
  * Delete a single gallery record by ID and record a tombstone.
  */
 export async function deleteGalleryItem(id: string): Promise<void> {
   const db = await getDB()
   const tombstones = await loadTombstones(db)
+  const attachmentIds = await attachmentIdsFor(db, [id])
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction([STORE_NAME, TOMBSTONE_STORE], 'readwrite')
     const store = tx.objectStore(STORE_NAME)
@@ -409,7 +503,7 @@ export async function deleteGalleryItem(id: string): Promise<void> {
     }
     tx.onerror = () => reject(tx.error)
   })
-  void deleteGalleryThumbs([id])
+  void deleteGalleryThumbs([id, ...attachmentIds])
   notifyListeners()
 }
 
@@ -420,6 +514,7 @@ export async function bulkDeleteGalleryItems(ids: string[]): Promise<void> {
   if (ids.length === 0) return
   const db = await getDB()
   const tombstones = await loadTombstones(db)
+  const attachmentIds = await attachmentIdsFor(db, ids)
   const now = Date.now()
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction([STORE_NAME, TOMBSTONE_STORE], 'readwrite')
@@ -438,7 +533,7 @@ export async function bulkDeleteGalleryItems(ids: string[]): Promise<void> {
     tx.onerror = () => reject(tx.error ?? new Error('IndexedDB transaction failed'))
     tx.onabort = () => reject(tx.error ?? new Error('IndexedDB transaction aborted'))
   })
-  void deleteGalleryThumbs(ids)
+  void deleteGalleryThumbs([...ids, ...attachmentIds])
   notifyListeners()
 }
 

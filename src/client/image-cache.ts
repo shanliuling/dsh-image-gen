@@ -6,7 +6,7 @@
  * preventing a canceled thumbnail from aborting the shared blob request.
  */
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import { IMAGE_ROUTE } from '../shared.js'
+import { IMAGE_ROUTE, imageUrlFor } from '../shared.js'
 
 interface CacheEntry {
   promise: Promise<Blob>
@@ -36,12 +36,21 @@ export function fetchAttachmentBlob(attachment: ImageAttachmentRef): Promise<Blo
   const entry: CacheEntry = {
     promise: Promise.resolve().then(async () => {
       try {
-        const response = await fetch(IMAGE_ROUTE, {
-          method: 'POST',
+        // Content-addressed attachments are served with an immutable cache
+        // header, so repeated previews/downloads stay in the browser cache.
+        let response = await fetch(imageUrlFor(attachment), {
           credentials: 'same-origin',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ attachment }),
+          cache: 'force-cache',
         })
+        if (response.status === 405) {
+          // Host builds that only expose the POST form.
+          response = await fetch(IMAGE_ROUTE, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ attachment }),
+          })
+        }
         if (!response.ok) throw new Error(`Image unavailable (${response.status})`)
         const blob = await response.blob()
         if (cache.get(key) === entry) {
