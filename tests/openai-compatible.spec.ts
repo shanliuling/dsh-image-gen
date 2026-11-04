@@ -272,3 +272,49 @@ describe('OpenAI-compatible images', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3)
   })
 })
+
+describe('OpenAI-compatible relative image URLs (#105)', () => {
+  const okJson = (url: string) => new Response(JSON.stringify({ data: [{ url }] }), { headers: { 'content-type': 'application/json' } })
+  const png = () => new Response(new Uint8Array([1, 2, 3]), { headers: { 'content-type': 'image/png' } })
+
+  it('anchors a site-root-relative image URL at the configured base URL', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) =>
+      String(input).includes('/images/generations') ? okJson('/v1/images/example-image-id/content') : png())
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(generateOpenAICompatibleImage({
+      provider: 'openai-compat', apiKey: 'key', baseURL: 'http://127.0.0.1:30010/v1', model: 'qwen-image',
+      prompt: 'a cat', size: '1024x1024', maxBytes: 1024, signal,
+    })).resolves.toEqual({ data: new Uint8Array([1, 2, 3]), mediaType: 'image/png' })
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('http://127.0.0.1:30010/v1/images/example-image-id/content')
+    // same origin after resolution, so the key is still attached
+    expect((fetchMock.mock.calls[1]?.[1] as RequestInit | undefined)?.headers).toEqual({ authorization: 'Bearer key' })
+  })
+
+  it('anchors a path-relative image URL and keeps absolute URLs untouched', async () => {
+    const seen: string[] = []
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      seen.push(String(input))
+      return seen.length === 1 ? okJson('assets/result.png') : png()
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await generateOpenAICompatibleImage({
+      provider: 'openai-compat', apiKey: 'key', baseURL: 'https://relay.example/v1', model: 'image-model',
+      prompt: 'a cat', size: '1024x1024', maxBytes: 1024, signal,
+    })
+    expect(seen[1]).toBe('https://relay.example/v1/assets/result.png')
+
+    seen.length = 0
+    const absolute = vi.fn(async (input: RequestInfo | URL) => {
+      seen.push(String(input))
+      return seen.length === 1 ? okJson('https://cdn.example/result.png') : png()
+    })
+    vi.stubGlobal('fetch', absolute)
+    await generateOpenAICompatibleImage({
+      provider: 'openai-compat', apiKey: 'key', baseURL: 'https://relay.example/v1', model: 'image-model',
+      prompt: 'a cat', size: '1024x1024', maxBytes: 1024, signal,
+    })
+    expect(seen[1]).toBe('https://cdn.example/result.png')
+    // cross-origin absolute URL: no key, unchanged from before
+    expect((absolute.mock.calls[1]?.[1] as RequestInit | undefined)?.headers).toBeUndefined()
+  })
+})
