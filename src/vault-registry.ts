@@ -1,4 +1,5 @@
 /** Persistent per-profile vault references so one client cannot delete another client's originals. */
+import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { isValidVaultKey } from './vault-store.js'
@@ -85,7 +86,7 @@ export function updateVaultRegistry(
     try {
       await mkdir(dir, { recursive: true })
       const target = registryPath(dir)
-      const temporary = target + '.tmp-' + String(process.pid) + '-' + String(Date.now())
+      const temporary = target + '.tmp-' + randomUUID()
       await writeFile(temporary, JSON.stringify(registry, null, 2), 'utf8')
       try {
         await rename(temporary, target)

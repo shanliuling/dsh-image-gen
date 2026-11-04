@@ -1,5 +1,5 @@
 /** Content-addressed store for original image bytes the attachment layer normalized. */
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, readdir, rename, rmdir, stat, unlink, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
@@ -68,7 +68,7 @@ export async function saveOriginal(
     // Missing files are written below.
   }
   await mkdir(dirname(target), { recursive: true })
-  const temporary = target + '.tmp-' + String(process.pid) + '-' + String(Date.now())
+  const temporary = target + '.tmp-' + randomUUID()
   try {
     await writeFile(temporary, input.data)
     await rename(temporary, target)

@@ -112,7 +112,8 @@ export async function pruneRequestImageCache(options: RequestCachePruneOptions):
     return { scanned: 0, removed: 0, freedBytes: 0, remainingBytes: 0 }
   }
   const files: CacheFile[] = []
-  await collect(options.dir, 0, files, await canonicalPath(options.dir))
+  const cacheRoot = await canonicalPath(options.dir)
+  await collect(options.dir, 0, files, cacheRoot)
 
   let remainingBytes = files.reduce((sum, file) => sum + file.bytes, 0)
   const protectedAfter = now - keepMs
@@ -142,6 +143,13 @@ export async function pruneRequestImageCache(options: RequestCachePruneOptions):
   for (const file of files) {
     if (!doomed.has(file.path)) continue
     try {
+      // Re-check immediately before unlink: a path that was a regular file
+      // during collect may have been swapped for a symlink/junction since.
+      const latest = await lstat(file.path)
+      if (latest.isSymbolicLink() || !latest.isFile() || !isWithin(await canonicalPath(file.path), cacheRoot)) {
+        remainingBytes += file.bytes
+        continue
+      }
       await unlink(file.path)
       removed += 1
       freedBytes += file.bytes
