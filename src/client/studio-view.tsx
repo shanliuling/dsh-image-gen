@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FC } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type FC } from 'react'
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import {
   AlertTriangle,
@@ -32,18 +32,34 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react'
-import { DELETE_ROUTE, SAVE_WORKSPACE_ROUTE, STUDIO_ROUTE, isSubscriptionProvider, studioWatermarkCapability, studioModelForMode, studioModelOptionsForMode, studioTargetKey, type CloudImageProvider, type StudioConfigResponse, type StudioGenerateResponse, type StudioGeneratedItem, type StudioProvider, type StudioProviderProfile, type StudioReference, type StudioWatermark } from '../shared.js'
+import { DELETE_ROUTE, SAVE_WORKSPACE_ROUTE, STUDIO_ROUTE, thumbUrlFor, isSubscriptionProvider, studioWatermarkCapability, studioModelForMode, studioModelOptionsForMode, studioTargetKey, type CloudImageProvider, type StudioConfigResponse, type StudioGenerateResponse, type StudioGeneratedItem, type StudioProvider, type StudioProviderProfile, type StudioReference, type StudioWatermark } from '../shared.js'
 import { deleteGalleryItem, getGalleryItems, saveGalleryItem, subscribeGallery, toggleFavoriteGalleryItem, type GalleryItem, saveFavoritePrompt, getFavoritePrompts, deleteFavoritePrompt, subscribeFavorites, addFavoriteFolder, getFavoriteFolders, deleteFavoriteFolder, moveFavoritePrompt, updateFavoritePrompt, type FavoritePrompt, type FavoriteFolder } from './gallery-store.js'
-import { evictAttachmentCache, fetchAttachmentBlob } from './image-cache.js'
 import { copyImageBlob, downloadBlobUrl, formatRelativeTime } from './browser-image-utils.js'
 import { buildComparisonTargets, comparisonOptionUnion, comparisonOutputOptions, initialComparisonProviders } from './multi-model-compare.js'
-import { PROVIDER_DEFAULT_QUALITY } from '../openai-output.js'
 import { WatermarkControl } from './watermark-control.js'
 import { clearStudioTlCanvases, StudioTlCanvas } from './tl/studio-tl-canvas.js'
 import { pushTlLandings } from './tl/tl-canvas-bridge.js'
 import { GalleryCanvasButton } from './tl/gallery-canvas-button.js'
 import { startGalleryImageDrag } from './tl/gallery-image-transfer.js'
 import type { LocaleService } from './gallery-view.js'
+import {
+  BatchCanvasItem,
+  FavoriteFolderBar,
+  FieldSelect,
+  RecentItem,
+  extension,
+  fileToBase64,
+  hasSubscriptionRatioMismatch,
+  localizeQualityOptions,
+  localizeRatioOptions,
+  messageOf,
+  useAttachmentImage,
+  useInView,
+  type RecentItemActions,
+} from './studio-helpers.js'
+import { evictAttachmentCache, fetchAttachmentBlob } from './image-cache.js'
+import { PROVIDER_DEFAULT_QUALITY } from '../openai-output.js'
+
 
 const PAGE_SIZE = 12
 
@@ -204,6 +220,15 @@ export const StudioView: FC<{
   /** Set once the user toggles the rail by hand; auto-folding then stands down for this mount. */
   const railToggledByUserRef = useRef(false)
   const [visibleLimit, setVisibleLimit] = useState(30)
+  const [favoriteLimit, setFavoriteLimit] = useState(60)
+  // Stable dispatchers keep memoized rail tiles from re-rendering on every
+  // parent update (prompt typing, selection, tab switches).
+  const railActionsRef = useRef<RecentItemActions | null>(null)
+  const railActions = useMemo<RecentItemActions>(() => ({
+    select: item => railActionsRef.current?.select(item),
+    favorite: item => railActionsRef.current?.favorite(item),
+    toast: message => railActionsRef.current?.toast(message),
+  }), [])
   const [selected, setSelected] = useState<GalleryItem | null>(null)
   const [mode, setMode] = useState<Mode>('generate')
   const [provider, setProvider] = useState<StudioProvider>('google')
@@ -269,7 +294,7 @@ export const StudioView: FC<{
     setCanvasHintDismissed(true)
     try {
       localStorage.setItem(INFINITE_CANVAS_HINT_KEY, 'true')
-    } catch {}
+    } catch { /* best effort */ }
   }, [])
 
   const [dragging, setDragging] = useState(false)
@@ -1256,6 +1281,16 @@ export const StudioView: FC<{
     window.setTimeout(() => setNotice(null), 2_200)
   }
 
+  // After commit: an interrupted render must not expose handlers that close
+  // over an uncommitted reference limit to the already-rendered rail.
+  useLayoutEffect(() => {
+    railActionsRef.current = {
+      select: selectItem,
+      favorite: item => { void applyFavoriteImage(item) },
+      toast: flash,
+    }
+  })
+
   return (
     <section ref={workbenchRootRef} className="dsh-ig-workbench" aria-label={t('title')}>
       <div className={`dsh-ig-workbench-grid ${sidebarCollapsed ? 'is-sidebar-collapsed' : ''} ${generateCollapsed ? 'is-generate-collapsed' : ''}`}>
@@ -1293,7 +1328,7 @@ export const StudioView: FC<{
             </div>
             {railTab === 'recent' ? (
               <div className="dsh-ig-recent-scroll">
-                {items.length === 0 ? <div className="dsh-ig-recent-empty"><ImagePlus size={22} /><span>{t('empty')}</span></div> : displayItems.map(item => <RecentItem key={item.id} item={item} active={selected?.id === item.id} lang={lang} onToast={flash} onClick={() => selectItem(item)} />)}
+                {items.length === 0 ? <div className="dsh-ig-recent-empty"><ImagePlus size={22} /><span>{t('empty')}</span></div> : displayItems.map(item => <RecentItem key={item.id} item={item} active={selected?.id === item.id} mode="select" lang={lang} actions={railActions} />)}
                 {items.length > visibleLimit && (
                   <button type="button" className="dsh-ig-load-more" onClick={() => setVisibleLimit(l => l + 30)}>
                     {t('loadMore', { n: String(items.length - visibleLimit) })}
@@ -1308,11 +1343,20 @@ export const StudioView: FC<{
                 {(() => {
                   const list = items.filter(item => item.isFavorite)
                   if (list.length === 0) return <div className="dsh-ig-fav-empty"><ImagePlus size={18} /><span>{t('favEmptyImages')}</span></div>
-                  return <div className="dsh-ig-fav-grid">
-                    {list.map(item => (
-                      <RecentItem key={item.id} item={item} active={false} lang={lang} onToast={flash} onClick={() => void applyFavoriteImage(item)} />
-                    ))}
-                  </div>
+                  return (
+                    <>
+                      <div className="dsh-ig-fav-grid">
+                        {list.slice(0, favoriteLimit).map(item => (
+                          <RecentItem key={item.id} item={item} active={false} mode="favorite" lang={lang} actions={railActions} />
+                        ))}
+                      </div>
+                      {list.length > favoriteLimit && (
+                        <button type="button" className="dsh-ig-load-more" onClick={() => setFavoriteLimit(limit => limit + 60)}>
+                          {t('loadMore', { n: String(list.length - favoriteLimit) })}
+                        </button>
+                      )}
+                    </>
+                  )
                 })()}
                 <div className="dsh-ig-fav-section-label">
                   <span>{t('favPrompts')}</span>
@@ -1554,7 +1598,23 @@ export const StudioView: FC<{
             ) : selected === null ? (
               <div className="dsh-ig-canvas-empty"><ImagePlus size={36} /><span>{t('selectHistory')}</span></div>
             ) : image.loading ? (
-              <div className="dsh-ig-canvas-empty"><LoaderCircle className="dsh-ig-spin" size={28} /><span>{t('loading')}</span></div>
+              <>
+                <img
+                  className="dsh-ig-canvas-thumb"
+                  src={thumbUrlFor(selected.attachment)}
+                  alt={selected.prompt}
+                  draggable={false}
+                  style={{
+                    ...(selected.attachment.width && selected.attachment.height
+                      ? { width: String(selected.attachment.width) + 'px', height: String(selected.attachment.height) + 'px' }
+                      : {}),
+                    transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom / 100})`,
+                    transformOrigin: 'center center',
+                    transition: isDragging ? 'none' : 'transform 0.08s ease-out',
+                  }}
+                />
+                <div className="dsh-ig-canvas-loading-pill"><LoaderCircle className="dsh-ig-spin" size={16} /><span>{t('loading')}</span></div>
+              </>
             ) : image.url !== null ? (
               <img
                 src={image.url}
@@ -1975,194 +2035,4 @@ export const StudioView: FC<{
       {notice !== null && <div className="dsh-ig-workbench-toast">{notice}</div>}
     </section>
   )
-}
-
-const BatchCanvasItem: FC<{
-  item: GalleryItem
-  index: number
-  badge?: string | undefined
-  isActive: boolean
-  isChecked: boolean
-  onSelect(): void
-}> = ({ item, index, badge, isActive, isChecked, onSelect }) => {
-  const image = useAttachmentImage(item.attachment, true)
-  return (
-    <div
-      className={`dsh-ig-canvas-item ${isActive ? 'is-active' : ''} ${isChecked ? 'is-checked' : ''}`}
-      onClick={onSelect}
-    >
-      <span className={`dsh-ig-canvas-badge ${badge ? 'is-model' : ''}`} title={badge}>{badge ?? `#${index + 1}`}</span>
-      <span className="dsh-ig-canvas-check" aria-hidden="true">{isChecked ? <Check size={14} /> : null}</span>
-      {image.url !== null ? (
-        <img src={image.url} alt={item.prompt} draggable={false} />
-      ) : image.loading ? (
-        <div className="dsh-ig-canvas-item-loading">
-          <LoaderCircle className="dsh-ig-spin" size={24} />
-        </div>
-      ) : (
-        <div className="dsh-ig-canvas-item-loading">
-          <ImagePlus size={24} />
-        </div>
-      )}
-    </div>
-  )
-}
-
-function hasSubscriptionRatioMismatch(item: GalleryItem): boolean {
-  if (item.provider !== 'chatgpt-sub' || item.aspectRatio === 'auto') return false
-  const width = item.attachment.width
-  const height = item.attachment.height
-  if (width === undefined || height === undefined || width <= 0 || height <= 0) return false
-  const parts = item.aspectRatio?.split(':').map(Number)
-  if (parts === undefined || parts.length !== 2 || !(parts[0]! > 0) || !(parts[1]! > 0)) return false
-  return Math.abs((width / height) / (parts[0]! / parts[1]!) - 1) > 0.12
-}
-
-const FieldSelect: FC<{ label: string; value: string; options: Array<{ value: string; label: string }>; onChange(value: string): void }> = ({ label, value, options, onChange }) => <label className="dsh-ig-field-select"><span>{label}</span><select value={value} onChange={event => onChange(event.target.value)}>{options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
-
-const LOCALIZED_RATIOS: Record<string, { zh: string; en: string }> = {
-  auto: { zh: '自动', en: 'Auto' },
-  '1:1': { zh: '1:1 方形', en: '1:1 Square' },
-  '3:2': { zh: '3:2 横向', en: '3:2 Landscape' },
-  '2:3': { zh: '2:3 肖像', en: '2:3 Portrait' },
-  '4:3': { zh: '4:3 横向', en: '4:3 Landscape' },
-  '3:4': { zh: '3:4 竖向', en: '3:4 Portrait' },
-  '4:5': { zh: '4:5 肖像', en: '4:5 Portrait' },
-  '5:4': { zh: '5:4 横向', en: '5:4 Landscape' },
-  '16:9': { zh: '16:9 宽屏', en: '16:9 Widescreen' },
-  '9:16': { zh: '9:16 竖屏', en: '9:16 Portrait' },
-  '21:9': { zh: '21:9 超宽', en: '21:9 Ultrawide' },
-}
-
-const LOCALIZED_QUALITIES: Record<string, { zh: string; en: string }> = {
-  standard: { zh: '标准（推荐）', en: 'Standard (Recommended)' },
-  auto: { zh: '自动', en: 'Auto' },
-  low: { zh: '低（快速）', en: 'Low (Fast)' },
-  medium: { zh: '中', en: 'Medium' },
-  high: { zh: '高', en: 'High' },
-  xhigh: { zh: '超高', en: 'Extra High' },
-  max: { zh: '最高', en: 'Max' },
-  hd: { zh: '高清', en: 'HD' },
-}
-
-function localizeRatioOptions(options: Array<{ value: string; label: string }>, lang: 'zh' | 'en'): Array<{ value: string; label: string }> {
-  return options.map(opt => ({
-    value: opt.value,
-    label: LOCALIZED_RATIOS[opt.value]?.[lang] ?? opt.label,
-  }))
-}
-
-function localizeQualityOptions(options: Array<{ value: string; label: string }>, lang: 'zh' | 'en'): Array<{ value: string; label: string }> {
-  return options.map(opt => ({
-    value: opt.value,
-    label: opt.value === PROVIDER_DEFAULT_QUALITY ? (lang === 'en' ? 'Provider default (omit)' : '渠道默认（不发送）') : LOCALIZED_QUALITIES[opt.value]?.[lang] ?? opt.label,
-  }))
-}
-
-const RecentItem: FC<{ item: GalleryItem; active: boolean; lang: 'zh' | 'en'; onToast(message: string): void; onClick(): void }> = ({ item, active, lang, onToast, onClick }) => {
-  const [setRef, inView] = useInView<HTMLButtonElement>()
-  const image = useAttachmentImage(item.attachment, inView)
-  return (
-    <div className={`dsh-ig-recent-item ${active ? 'is-active' : ''}`}>
-      <button
-        ref={setRef}
-        type="button"
-        className="dsh-ig-recent-select"
-        onClick={onClick}
-        title={item.prompt}
-        draggable={Boolean(image.blob?.size)}
-        onDragStart={event => { startGalleryImageDrag(event, item, image.blob) }}
-      >
-        <div className="dsh-ig-recent-thumb">{image.url !== null ? <img src={image.url} alt="" loading="lazy" draggable={false} /> : <ImagePlus size={18} />}</div>
-      </button>
-      <GalleryCanvasButton item={item} lang={lang} disabled={!image.blob?.size} className="dsh-ig-recent-send" onToast={onToast} />
-    </div>
-  )
-}
-
-const FavoriteFolderBar: FC<{ folders: FavoriteFolder[]; active: string; onSelect(id: string): void; onDelete(id: string): void; deleteLabel: string }> = ({ folders, active, onSelect, onDelete, deleteLabel }) => {
-  if (folders.length === 0) return null
-  return (
-    <div className="dsh-ig-fav-folders">
-      {folders.map(folder => (
-        <span key={folder.id} className={`dsh-ig-fav-folder-chip ${active === folder.id ? 'is-active' : ''}`}>
-          <button type="button" onClick={() => onSelect(folder.id)}>{folder.name}</button>
-          <button type="button" className="dsh-ig-fav-folder-del" title={deleteLabel} onClick={() => onDelete(folder.id)}><X size={9} /></button>
-        </span>
-      ))}
-    </div>
-  )
-}
-
-export function useInView<T extends HTMLElement>(): [(node: T | null) => void, boolean] {
-  const [inView, setInView] = useState(false)
-  const observerRef = useRef<IntersectionObserver | null>(null)
-
-  useEffect(() => {
-    return () => {
-      observerRef.current?.disconnect()
-    }
-  }, [])
-
-  const refCallback = useCallback((el: T | null) => {
-    observerRef.current?.disconnect()
-    if (!el || inView) return
-    if (typeof IntersectionObserver === 'undefined') {
-      setInView(true)
-      return
-    }
-    const observer = new IntersectionObserver(([entry]) => {
-      if (entry?.isIntersecting) {
-        setInView(true)
-        observer.disconnect()
-      }
-    }, { rootMargin: '120px' })
-    observerRef.current = observer
-    observer.observe(el)
-  }, [inView])
-
-  return [refCallback, inView]
-}
-
-export function useAttachmentImage(attachment: ImageAttachmentRef | undefined, shouldLoad: boolean = true): { url: string | null; blob: Blob | null; loading: boolean } {
-  const [value, setValue] = useState<{ url: string | null; blob: Blob | null; loading: boolean }>({ url: null, blob: null, loading: false })
-  useEffect(() => {
-    if (attachment === undefined || !shouldLoad) { setValue({ url: null, blob: null, loading: false }); return }
-    let cancelled = false
-    let objectUrl: string | null = null
-    setValue({ url: null, blob: null, loading: true })
-    fetchAttachmentBlob(attachment)
-      .then(blob => {
-        if (cancelled) return
-        objectUrl = URL.createObjectURL(blob)
-        setValue({ url: objectUrl, blob, loading: false })
-      })
-      .catch(() => { if (!cancelled) setValue({ url: null, blob: null, loading: false }) })
-    return () => {
-      cancelled = true
-      if (objectUrl !== null) URL.revokeObjectURL(objectUrl)
-    }
-  }, [attachment?.attachmentId, shouldLoad])
-  return value
-}
-
-export function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const result = reader.result as string
-      const commaIndex = result.indexOf(',')
-      resolve(commaIndex >= 0 ? result.slice(commaIndex + 1) : result)
-    }
-    reader.onerror = () => reject(reader.error ?? new Error('Failed to read image file'))
-    reader.readAsDataURL(file)
-  })
-}
-
-function extension(mediaType: ImageMediaType): string {
-  return mediaType === 'image/jpeg' ? 'jpg' : mediaType.split('/')[1] ?? 'png'
-}
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }

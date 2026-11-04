@@ -3,8 +3,20 @@
  * Stores lightweight metadata indexes; image binaries remain managed by DSH Attachment service.
  * Supports tombstones to ensure deleted items are never resurrected when revisiting conversations.
  */
-import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
+import { clearGalleryThumbs, deleteGalleryThumbs } from './gallery-thumbs.js'
 import type { ImageProvider, StudioWatermark } from '../shared.js'
+
+export {
+  GALLERY_THUMB_MAX_AGE_MS,
+  GALLERY_THUMB_MAX_BYTES,
+  GALLERY_THUMB_WIDTH,
+  galleryThumbKey,
+  getGalleryThumb,
+  getGalleryThumbStats,
+  pruneGalleryThumbs,
+  putGalleryThumb,
+} from './gallery-thumbs.js'
 
 export interface GalleryItem {
   id: string
@@ -37,6 +49,8 @@ export interface GalleryItem {
   sessionId?: string | undefined
   /** Attachment ids of the source images this image was edited from; used by the canvas to rebuild edit chains. Optional so records written by older versions stay readable. */
   sourceAttachmentIds?: string[] | undefined
+  /** Raw pre-normalization bytes, present only when the attachment layer changed the import. */
+  original?: { key: string; bytes: number; mediaType: ImageMediaType } | undefined
 }
 
 const DB_NAME = 'dsh_image_gen_db'
@@ -45,6 +59,9 @@ const STORE_NAME = 'gallery_history'
 const TOMBSTONE_STORE = 'gallery_tombstones'
 const FAV_PROMPT_STORE = 'favorite_prompts'
 const FAV_FOLDER_STORE = 'favorite_folders'
+
+// Thumbnails live in their own database: the cache is disposable, and keeping it
+// out of the gallery DB avoids an irreversible version bump for existing users.
 
 /** A user-created folder grouping favorite prompts. */
 export interface FavoriteFolder {
@@ -148,6 +165,40 @@ async function loadTombstones(db: IDBDatabase): Promise<Set<string>> {
   })
 }
 
+/** Tombstones younger than this still protect multi-window deletes. */
+export const TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60 * 1000
+
+/**
+ * Drop tombstones older than the retention window so the table (and the set
+ * consulted on every save) does not grow without bound. Returns the number of
+ * removed entries.
+ */
+export async function pruneTombstones(maxAgeMs = TOMBSTONE_TTL_MS): Promise<number> {
+  try {
+    const db = await getDB()
+    if (!db.objectStoreNames.contains(TOMBSTONE_STORE)) return 0
+    const records = await new Promise<{ id?: string; deletedAt?: number }[]>((resolve, reject) => {
+      const req = db.transaction(TOMBSTONE_STORE, 'readonly').objectStore(TOMBSTONE_STORE).getAll()
+      req.onsuccess = () => resolve((req.result ?? []) as { id?: string; deletedAt?: number }[])
+      req.onerror = () => reject(req.error)
+    })
+    const cutoff = Date.now() - maxAgeMs
+    const doomed = records.filter(record => typeof record.deletedAt === 'number' && record.deletedAt < cutoff)
+    if (doomed.length === 0) return 0
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(TOMBSTONE_STORE, 'readwrite')
+      const store = tx.objectStore(TOMBSTONE_STORE)
+      for (const record of doomed) store.delete(String(record.id))
+      tx.oncomplete = () => resolve()
+      tx.onerror = () => reject(tx.error)
+    })
+    tombstonesCache = null
+    return doomed.length
+  } catch {
+    return 0
+  }
+}
+
 type GalleryListener = () => void
 const listeners = new Set<GalleryListener>()
 
@@ -220,34 +271,47 @@ export async function saveGalleryItem(
   }
 }
 
+async function readGalleryItems(): Promise<GalleryItem[]> {
+  const db = await getDB()
+  return await new Promise<GalleryItem[]>((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readonly')
+    const store = tx.objectStore(STORE_NAME)
+    const index = store.index('createdAt')
+    const req = index.openCursor(null, 'prev') // newest first
+    const items: GalleryItem[] = []
+
+    req.onsuccess = (event) => {
+      const cursor = (event.target as IDBRequest<IDBCursorWithValue>).result
+      if (cursor) {
+        items.push(cursor.value as GalleryItem)
+        cursor.continue()
+      } else {
+        resolve(items)
+      }
+    }
+    req.onerror = () => reject(req.error)
+  })
+}
+
 /**
  * Retrieve all gallery records sorted by createdAt descending.
  */
 export async function getGalleryItems(): Promise<GalleryItem[]> {
   try {
-    const db = await getDB()
-    return await new Promise<GalleryItem[]>((resolve, reject) => {
-      const tx = db.transaction(STORE_NAME, 'readonly')
-      const store = tx.objectStore(STORE_NAME)
-      const index = store.index('createdAt')
-      const req = index.openCursor(null, 'prev') // newest first
-      const items: GalleryItem[] = []
-
-      req.onsuccess = (event) => {
-        const cursor = (event.target as IDBRequest<IDBCursorWithValue>).result
-        if (cursor) {
-          items.push(cursor.value as GalleryItem)
-          cursor.continue()
-        } else {
-          resolve(items)
-        }
-      }
-      req.onerror = () => reject(req.error)
-    })
+    return await readGalleryItems()
   } catch (err) {
     console.warn('[dsh-image-gen] Failed to read gallery items from IndexedDB:', err)
     return []
   }
+}
+
+/**
+ * Like getGalleryItems, but rejects when IndexedDB is unavailable. Maintenance
+ * callers must not treat a read failure as an empty gallery (that would make
+ * vault gc delete every original).
+ */
+export async function getGalleryItemsStrict(): Promise<GalleryItem[]> {
+  return readGalleryItems()
 }
 
 /**
@@ -285,11 +349,40 @@ export async function toggleFavoriteGalleryItem(id: string): Promise<boolean> {
 }
 
 /**
+ * Resolve the attachment ids behind gallery record ids. Imported records carry a
+ * synthetic `import-<attachmentId>-<uuid>` id, so the record id is not always
+ * the thumbnail key.
+ */
+async function attachmentIdsFor(db: IDBDatabase, ids: string[]): Promise<string[]> {
+  if (ids.length === 0) return []
+  return new Promise<string[]>((resolve) => {
+    const found: string[] = []
+    try {
+      const tx = db.transaction(STORE_NAME, 'readonly')
+      const store = tx.objectStore(STORE_NAME)
+      for (const id of ids) {
+        const req = store.get(id)
+        req.onsuccess = () => {
+          const item = req.result as GalleryItem | undefined
+          const attachmentId = item?.attachment?.attachmentId
+          if (typeof attachmentId === 'string') found.push(attachmentId)
+        }
+      }
+      tx.oncomplete = () => resolve(found)
+      tx.onerror = () => resolve(found)
+    } catch {
+      resolve(found)
+    }
+  })
+}
+
+/**
  * Delete a single gallery record by ID and record a tombstone.
  */
 export async function deleteGalleryItem(id: string): Promise<void> {
   const db = await getDB()
   const tombstones = await loadTombstones(db)
+  const attachmentIds = await attachmentIdsFor(db, [id])
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction([STORE_NAME, TOMBSTONE_STORE], 'readwrite')
     const store = tx.objectStore(STORE_NAME)
@@ -302,6 +395,7 @@ export async function deleteGalleryItem(id: string): Promise<void> {
     }
     tx.onerror = () => reject(tx.error)
   })
+  void deleteGalleryThumbs([id, ...attachmentIds])
   notifyListeners()
 }
 
@@ -312,6 +406,7 @@ export async function bulkDeleteGalleryItems(ids: string[]): Promise<void> {
   if (ids.length === 0) return
   const db = await getDB()
   const tombstones = await loadTombstones(db)
+  const attachmentIds = await attachmentIdsFor(db, ids)
   const now = Date.now()
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction([STORE_NAME, TOMBSTONE_STORE], 'readwrite')
@@ -330,6 +425,7 @@ export async function bulkDeleteGalleryItems(ids: string[]): Promise<void> {
     tx.onerror = () => reject(tx.error ?? new Error('IndexedDB transaction failed'))
     tx.onabort = () => reject(tx.error ?? new Error('IndexedDB transaction aborted'))
   })
+  void deleteGalleryThumbs([...ids, ...attachmentIds])
   notifyListeners()
 }
 
@@ -375,6 +471,7 @@ export async function clearGallery(): Promise<void> {
       tx.oncomplete = () => resolve()
       tx.onerror = () => reject(tx.error)
     })
+    void clearGalleryThumbs()
     notifyListeners()
   } catch (err) {
     console.warn('[dsh-image-gen] Failed to clear gallery in IndexedDB:', err)

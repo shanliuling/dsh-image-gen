@@ -86,6 +86,14 @@ export async function editOpenAICompatibleImage(input: {
   /** Vendor quality tier sent with the edit request when set. */
   quality?: string
   /**
+   * Multipart edit response shape. `auto` asks for inline b64_json first and
+   * retries once without the field when a relay rejects it (400/422); `url`
+   * keeps the relay default; `b64_json` never retries.
+   */
+  editResponseFormat?: 'auto' | 'b64_json' | 'url'
+  /** Called once when the relay rejects response_format and the request is retried without it. */
+  onResponseFormatRetry?: (status: number) => void
+  /**
    * Extra fields for the edit request (multipart: one form field per entry;
    * JSON shapes: merged after `editExtra`), e.g. xAI's
    * aspect_ratio/resolution pair.
@@ -185,25 +193,45 @@ export async function editOpenAICompatibleImage(input: {
     }), input.apiKey)
     return parseImageResponse(response, 'openai', input)
   }
-  const form = new FormData()
-  const imageField = input.sourceImages.length > 1 ? 'image[]' : 'image'
-  input.sourceImages.forEach((sourceImage, index) => {
-    const uploadBytes = new Uint8Array(sourceImage.data)
-    const blob = new Blob([uploadBytes], { type: sourceImage.mediaType })
-    const filename = `reference-${index + 1}.${extensionOf(sourceImage.mediaType)}`
-    form.append(imageField, blob, filename)
-  })
-  form.append('prompt', input.prompt)
-  form.append('model', input.model)
-  if (input.size !== undefined && input.size.length > 0) form.append('size', input.size)
-  if (input.quality !== undefined) form.append('quality', input.quality)
-  for (const [key, value] of Object.entries(input.extraBody ?? {})) form.append(key, String(value))
-
-  const response = await guardedFetch('openai image edit request', input.signal, () => fetch(imageEndpoint(input.baseURL, 'edits'), {
+  const responseFormat = input.editResponseFormat ?? 'url'
+  // An explicit response_format in extraBody is the channel's own choice; do
+  // not append a second value or retry around it.
+  const explicitResponseFormat = Object.prototype.hasOwnProperty.call(input.extraBody ?? {}, 'response_format')
+  const buildEditForm = (includeResponseFormat: boolean): FormData => {
+    const form = new FormData()
+    const imageField = input.sourceImages.length > 1 ? 'image[]' : 'image'
+    input.sourceImages.forEach((sourceImage, index) => {
+      const uploadBytes = new Uint8Array(sourceImage.data)
+      const blob = new Blob([uploadBytes], { type: sourceImage.mediaType })
+      const filename = `reference-${index + 1}.${extensionOf(sourceImage.mediaType)}`
+      form.append(imageField, blob, filename)
+    })
+    form.append('prompt', input.prompt)
+    form.append('model', input.model)
+    if (input.size !== undefined && input.size.length > 0) form.append('size', input.size)
+    if (input.quality !== undefined) form.append('quality', input.quality)
+    if (includeResponseFormat && !explicitResponseFormat) form.append('response_format', 'b64_json')
+    for (const [key, value] of Object.entries(input.extraBody ?? {})) {
+      if (value === undefined) continue
+      form.append(key, String(value))
+    }
+    return form
+  }
+  const sendEdit = (form: FormData): Promise<Response> => guardedFetch('openai image edit request', input.signal, () => fetch(imageEndpoint(input.baseURL, 'edits'), {
     method: 'POST', redirect: 'error', signal: input.signal,
     headers: { authorization: `Bearer ${input.apiKey}` },
     body: form,
   }), input.apiKey)
+
+  let response = await sendEdit(buildEditForm(responseFormat !== 'url'))
+  // Request-shape rejection happens before generation, so the retry costs one
+  // empty round-trip rather than a second billed edit.
+  if (responseFormat === 'auto' && !explicitResponseFormat && (response.status === 400 || response.status === 422)) {
+    input.onResponseFormatRetry?.(response.status)
+    // Release the rejected response before reusing the connection.
+    await response.body?.cancel().catch(() => undefined)
+    response = await sendEdit(buildEditForm(false))
+  }
   return parseImageResponse(response, 'openai', input)
 }
 
@@ -266,21 +294,64 @@ async function downloadImage(
     const data = decodeBase64(parsed.base64, provider)
     return { data, mediaType: detectImageMediaType(data) ?? imageMediaType(parsed.mediaType) ?? 'image/png' }
   }
-  const sameOrigin = new URL(url).origin === new URL(input.baseURL).origin
-  let response = await guardedFetch(`${provider} image download`, input.signal, () => fetch(url, {
-    redirect: 'follow', signal: input.signal,
-    ...(input.apiKey === undefined || !sameOrigin ? {} : { headers: { authorization: `Bearer ${input.apiKey}` } }),
-  }), input.apiKey)
-  // Some same-origin relays reject Authorization on public image URLs, so the
-  // legacy retry remains available without ever sending the key to another origin.
-  if (!response.ok && input.apiKey !== undefined && sameOrigin) {
-    response = await guardedFetch(`${provider} image download`, input.signal, () => fetch(url, { redirect: 'follow', signal: input.signal }), input.apiKey)
+  // Relative URLs are legal for self-hosted gateways (SGLang returns
+  // "/v1/images/<id>/content"): resolve them against the configured base URL,
+  // then fall back to the origin path for relays whose real route drops /v1.
+  const candidates = imageDownloadCandidates(url, input.baseURL, provider)
+  let response: Response | undefined
+  let failure: unknown
+  for (const candidate of candidates) {
+    try {
+      response = await requestImageCandidate(candidate, provider, input)
+      if (response.ok) break
+      failure = new Error(`${provider} image download failed (${response.status})`)
+      response = undefined
+    } catch (err) {
+      failure = err
+    }
   }
-  if (!response.ok) throw new Error(`${provider} image download failed (${response.status})`)
+  if (response === undefined) throw failure instanceof Error ? failure : new Error(`${provider} image download failed`)
   const data = await readBoundedBytes(response, input.maxBytes)
   const mediaType = detectImageMediaType(data) ?? imageMediaType(response.headers.get('content-type'))
   if (mediaType === undefined) throw new Error(`${provider} image download returned unsupported content type`)
   return { data, mediaType }
+}
+
+function imageDownloadCandidates(url: string, baseURL: string, provider: string): string[] {
+  const candidates: string[] = []
+  try {
+    candidates.push(new URL(url, baseURL.endsWith('/') ? baseURL : baseURL + '/').toString())
+  } catch {
+    // A malformed baseURL still leaves the origin fallback below for "/path".
+  }
+  if (url.startsWith('/')) {
+    try {
+      const stripped = new URL(baseURL).origin + url.replace(/^\/v1(?=\/)/, '')
+      if (!candidates.includes(stripped)) candidates.push(stripped)
+    } catch {
+      // No origin fallback without a parseable baseURL.
+    }
+  }
+  if (candidates.length === 0) throw new Error(provider + ' image download URL is not absolute')
+  return candidates
+}
+
+async function requestImageCandidate(
+  candidate: string,
+  provider: string,
+  input: { baseURL: string; maxBytes: number; signal: AbortSignal; apiKey?: string },
+): Promise<Response> {
+  const sameOrigin = new URL(candidate).origin === new URL(input.baseURL).origin
+  let response = await guardedFetch(provider + ' image download', input.signal, () => fetch(candidate, {
+    redirect: 'follow', signal: input.signal,
+    ...(input.apiKey === undefined || !sameOrigin ? {} : { headers: { authorization: 'Bearer ' + input.apiKey } }),
+  }), input.apiKey)
+  // Some same-origin relays reject Authorization on public image URLs, so the
+  // legacy retry remains available without ever sending the key to another origin.
+  if (!response.ok && input.apiKey !== undefined && sameOrigin) {
+    response = await guardedFetch(provider + ' image download', input.signal, () => fetch(candidate, { redirect: 'follow', signal: input.signal }), input.apiKey)
+  }
+  return response
 }
 
 function parseDataUrl(value: string): { mediaType: string; base64: string } | undefined {

@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { createServer, type AddressInfo, type Server } from 'node:http'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createServer, request as httpRequest, type AddressInfo, type Server } from 'node:http'
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import { serveImport, type ImportRouteDeps } from '../src/import-route.js'
 
@@ -15,6 +15,7 @@ describe('import route', () => {
   let serverUrl: string
   let saved: Array<{ data: Uint8Array; mediaType: string; name?: string }>
   let failNextSave: Error | undefined
+  let nextAttachment: ImageAttachmentRef | undefined
 
   const deps: ImportRouteDeps = {
     saveImage: async image => {
@@ -24,7 +25,7 @@ describe('import route', () => {
         throw error
       }
       saved.push(image)
-      return attachmentRef(`att-${String(saved.length)}`)
+      return nextAttachment ?? attachmentRef(`att-${String(saved.length)}`)
     },
     maxImageBytes: 1024,
     mediaTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
@@ -33,6 +34,7 @@ describe('import route', () => {
   beforeEach(() => {
     saved = []
     failNextSave = undefined
+    nextAttachment = undefined
     server = createServer((req, res) => {
       void serveImport(req, res, deps).catch(() => {
         res.statusCode = 500
@@ -62,6 +64,105 @@ describe('import route', () => {
     })
     return { status: response.status, payload: await response.json().catch(() => undefined) }
   }
+
+  it('imports a multipart upload without base64 bodies', async () => {
+    await listen()
+    const form = new FormData()
+    form.append('images', new Blob([PNG_BYTES], { type: 'image/png' }), 'cat.png')
+    form.append('images', new Blob([PNG_BYTES], { type: 'image/png' }), 'dog.png')
+    const response = await fetch(serverUrl, { method: 'POST', body: form })
+    expect(response.status).toBe(200)
+    const payload = await response.json() as { images: { attachment: ImageAttachmentRef }[]; failures: unknown[] }
+    expect(payload.images).toHaveLength(2)
+    expect(payload.failures).toEqual([])
+    expect(saved.map(image => image.name)).toEqual(['cat.png', 'dog.png'])
+  })
+
+  it('returns the first eight multipart images and reports the rest as failures', async () => {
+    await listen()
+    const form = new FormData()
+    for (let index = 0; index < 9; index += 1) {
+      form.append('images', new Blob([PNG_BYTES], { type: 'image/png' }), 'img-' + String(index) + '.png')
+    }
+    const response = await fetch(serverUrl, { method: 'POST', body: form })
+    expect(response.status).toBe(200)
+    const payload = await response.json() as { images: unknown[]; failures: { index: number; error: string }[] }
+    expect(payload.images).toHaveLength(8)
+    expect(payload.failures).toHaveLength(1)
+    expect(payload.failures[0]?.index).toBe(8)
+    expect(payload.failures[0]?.error).toBe('invalid-image-count')
+    expect(saved).toHaveLength(8)
+  })
+
+  it('commits nothing when the multipart body is truncated', async () => {
+    await listen()
+    const boundary = 'truncated-boundary'
+    const body = Buffer.concat([
+      Buffer.from('--' + boundary + '\r\nContent-Disposition: form-data; name="images"; filename="a.png"\r\nContent-Type: image/png\r\n\r\n'),
+      PNG_BYTES,
+      Buffer.from('\r\n'),
+    ])
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = httpRequest(serverUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'multipart/form-data; boundary=' + boundary, 'content-length': String(body.length) },
+      }, response => {
+        response.resume()
+        response.on('end', () => resolve(response.statusCode ?? 0))
+      })
+      req.on('error', reject)
+      req.end(body)
+    })
+    expect(status).toBe(400)
+    expect(saved).toHaveLength(0)
+  })
+
+  it('reports an oversized multipart part and keeps the next image', async () => {
+    await listen()
+    const previous = (deps as { maxImageBytes: number }).maxImageBytes
+    ;(deps as { maxImageBytes: number }).maxImageBytes = 4
+    try {
+      const form = new FormData()
+      form.append('images', new Blob([PNG_BYTES], { type: 'image/png' }), 'big.png')
+      form.append('images', new Blob([PNG_BYTES.subarray(0, 4)], { type: 'image/png' }), 'small.png')
+      const response = await fetch(serverUrl, { method: 'POST', body: form })
+      expect(response.status).toBe(200)
+      const payload = await response.json() as { images: unknown[]; failures: { index: number; error: string }[] }
+      expect(payload.images).toHaveLength(1)
+      expect(payload.failures[0]?.index).toBe(0)
+      expect(payload.failures[0]?.error).toContain('size-out-of-range')
+    } finally {
+      ;(deps as { maxImageBytes: number }).maxImageBytes = previous
+    }
+  })
+
+  it('rejects an unsupported multipart type but imports the valid part', async () => {
+    await listen()
+    const form = new FormData()
+    form.append('images', new Blob([Buffer.from('not an image')], { type: 'text/plain' }), 'note.txt')
+    form.append('images', new Blob([PNG_BYTES], { type: 'image/png' }), 'ok.png')
+    const response = await fetch(serverUrl, { method: 'POST', body: form })
+    expect(response.status).toBe(200)
+    const payload = await response.json() as { images: unknown[]; failures: { index: number; error: string }[] }
+    expect(payload.images).toHaveLength(1)
+    expect(payload.failures[0]?.error).toContain('unsupported-media-type')
+  })
+
+  it('keeps the raw copy when the attachment layer normalizes the image', async () => {
+    await listen()
+    nextAttachment = { attachmentId: 'att-normalized', mediaType: 'image/jpeg', bytes: 2, width: 1, height: 1 }
+    const saveOriginal = vi.fn(async () => ({ key: 'a'.repeat(64), bytes: PNG_BYTES.byteLength, mediaType: 'image/png' as const }))
+    deps.saveOriginal = saveOriginal
+    try {
+      const { status, payload } = await post({ images: [{ data: PNG_BASE64, mediaType: 'image/png' }] })
+      expect(status).toBe(200)
+      expect((payload as { images: { original?: { key: string } }[] }).images[0]?.original?.key).toBe('a'.repeat(64))
+      expect(saveOriginal).toHaveBeenCalledTimes(1)
+      expect(saveOriginal.mock.calls[0]?.[0]).toMatchObject({ mediaType: 'image/png' })
+    } finally {
+      delete deps.saveOriginal
+    }
+  })
 
   it('saves each picked image and returns its attachment ref', async () => {
     await listen()
@@ -140,6 +241,31 @@ describe('import route', () => {
     expect(result.failures[3].error).toContain('size-out-of-range')
   })
 
+  it('warms a thumbnail for every saved attachment', async () => {
+    const warmed: string[] = []
+    const warmServer = createServer((req, res) => {
+      void serveImport(req, res, {
+        saveImage: async () => attachmentRef('att-warm'),
+        maxImageBytes: 1024,
+        mediaTypes: ['image/png'],
+        warmThumbnail: ref => { warmed.push(String(ref.attachmentId)) },
+      })
+    })
+    await new Promise<void>(resolve => warmServer.listen(0, '127.0.0.1', resolve))
+    try {
+      const port = (warmServer.address() as AddressInfo).port
+      const response = await fetch('http://127.0.0.1:' + String(port) + '/', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ images: [{ data: PNG_BASE64, mediaType: 'image/png' }] }),
+      })
+      expect(response.status).toBe(200)
+      expect(warmed).toEqual(['att-warm'])
+    } finally {
+      await new Promise<void>(resolve => { warmServer.close(() => { resolve() }) })
+    }
+  })
+
   it('reports saveImage errors as a stable code without leaking details', async () => {
     await listen()
     failNextSave = new Error('disk-full /var/lib/postgresql/pgdata volume 7f3a')
@@ -169,6 +295,40 @@ describe('import route', () => {
     const { status, payload } = await post({ images: [{ data: `${PNG_BASE64}!`, mediaType: 'image/png' }] })
     expect(status).toBe(200)
     expect((payload as { failures: { index: number; error: string }[] }).failures).toEqual([{ index: 0, error: 'invalid-base64' }])
+  })
+
+  it('accepts multi-megabyte base64 payloads without overflowing the regexp stack', async () => {
+    // V8's backtracking regexp threw RangeError ("Maximum call stack size
+    // exceeded") for base64 strings past a few megabytes, which surfaced as a
+    // bare HTTP 400 from the host web server.
+    const bigSaved: Array<{ data: Uint8Array }> = []
+    const bigServer = createServer((req, res) => {
+      void serveImport(req, res, {
+        saveImage: async image => {
+          bigSaved.push(image)
+          return attachmentRef('att-big')
+        },
+        maxImageBytes: 16 * 1024 * 1024,
+        mediaTypes: ['image/png'],
+      })
+    })
+    await new Promise<void>(resolve => bigServer.listen(0, '127.0.0.1', resolve))
+    try {
+      const port = (bigServer.address() as AddressInfo).port
+      const data = Buffer.alloc(8 * 1024 * 1024).toString('base64')
+      const response = await fetch('http://127.0.0.1:' + String(port) + '/', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ images: [{ data, mediaType: 'image/png' }] }),
+      })
+      const payload = await response.json() as { images: unknown[]; failures: unknown[] }
+      expect(response.status).toBe(200)
+      expect(payload.failures).toEqual([])
+      expect(payload.images).toHaveLength(1)
+      expect(bigSaved).toHaveLength(1)
+    } finally {
+      await new Promise<void>(resolve => { bigServer.close(() => { resolve() }) })
+    }
   })
 
   it('rejects request bodies above the batch limit', async () => {

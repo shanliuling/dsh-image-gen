@@ -3,9 +3,9 @@
  * Fully i18n-reactive (Chinese & English) with modular tabs, multi-dimensional filters,
  * responsive image grid, and placeholder routes.
  */
-import { useCallback, useEffect, useState, useMemo, useRef, type FC, type MouseEvent } from 'react'
-import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import { DELETE_ROUTE, IMPORT_ROUTE, type ImageProvider } from '../shared.js'
+import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useState, useMemo, useRef, type FC, type MouseEvent } from 'react'
+import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
+import { DELETE_ROUTE, IMPORT_ROUTE, STORAGE_STATS_ROUTE, ZIP_CANCEL_ROUTE, ZIP_PROGRESS_ROUTE, ZIP_ROUTE, imageUrlFor, previewUrlFor, thumbUrlFor, vaultUrlFor, type ImageProvider } from '../shared.js'
 import {
   Image as ImageIcon,
   SlidersHorizontal,
@@ -23,6 +23,7 @@ import {
   AlertTriangle,
   Sparkles,
   Upload,
+  HardDrive,
 } from 'lucide-react'
 import {
   getGalleryItems,
@@ -30,21 +31,30 @@ import {
   saveGalleryItem,
   deleteGalleryItem,
   bulkDeleteGalleryItems,
+  getGalleryItemsStrict,
   bulkSetFavoriteGalleryItems,
-  toggleFavoriteGalleryItem,
   isItemInWorkspace,
+  pruneGalleryThumbs,
+  pruneTombstones,
+  getGalleryThumbStats,
   type GalleryItem,
 } from './gallery-store.js'
-import { StudioView, useInView } from './studio-view.js'
+import { StudioView } from './studio-view.js'
 import { deselectStudioTlCanvases } from './tl/studio-tl-canvas.js'
-import { GalleryCanvasButton } from './tl/gallery-canvas-button.js'
-import { startGalleryImageDrag } from './tl/gallery-image-transfer.js'
 import { InspirationView } from './inspiration-view.js'
 import { evictAttachmentCache, fetchAttachmentBlob } from './image-cache.js'
+import { shouldShowBatchBar } from './gallery-batch-bar.js'
+import { mergeGalleryItems } from './gallery-merge.js'
 import { copyImageBlob, createZipBlob, downloadBlobUrl, type ZipFileInput } from './browser-image-utils.js'
 import { conversationRegenerateRequest } from './conversation-regenerate.js'
 import { STUDIO_ROUTE, type StudioWorkspaceInfo, type StudioGenerateResponse } from '../shared.js'
 
+import { DICT, type DictKey } from './gallery-i18n.js'
+import { canUseServerZip, deleteVaultOriginals, extensionFor, fetchGalleryItemBlob, formatStorageBytes, imageMediaTypeOf, postZipDownload, syncVaultRefs, vaultKeysOf, type GalleryStorageStats } from './gallery-media.js'
+import { formatCardMeta, formatRelativeTime, getItemRatio } from './gallery-format.js'
+import { GalleryCard, type GalleryCardActions } from './gallery-card.js'
+
+const GALLERY_RENDER_BATCH = 120
 /** Host-provided locale service; `active` may be missing before the locale loads. */
 export interface LocaleService {
   getSnapshot(): { active?: string }
@@ -53,331 +63,6 @@ export interface LocaleService {
 
 export type TabKey = 'gallery' | 'studio' | 'inspiration' | 'favorites'
 export type SortKey = 'newest' | 'oldest'
-
-const DICT = {
-  zh: {
-    // 顶部 Tab
-    tabGallery: '图库',
-    tabStudio: '工作台',
-    tabInspiration: '灵感',
-    tabFavorites: '收藏',
-    tabCompare: '对比',
-    tabTasks: '任务',
-
-    // 筛选工具栏
-    filterAllProviders: '全部提供商',
-    filterGoogle: 'Google Gemini',
-    filterOpenAI: 'OpenAI',
-    filterOpenAICompat: 'OpenAI 兼容',
-    filterSeedream: '字节 Seedream',
-    filterDashScope: '阿里 DashScope',
-    filterXAI: 'xAI Grok',
-    filterZhipu: '智谱 GLM',
-    filterComfyUI: '本地 ComfyUI',
-    filterImport: '导入',
-    importImages: '导入图片', importAdded: '已导入 {count} 张图片', importPartial: '导入 {count} 张，{fail} 张失败', importFailed: '导入失败', importPickHint: '选择要导入的图片（PNG/JPG/WebP/GIF）',
-    filterAllModels: '全部模型',
-    filterAllRatios: '全部比例',
-    searchPlaceholder: '搜索 Prompt、标签…',
-    filterCurrentWorkspace: '仅看此工作区',
-    filterCurrentWorkspaceHint: '只展示属于当前工作区的生图记录与物理文件',
-    sortNewest: '最新生成',
-    sortOldest: '最早生成',
-
-    // 状态与提示
-    totalCount: '共 {count} 张生成图片',
-    emptyTitle: '暂无生图记录',
-    emptyDesc: '在对话中让 Agent 生图后，生成的图片会自动收录到这里。',
-    favEmptyTitle: '暂无收藏图片',
-    favEmptyDesc: '在图库中点击卡片右下角的 ♡ 按钮，即可将喜爱的图片收录到这里。',
-    noMatchTitle: '未找到匹配结果',
-    noMatchDesc: '尝试更换搜索关键词或调整筛选条件。',
-    copiedPrompt: '已复制 Prompt',
-    copiedImage: '已复制图片',
-    copyFailed: '复制失败',
-    favoriteAdded: '已添加到收藏',
-    favoriteRemoved: '已取消收藏',
-
-    // 卡片与弹窗操作
-    preview: '查看大图',
-    download: '下载图片',
-    copyImg: '复制图片',
-    copyPpt: '复制 Prompt',
-    regenerate: '重新生成',
-    regenerateTitle: '重新生成图片',
-    regenerateHint: '可按需修改 Prompt，基于当前模型和比例在画廊生成一张新图片。',
-    confirmRegenerate: '开始生成',
-    regenerating: '正在重新生成…',
-    regenerateSuccess: '已生成新图片并收录到画廊',
-    regenerateSaveFailed: '图片已生成，但保存到图库失败，请重试',
-    regenerateFailed: '重新生成失败',
-    delete: '从画廊删除',
-    confirmDelete: '确定要从画廊中删除这张图片吗？（不会影响原聊天记录）',
-    deleted: '已从画廊删除',
-    model: '模型',
-    prompt: 'Prompt',
-    close: '关闭 (Esc)',
-    prevImage: '上一张 (←)',
-    nextImage: '下一张 (→)',
-
-    // 批量管理与操作
-    manage: '批量管理',
-    exitManage: '退出选择',
-    selectedCount: '已选 {n} 项',
-    selectAll: '全选',
-    invertSelect: '反选',
-    clearSelect: '清空',
-    batchFavorite: '批量收藏',
-    batchUnfavorite: '批量取消收藏',
-    batchFavoritedToast: '已将 {count} 张图片加入收藏',
-    batchUnfavoritedToast: '已取消 {count} 张图片的收藏',
-    batchFavoriteFailed: '收藏操作失败，请重试',
-    batchDownload: '批量下载',
-    batchDownloading: '打包中 ({current}/{total})…',
-    batchDownloadSingleToast: '已下载 1 张图片',
-    batchDownloadZipToast: '已打包下载 {count} 张图片',
-    batchDownloadFailed: '批量下载失败，请重试',
-    batchDelete: '批量删除',
-    batchDeleteTitle: '确认批量删除选中的 {count} 张图片？',
-    batchDeleteTitleSingle: '确认从画廊中删除这张图片？',
-    batchDeleteDesc: '将从画廊历史记录中移除所选图片。',
-    deleteWorkspaceFilesOpt: '同时清理工作区磁盘物理文件（不可恢复）',
-    cancel: '取消',
-    confirmBatchDelete: '确认删除 ({count})',
-    confirmDeleteSingle: '确认删除',
-    batchDeletedToast: '已删除 {count} 张图片',
-    batchDeletedWithFilesToast: '已删除 {count} 张图片，并清理了 {files} 个工作区文件',
-    deleteFailedFileLocked: '已删除 {count} 张图片，但有 {files} 个文件因被系统占用未能删除',
-    deleteFailedDatabase: '删除失败：本地数据库操作异常',
-
-    // 时间格式化
-    justNow: '刚刚',
-    minutesAgo: '{n} 分钟前',
-    hoursAgo: '{n} 小时前',
-    daysAgo: '{n} 天前',
-
-    // 预留模块占位
-    studioTitle: 'AI 图像工作台 (Studio)',
-    studioDesc: '工作台模块正在紧锣密鼓开发中。在此你将体验大图精修、变体生成 (Variations)、参数重调并一键将生成结果无缝插回 DSH 正在进行的对话。',
-    studioTip: '💡 提示：目前你可以在“图库”中点击任意图片，在弹窗中进行查看、复制与下载。',
-    compareTitle: '多模型横向对比 (Compare)',
-    compareDesc: '支持单个 Prompt 一键同时调度 Gemini、Seedream、DashScope 及本地 ComfyUI 模型并排生成，直观横评画质与细节。',
-    tasksTitle: '异步任务队列 (Tasks)',
-    tasksDesc: '集中管理后台批量生图、多模型并发生成与本地 ComfyUI 耗时任务。支持状态追踪、失败重试与执行耗时分析。',
-    comingSoonBadge: '即将推出',
-  },
-  en: {
-    // Top Tabs
-    tabGallery: 'Gallery',
-    tabStudio: 'Studio',
-    tabInspiration: 'Inspiration',
-    tabFavorites: 'Favorites',
-    tabCompare: 'Compare',
-    tabTasks: 'Tasks',
-
-    // Filter Toolbar
-    filterAllProviders: 'All Providers',
-    filterGoogle: 'Google Gemini',
-    filterOpenAI: 'OpenAI',
-    filterOpenAICompat: 'OpenAI-compatible',
-    filterSeedream: 'ByteDance Seedream',
-    filterDashScope: 'Aliyun DashScope',
-    filterXAI: 'xAI Grok',
-    filterZhipu: 'Zhipu GLM',
-    filterComfyUI: 'Local ComfyUI',
-    filterImport: 'Imported',
-    importImages: 'Import images', importAdded: 'Imported {count} images', importPartial: 'Imported {count}, {fail} failed', importFailed: 'Import failed', importPickHint: 'Choose images to import (PNG/JPG/WebP/GIF)',
-    filterAllModels: 'All Models',
-    filterAllRatios: 'All Ratios',
-    searchPlaceholder: 'Search prompt, tags…',
-    filterCurrentWorkspace: 'Current workspace only',
-    filterCurrentWorkspaceHint: 'Only show images belonging to the active workspace',
-    sortNewest: 'Newest first',
-    sortOldest: 'Oldest first',
-
-    // States & Toasts
-    totalCount: '{count} images total',
-    emptyTitle: 'No images generated yet',
-    emptyDesc: 'Images generated during conversations will automatically appear here.',
-    favEmptyTitle: 'No favorite images yet',
-    favEmptyDesc: 'Click the ♡ button on any card in the gallery to collect your favorite images here.',
-    noMatchTitle: 'No matching images',
-    noMatchDesc: 'Try a different search keyword or adjust filter criteria.',
-    copiedPrompt: 'Prompt copied',
-    copiedImage: 'Image copied',
-    copyFailed: 'Copy failed',
-    favoriteAdded: 'Added to favorites',
-    favoriteRemoved: 'Removed from favorites',
-
-    // Card & Lightbox Actions
-    preview: 'Full Preview',
-    download: 'Download',
-    copyImg: 'Copy Image',
-    copyPpt: 'Copy Prompt',
-    regenerate: 'Regenerate',
-    regenerateTitle: 'Regenerate Image',
-    regenerateHint: 'Edit prompt if needed. A new image will be generated and added to the gallery.',
-    confirmRegenerate: 'Generate',
-    regenerating: 'Regenerating…',
-    regenerateSuccess: 'New image generated and added to gallery',
-    regenerateSaveFailed: 'Image generated, but saving to the gallery failed. Please retry.',
-    regenerateFailed: 'Regeneration failed',
-    delete: 'Delete from gallery',
-    confirmDelete: 'Are you sure you want to remove this image from the gallery? (Chat history will not be affected)',
-    deleted: 'Deleted from gallery',
-    model: 'Model',
-    prompt: 'Prompt',
-    close: 'Close (Esc)',
-    prevImage: 'Previous (←)',
-    nextImage: 'Next (→)',
-
-    // Batch Management & Operations
-    manage: 'Batch Manage',
-    exitManage: 'Done',
-    selectedCount: '{n} selected',
-    selectAll: 'Select All',
-    invertSelect: 'Invert',
-    clearSelect: 'Clear',
-    batchFavorite: 'Batch Favorite',
-    batchUnfavorite: 'Batch Unfavorite',
-    batchFavoritedToast: 'Added {count} images to favorites',
-    batchUnfavoritedToast: 'Removed {count} images from favorites',
-    batchFavoriteFailed: 'Favorite operation failed, please retry',
-    batchDownload: 'Batch Download',
-    batchDownloading: 'Packaging ({current}/{total})…',
-    batchDownloadSingleToast: 'Downloaded 1 image',
-    batchDownloadZipToast: 'Packaged & downloaded {count} images',
-    batchDownloadFailed: 'Batch download failed, please retry',
-    batchDelete: 'Batch Delete',
-    batchDeleteTitle: 'Delete {count} selected images?',
-    batchDeleteTitleSingle: 'Delete this image from gallery?',
-    batchDeleteDesc: 'These images will be removed from your gallery history.',
-    deleteWorkspaceFilesOpt: 'Also delete files from workspace disk (cannot be undone)',
-    cancel: 'Cancel',
-    confirmBatchDelete: 'Delete ({count})',
-    confirmDeleteSingle: 'Delete',
-    batchDeletedToast: 'Deleted {count} images',
-    batchDeletedWithFilesToast: 'Deleted {count} images and cleaned {files} workspace files',
-    deleteFailedFileLocked: 'Deleted {count} images, but {files} files could not be deleted (busy/locked)',
-    deleteFailedDatabase: 'Failed to delete: local database error',
-
-    // Relative Time
-    justNow: 'Just now',
-    minutesAgo: '{n}m ago',
-    hoursAgo: '{n}h ago',
-    daysAgo: '{n}d ago',
-
-    // Route Placeholders
-    studioTitle: 'AI Image Studio',
-    studioDesc: 'Studio workbench is under active development. Fine-tune prompts, generate variations (2x/4x), and inject images directly into DSH chat.',
-    studioTip: '💡 Tip: You can currently click any image in the Gallery to preview, copy, or download it.',
-    compareTitle: 'Model Comparison (Compare)',
-    compareDesc: 'Side-by-side multi-model benchmarking coming soon. Test Gemini, Seedream, DashScope, and ComfyUI with a single prompt.',
-    tasksTitle: 'Task Queue (Tasks)',
-    tasksDesc: 'Centralized view for batch generation, asynchronous ComfyUI runs, live progress tracking, and retry controls.',
-    comingSoonBadge: 'Coming Soon',
-  },
-} as const
-
-export type DictKey = keyof typeof DICT.zh
-
-/** Format human-readable relative time */
-/** Read a browser-picked file as base64 payload for the import route. */
-function readFileBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const result = reader.result
-      if (typeof result === 'string') resolve(result.slice(result.indexOf(',') + 1))
-      else reject(new Error('read-failed'))
-    }
-    reader.onerror = () => reject(new Error('read-failed'))
-    reader.readAsDataURL(file)
-  })
-}
-
-function formatRelativeTime(
-  timestamp: number,
-  t: (key: DictKey, params?: Record<string, string>) => string
-): string {
-  const diff = Date.now() - timestamp
-  if (diff < 60_000) {
-    return t('justNow')
-  }
-  if (diff < 3600_000) {
-    const mins = Math.max(1, Math.floor(diff / 60_000))
-    return t('minutesAgo', { n: String(mins) })
-  }
-  if (diff < 86400_000) {
-    const hours = Math.floor(diff / 3600_000)
-    return t('hoursAgo', { n: String(hours) })
-  }
-  if (diff < 30 * 86400_000) {
-    const days = Math.floor(diff / 86400_000)
-    return t('daysAgo', { n: String(days) })
-  }
-  const d = new Date(timestamp)
-  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`
-}
-
-/** Extract standard aspect ratio for precise filtering */
-function getItemRatio(item: GalleryItem): string {
-  // Codex subscription may ignore its requested ratio. Filter these cards by
-  // the saved image's dimensions instead of the Studio selection.
-  if (item.provider === 'chatgpt-sub' && item.attachment.width && item.attachment.height) {
-    const actual = item.attachment.width / item.attachment.height
-    for (const [label, value] of [
-      ['1:1', 1], ['16:9', 16 / 9], ['9:16', 9 / 16],
-      ['4:3', 4 / 3], ['3:4', 3 / 4], ['3:2', 3 / 2], ['2:3', 2 / 3],
-    ] as const) {
-      if (Math.abs(actual / value - 1) < 0.08) return label
-    }
-    return 'custom'
-  }
-  if (item.aspectRatio && item.aspectRatio !== 'custom') {
-    return item.aspectRatio
-  }
-  if (item.output) {
-    const ratioMatch = item.output.match(/\b(1:1|16:9|9:16|4:3|3:4|3:2|2:3)\b/)
-    if (ratioMatch?.[1]) return ratioMatch[1]
-
-    const dimMatch = item.output.match(/(\d{3,4})\s*[×x*]\s*(\d{3,4})/)
-    if (dimMatch?.[1] && dimMatch[2]) {
-      const w = parseInt(dimMatch[1], 10)
-      const h = parseInt(dimMatch[2], 10)
-      if (w === h) return '1:1'
-      const approx = w / h
-      if (Math.abs(approx - 16 / 9) < 0.05) return '16:9'
-      if (Math.abs(approx - 9 / 16) < 0.05) return '9:16'
-      if (Math.abs(approx - 4 / 3) < 0.05) return '4:3'
-      if (Math.abs(approx - 3 / 4) < 0.05) return '3:4'
-      if (Math.abs(approx - 3 / 2) < 0.05) return '3:2'
-      if (Math.abs(approx - 2 / 3) < 0.05) return '2:3'
-    }
-  }
-  return '1:1'
-}
-
-/** Format aspect ratio or dimensions for card metadata (e.g., 1024×1024 or 16:9) */
-function formatCardMeta(item: GalleryItem): string {
-  if (item.output) {
-    const dimMatch = item.output.match(/(\d{3,4})\s*[×x*]\s*(\d{3,4})/)
-    if (dimMatch?.[1] && dimMatch[2]) {
-      return `${dimMatch[1]}×${dimMatch[2]}`
-    }
-  }
-  if (item.aspectRatio && item.aspectRatio !== 'custom') {
-    return item.aspectRatio
-  }
-  if (item.output) {
-    const ratioMatch = item.output.match(/\b(1:1|16:9|9:16|4:3|3:4|3:2|2:3)\b/)
-    if (ratioMatch?.[1]) return ratioMatch[1]
-  }
-  if (item.imageSize) {
-    return item.imageSize
-  }
-  return '1:1'
-}
 
 export interface GalleryViewTabProps {
   locale?: LocaleService | undefined
@@ -411,7 +96,11 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   const [studioDraft, setStudioDraft] = useState<string | undefined>(undefined)
   const [studioReference, setStudioReference] = useState<File | undefined>(undefined)
   const [items, setItems] = useState<GalleryItem[]>([])
+  const [renderLimit, setRenderLimit] = useState(GALLERY_RENDER_BATCH)
+  const gallerySentinelRef = useRef<HTMLDivElement | null>(null)
   const [search, setSearch] = useState('')
+  // Keep typing responsive while the full list is re-filtered off the critical path.
+  const deferredSearch = useDeferredValue(search)
   const [selectedProvider, setSelectedProvider] = useState<string>('all')
   const [selectedRatio, setSelectedRatio] = useState<string>('all')
   const [sortBy, setSortBy] = useState<SortKey>('newest')
@@ -429,7 +118,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   useEffect(() => {
     try {
       localStorage.setItem('dsh-ig-only-current-workspace', String(onlyCurrentWorkspace))
-    } catch {}
+    } catch { /* best effort */ }
   }, [onlyCurrentWorkspace])
 
   // Canvas selection is interaction state tied to this surface: leaving the
@@ -496,8 +185,20 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   const [previewItem, setPreviewItem] = useState<GalleryItem | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const previewUrlRef = useRef<string | null>(null)
+  /** Identifies the current preview attempt; late fallback fetches are ignored. */
+  const previewRequestRef = useRef(0)
+  const previewPrefetchRef = useRef<HTMLImageElement[]>([])
   previewUrlRef.current = previewUrl
   const [previewBlob, setPreviewBlob] = useState<Blob | null>(null)
+  // Stable dispatchers keep memoized cards from re-rendering on selection changes.
+  const cardActionsRef = useRef<GalleryCardActions | null>(null)
+  const cardActions = useMemo<GalleryCardActions>(() => ({
+    click: (item, index, event) => cardActionsRef.current?.click(item, index, event),
+    toggleSelect: (item, index, event) => cardActionsRef.current?.toggleSelect(item, index, event),
+    requestDelete: item => cardActionsRef.current?.requestDelete(item),
+    preview: (item, blob) => cardActionsRef.current?.preview(item, blob),
+    toast: message => cardActionsRef.current?.toast(message),
+  }), [])
   const [toast, setToast] = useState<string | null>(null)
 
   // In-Gallery Regenerate State
@@ -513,6 +214,9 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   const [showDeleteModal, setShowDeleteModal] = useState(false)
   const [deleteWorkspaceFiles, setDeleteWorkspaceFiles] = useState(true)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [showStorageModal, setShowStorageModal] = useState(false)
+  const [isStorageScanning, setIsStorageScanning] = useState(false)
+  const [storageStats, setStorageStats] = useState<GalleryStorageStats | null>(null)
 
   // Clear batch selection and shift anchor when switching tabs, searching, or changing filters
   useEffect(() => {
@@ -534,15 +238,18 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   }, [locale])
 
   const dict = lang === 'en' ? DICT.en : DICT.zh
-  const t = (key: DictKey, params?: Record<string, string>): string => {
-    let text: string = dict[key] || DICT.zh[key] || key
-    if (params) {
-      for (const [k, v] of Object.entries(params)) {
-        text = text.replace(`{${k}}`, v)
+  // Stable identity: memoized cards only re-render when their own state changes.
+  const t = useMemo(() => {
+    return (key: DictKey, params?: Record<string, string>): string => {
+      let text: string = dict[key] || DICT.zh[key] || key
+      if (params) {
+        for (const [k, v] of Object.entries(params)) {
+          text = text.replace(`{${k}}`, v)
+        }
       }
+      return text
     }
-    return text
-  }
+  }, [dict])
 
   const showToast = (msg: string) => {
     setToast(msg)
@@ -557,32 +264,34 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   const importImages = async (files: FileList | null): Promise<void> => {
     if (files === null || files.length === 0 || importing) return
     const all = Array.from(files)
-    const picked = all.filter(file => file.type.startsWith('image/')).slice(0, 8)
+    const picked = all
+      .map(file => ({ file, mediaType: imageMediaTypeOf(file) }))
+      .filter((entry): entry is { file: File; mediaType: string } => entry.mediaType !== undefined)
+      .slice(0, 8)
     if (picked.length === 0) {
       showToast(t('importFailed'))
       return
     }
     setImporting(true)
     try {
-      const reads = await Promise.allSettled(picked.map(file => readFileBase64(file)))
-      const images = reads.flatMap((read, index) => {
-        if (read.status !== 'fulfilled') return []
-        const file = picked[index]!
-        return [{ data: read.value, mediaType: file.type, ...(file.name.length > 0 ? { name: file.name } : {}) }]
-      })
-      const readFailures = reads.length - images.length
-      if (images.length === 0) {
-        showToast(t('importFailed'))
-        return
+      // Upload the picked files directly: the browser streams multipart from
+      // disk, so neither the page nor the host has to hold the batch as base64.
+      const form = new FormData()
+      for (const entry of picked) {
+        const name = entry.file.name.length > 0 ? entry.file.name : `image.${extensionFor(entry.mediaType)}`
+        form.append('images', entry.file, name)
       }
       const response = await fetch(IMPORT_ROUTE, {
         method: 'POST',
         credentials: 'same-origin',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ images }),
+        body: form,
       })
       if (!response.ok) throw new Error(`HTTP ${String(response.status)}`)
-      const payload = await response.json() as { images?: { attachment: ImageAttachmentRef }[]; failures?: unknown[] }
+      const payload = await response.json() as {
+        images?: { attachment: ImageAttachmentRef; original?: { key: string; bytes: number; mediaType: ImageMediaType } }[]
+        failures?: unknown[]
+      }
+      if ((payload.failures ?? []).length > 0) console.warn('[dsh-image-gen] import failures', payload.failures)
       const imported = payload.images ?? []
       let added = 0
       let writeFailures = 0
@@ -599,16 +308,26 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
           ...(activeWorkspace?.workspaceId ? { workspaceId: activeWorkspace.workspaceId } : {}),
           ...(activeWorkspace?.path ? { workspacePath: activeWorkspace.path } : {}),
           ...(currentSessionId ? { sessionId: currentSessionId } : {}),
+          ...(entry.original === undefined ? {} : { original: entry.original }),
         })
         if (persisted) added += 1
         else writeFailures += 1
       }
-      const failCount = (payload.failures ?? []).length + (all.length - picked.length) + readFailures + writeFailures
-      if (added === 0) showToast(t('importFailed'))
-      else if (failCount > 0) showToast(t('importPartial', { count: String(added), fail: String(failCount) }))
+      if (added > 0) {
+        // Import committed new originals; publish the complete profile set so
+        // another browser cannot delete a key this profile just adopted.
+        await syncVaultRefs(vaultKeysOf(await getGalleryItemsStrict()))
+      }
+      const failCount = (payload.failures ?? []).length + (all.length - picked.length) + writeFailures
+      if (added === 0) {
+        const firstFailure = (payload.failures ?? [])[0] as { error?: unknown } | undefined
+        const reason = typeof firstFailure?.error === 'string' ? firstFailure.error : undefined
+        showToast(reason === undefined ? t('importFailed') : t('importFailed') + ' · ' + reason)
+      } else if (failCount > 0) showToast(t('importPartial', { count: String(added), fail: String(failCount) }))
       else showToast(t('importAdded', { count: String(added) }))
-    } catch {
-      showToast(t('importFailed'))
+    } catch (err) {
+      console.warn('[dsh-image-gen] import failed', err)
+      showToast(t('importFailed') + (err instanceof Error ? ' · ' + err.message : ''))
     } finally {
       setImporting(false)
     }
@@ -647,21 +366,41 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   // Load items from IndexedDB
   useEffect(() => {
     let active = true
+    let pruned = false
     const load = () => {
-      void getGalleryItems().then((res) => {
-        if (active) setItems(res)
+      // Maintenance (vault gc) only runs after a complete read: a failed read
+      // must not look like an empty gallery and delete every original.
+      void getGalleryItemsStrict().then((res) => {
+        if (!active) return
+        setItems(prev => mergeGalleryItems(prev, res))
+        if (!pruned) {
+          // One sweep per mount drops thumbnails left behind by older deletions
+          // and tombstones past the multi-window retention window.
+          pruned = true
+          void pruneGalleryThumbs(res.map(item => String(item.attachment.attachmentId)))
+          void pruneTombstones()
+          syncVaultRefs(vaultKeysOf(res))
+        }
+      }).catch((err: unknown) => {
+        console.warn('[dsh-image-gen] Failed to read gallery items:', err)
       })
     }
     load()
-    const unsubscribe = subscribeGallery(load)
+    // Batch favourite/delete operations notify once per record; coalesce the
+    // full-table re-read so a bulk action does not re-render the grid N times.
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const unsubscribe = subscribeGallery(() => {
+      if (timer !== undefined) clearTimeout(timer)
+      timer = setTimeout(load, 120)
+    })
     return () => {
       active = false
+      if (timer !== undefined) clearTimeout(timer)
       unsubscribe()
     }
   }, [])
 
   const [previewLoading, setPreviewLoading] = useState(false)
-  const abortControllerRef = useRef<AbortController | null>(null)
 
   // Multi-dimensional filtering and sorting (Provider, Ratio, Search, and Sort)
   const filteredItems = useMemo(() => {
@@ -683,8 +422,8 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
           }
         }
         // Search filter (Prompt, model, tags, provider)
-        if (search.trim().length > 0) {
-          const q = search.trim().toLowerCase()
+        if (deferredSearch.trim().length > 0) {
+          const q = deferredSearch.trim().toLowerCase()
           const matchPrompt = item.prompt?.toLowerCase().includes(q)
           const matchModel = item.model?.toLowerCase().includes(q)
           const matchProvider = item.provider?.toLowerCase().includes(q)
@@ -707,7 +446,30 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
         }
         return b.createdAt - a.createdAt
       })
-  }, [items, activeTab, selectedProvider, selectedRatio, search, sortBy, onlyCurrentWorkspace, activeWorkspace])
+  }, [items, activeTab, selectedProvider, selectedRatio, deferredSearch, sortBy, onlyCurrentWorkspace, activeWorkspace])
+
+  // Render the grid in batches so a very large library does not mount every
+  // card on first paint; select-all still works on the full filtered list.
+  const galleryFilterKey = [activeTab, selectedProvider, selectedRatio, deferredSearch, sortBy, String(onlyCurrentWorkspace), activeWorkspace?.path ?? ''].join('|')
+  useEffect(() => {
+    setRenderLimit(GALLERY_RENDER_BATCH)
+  }, [galleryFilterKey])
+  useEffect(() => {
+    if (filteredItems.length <= renderLimit) return
+    const node = gallerySentinelRef.current
+    if (node === null) return
+    if (typeof IntersectionObserver === 'undefined') {
+      setRenderLimit(filteredItems.length)
+      return
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some(entry => entry.isIntersecting)) {
+        setRenderLimit(limit => Math.min(filteredItems.length, limit + GALLERY_RENDER_BATCH))
+      }
+    }, { rootMargin: '800px' })
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [filteredItems.length, renderLimit])
 
   // Count of items belonging to the current workspace (before other search/filter criteria)
   const workspaceItemsCount = useMemo(() => {
@@ -724,12 +486,28 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   const hasPrev = currentPreviewIndex > 0
   const hasNext = currentPreviewIndex >= 0 && currentPreviewIndex < filteredItems.length - 1
 
+  // Warm the neighbouring 1600 px variants so left/right navigation paints
+  // immediately instead of waiting for a fresh request each time.
+  const clearPreviewPrefetch = () => {
+    for (const image of previewPrefetchRef.current) image.src = ''
+    previewPrefetchRef.current = []
+  }
+  const prefetchPreviewNeighbors = (item: GalleryItem) => {
+    clearPreviewPrefetch()
+    if (typeof Image === 'undefined') return
+    const index = filteredItems.findIndex(entry => entry.id === item.id)
+    if (index < 0) return
+    for (const neighbor of [filteredItems[index - 1], filteredItems[index + 1]]) {
+      if (neighbor === undefined) continue
+      const image = new Image()
+      image.src = previewUrlFor(neighbor.attachment)
+      previewPrefetchRef.current.push(image)
+    }
+  }
+
   // Safely open or navigate preview item
   const openPreviewItem = (item: GalleryItem, blob?: Blob) => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
-      abortControllerRef.current = null
-    }
+    previewRequestRef.current += 1
     if (previewUrlRef.current) {
       URL.revokeObjectURL(previewUrlRef.current)
       previewUrlRef.current = null
@@ -742,38 +520,23 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
       setPreviewBlob(blob)
       setPreviewUrl(url)
       setPreviewLoading(false)
+      prefetchPreviewNeighbors(item)
       return
     }
 
-    setPreviewLoading(true)
     setPreviewBlob(null)
-    setPreviewUrl(null)
-
-    const controller = new AbortController()
-    abortControllerRef.current = controller
-
-    fetchAttachmentBlob(item.attachment)
-      .then((fetchedBlob) => {
-        if (controller.signal.aborted) return
-        const url = URL.createObjectURL(fetchedBlob)
-        previewUrlRef.current = url
-        setPreviewBlob(fetchedBlob)
-        setPreviewUrl(url)
-        setPreviewLoading(false)
-      })
-      .catch((err) => {
-        if (controller.signal.aborted) return
-        setPreviewLoading(false)
-        showToast(t('copyFailed'))
-      })
+    // Show a 1600 px variant here; the full-resolution attachment stays for
+    // copy/download/drag. The lightbox falls back to the original GET and then
+    // to the blob form when a host cannot derive the variant.
+    setPreviewLoading(true)
+    setPreviewUrl(previewUrlFor(item.attachment))
+    prefetchPreviewNeighbors(item)
   }
 
   // Close preview and revoke object URL
   const handleClosePreview = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort()
-      abortControllerRef.current = null
-    }
+    previewRequestRef.current += 1
+    clearPreviewPrefetch()
     if (regenerateControllerRef.current) {
       regenerateControllerRef.current.abort()
       regenerateControllerRef.current = null
@@ -904,8 +667,9 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   // Clean up only on component unmount
   useEffect(() => {
     return () => {
-      if (abortControllerRef.current) abortControllerRef.current.abort()
       if (regenerateControllerRef.current) regenerateControllerRef.current.abort()
+      clearPreviewPrefetch()
+      closeZipProgress()
       if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current)
     }
   }, [])
@@ -948,7 +712,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   }, [showRegenerateModal, showDeleteModal, isDeleting, isManageMode, previewItem, currentPreviewIndex, filteredItems])
 
   // Shift-Click Range Selection & Card Click Handler
-  const handleCardClick = (item: GalleryItem, index: number, e: MouseEvent, blob?: Blob) => {
+  const handleCardClick = (item: GalleryItem, index: number, e: MouseEvent) => {
     // If holding Shift, or if currently in manage mode:
     if (e.shiftKey || isManageMode) {
       e.stopPropagation()
@@ -982,10 +746,9 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
       return
     }
 
-    // Normal click -> open preview
-    if (blob) {
-      openPreviewItem(item, blob)
-    }
+    // Normal click -> open preview. The lightbox loads its own 1600 px
+    // variant; passing a prefetched full-size blob would bypass that path.
+    openPreviewItem(item)
   }
 
   // Toggle selection for a specific card index
@@ -1047,6 +810,14 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
     lastSelectedIndexRef.current = null
   }
 
+  // The batch bar is fixed to the viewport, so leaving the grid tabs must exit
+  // manage mode too; otherwise it floats over the workbench/inspiration page.
+  useEffect(() => {
+    if (activeTab === 'gallery' || activeTab === 'favorites') return
+    if (!isManageMode && selectedIds.size === 0) return
+    handleExitManage()
+  }, [activeTab])
+
   // Selected items array
   const selectedItems = useMemo(() => {
     if (selectedIds.size === 0) return []
@@ -1080,7 +851,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
       )
     } catch (err) {
       console.error('[dsh-image-gen] Batch favorite failed:', err)
-      void getGalleryItems().then((res) => setItems(res))
+      void getGalleryItems().then((res) => setItems(prev => mergeGalleryItems(prev, res)))
       showToast(t('batchFavoriteFailed'))
     }
   }
@@ -1088,6 +859,98 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   // Batch download state
   const [isDownloadingBatch, setIsDownloadingBatch] = useState(false)
   const [batchDownloadProgress, setBatchDownloadProgress] = useState<string | null>(null)
+  const [batchDownloadStatus, setBatchDownloadStatus] = useState<string | null>(null)
+  const [isZipDownload, setIsZipDownload] = useState(false)
+  const zipEventSourceRef = useRef<EventSource | null>(null)
+  const zipTokenRef = useRef<string | null>(null)
+  const zipWatchdogRef = useRef<number | null>(null)
+
+  const closeZipProgress = (): void => {
+    if (zipWatchdogRef.current !== null) {
+      window.clearTimeout(zipWatchdogRef.current)
+      zipWatchdogRef.current = null
+    }
+    zipEventSourceRef.current?.close()
+    zipEventSourceRef.current = null
+    zipTokenRef.current = null
+    setIsZipDownload(false)
+    setBatchDownloadStatus(null)
+  }
+
+  /**
+   * The iframe path has no error channel of its own: when the host never
+   * reports the job (validation failure, blocked download) the button would
+   * otherwise stay disabled forever, so reset it after a quiet window.
+   */
+  const armZipWatchdog = (): void => {
+    if (zipWatchdogRef.current !== null) window.clearTimeout(zipWatchdogRef.current)
+    zipWatchdogRef.current = window.setTimeout(() => {
+      zipWatchdogRef.current = null
+      showToast(t('batchDownloadFailed'))
+      setIsDownloadingBatch(false)
+      closeZipProgress()
+    }, 30_000)
+  }
+
+  /**
+   * Keep the fast iframe download and still report progress: the host writes
+   * one SSE event per archived entry, then a final state event.
+   */
+  const startZipProgress = (token: string, total: number): void => {
+    const source = new EventSource(ZIP_PROGRESS_ROUTE + '?token=' + encodeURIComponent(token))
+    zipEventSourceRef.current = source
+    armZipWatchdog()
+    source.addEventListener('progress', event => {
+      try {
+        const data = JSON.parse((event as MessageEvent).data) as { done?: number; total?: number; state?: string }
+        if (typeof data.done === 'number' && typeof data.total === 'number' && data.total > 0) {
+          if (zipWatchdogRef.current !== null) {
+            window.clearTimeout(zipWatchdogRef.current)
+            zipWatchdogRef.current = null
+          }
+          setBatchDownloadStatus(String(data.done) + '/' + String(data.total))
+        }
+        if (data.state === 'done') {
+          showToast(t('batchDownloadComplete', { count: String(data.total ?? total) }))
+          setIsDownloadingBatch(false)
+          closeZipProgress()
+        } else if (data.state === 'cancelled') {
+          showToast(t('cancel'))
+          setIsDownloadingBatch(false)
+          closeZipProgress()
+        } else if (data.state === 'error') {
+          showToast(t('batchDownloadFailed'))
+          setIsDownloadingBatch(false)
+          closeZipProgress()
+        }
+      } catch {
+        // Ignore a malformed event; the next one carries the full state.
+      }
+    })
+    source.onerror = () => {
+      if (source.readyState === EventSource.CLOSED) {
+        showToast(t('batchDownloadFailed'))
+        setIsDownloadingBatch(false)
+        closeZipProgress()
+      }
+    }
+  }
+
+  /** Prefer the raw vault copy; the attachment remains the fallback. */
+  const fetchOriginalBlob = fetchGalleryItemBlob
+
+  const cancelZipDownload = async (): Promise<void> => {
+    const token = zipTokenRef.current
+    if (token === null) return
+    try {
+      await fetch(ZIP_CANCEL_ROUTE + '?token=' + encodeURIComponent(token), { method: 'POST' })
+    } catch {
+      // The UI still recovers below even if the cancel request failed.
+    }
+    showToast(t('cancel'))
+    setIsDownloadingBatch(false)
+    closeZipProgress()
+  }
 
   // Batch download handler (single PNG or bundled zero-compression ZIP)
   const handleBatchDownload = async () => {
@@ -1096,17 +959,46 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
     if (itemsToDownload.length === 0) return
 
     setIsDownloadingBatch(true)
+    // The iframe path finishes asynchronously: keep the button busy until the
+    // SSE stream reports done/cancelled instead of clearing it in finally.
+    let awaitingServer = false
 
     try {
       // Single image: direct download
       if (itemsToDownload.length === 1) {
         const single = itemsToDownload[0]
         if (!single) return
-        const blob = await fetchAttachmentBlob(single.attachment)
+        // Resolve the bytes first: a vault file may have been evicted by the
+        // size cap, and a direct anchor would save the 404 JSON as an image.
+        const blob = await fetchGalleryItemBlob(single)
         const objectUrl = URL.createObjectURL(blob)
-        downloadBlobUrl(objectUrl, `dsh-${single.provider}-${single.id}.png`)
+        downloadBlobUrl(objectUrl, `dsh-${single.provider}-${single.id}.${extensionFor(single.original?.mediaType ?? single.attachment.mediaType)}`)
         URL.revokeObjectURL(objectUrl)
         showToast(t('batchDownloadSingleToast'))
+        return
+      }
+
+      // Reject oversized selections here: the host answers 413 inside the
+      // hidden iframe, where the user would never see it. Archive size is no
+      // longer a limit — the writer emits ZIP64 records past 4 GiB.
+      if (itemsToDownload.length > 2000) {
+        showToast(t('batchDownloadLimit'))
+        return
+      }
+
+      // Multiple images: the host streams the archive, so the renderer never
+      // builds or holds the ZIP. Older hosts without the route fall through to
+      // the in-page packer below.
+      if (await canUseServerZip()) {
+        const token = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+          ? crypto.randomUUID()
+          : String(Date.now()) + '-' + Math.random().toString(36).slice(2)
+        zipTokenRef.current = token
+        setIsZipDownload(true)
+        startZipProgress(token, itemsToDownload.length)
+        postZipDownload(itemsToDownload, token)
+        showToast(t('batchDownloadZipToast', { count: String(itemsToDownload.length) }))
+        awaitingServer = true
         return
       }
 
@@ -1147,9 +1039,55 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
       console.error('[dsh-image-gen] Batch download failed:', err)
       showToast(t('batchDownloadFailed'))
     } finally {
-      setIsDownloadingBatch(false)
-      setBatchDownloadProgress(null)
+      if (!awaitingServer) {
+        closeZipProgress()
+        setIsDownloadingBatch(false)
+        setBatchDownloadProgress(null)
+      }
     }
+  }
+
+  const openStorageStats = async () => {
+    setShowStorageModal(true)
+    setIsStorageScanning(true)
+    try {
+      const attachmentIds = Array.from(new Set(items.map(item => String(item.attachment.attachmentId))))
+      const [thumbs, response] = await Promise.all([
+        getGalleryThumbStats(),
+        fetch(STORAGE_STATS_ROUTE, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ attachmentIds }),
+        }),
+      ])
+      if (!response.ok) throw new Error('storage stats failed (' + response.status + ')')
+      const stats = await response.json() as Omit<GalleryStorageStats, 'thumbs'>
+      setStorageStats({ ...stats, thumbs })
+    } catch (err) {
+      console.error('[dsh-image-gen] Storage stats failed:', err)
+      showToast(t('storageScanFailed'))
+      setShowStorageModal(false)
+    } finally {
+      setIsStorageScanning(false)
+    }
+  }
+
+  const exportOrphanList = () => {
+    if (storageStats === null) return
+    const payload = JSON.stringify({
+      scannedAt: new Date(storageStats.scannedAt).toISOString(),
+      count: storageStats.orphans.count,
+      bytes: storageStats.orphans.bytes,
+      ids: storageStats.orphans.ids,
+    }, null, 2)
+    const url = URL.createObjectURL(new Blob([payload], { type: 'application/json' }))
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = 'dsh-image-gen-orphans.json'
+    document.body.appendChild(anchor)
+    anchor.click()
+    document.body.removeChild(anchor)
+    window.setTimeout(() => URL.revokeObjectURL(url), 10_000)
   }
 
   // Request single image deletion through the unified modal
@@ -1214,10 +1152,15 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
 
     // 2. Perform IndexedDB deletion with real error handling
     try {
+      const deletedVaultKeys = vaultKeysOf(itemsToDelete)
+      // `items` is a per-tab snapshot and misses cross-tab imports. Read the
+      // remaining keys from IndexedDB so a shared original is not deleted.
+      const remainingVaultKeys = vaultKeysOf((await getGalleryItemsStrict()).filter(item => !idsToDelete.includes(item.id)))
       await bulkDeleteGalleryItems(idsToDelete)
       for (const item of itemsToDelete) {
         evictAttachmentCache(item.attachment.attachmentId)
       }
+      deleteVaultOriginals(deletedVaultKeys, remainingVaultKeys)
     } catch (err) {
       setIsDeleting(false)
       showToast(t('deleteFailedDatabase'))
@@ -1244,6 +1187,18 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
       showToast(t('batchDeletedToast', { count: String(idsToDelete.length) }))
     }
   }
+
+  // Assign after commit: a discarded or interrupted render must not expose
+  // handlers that close over uncommitted selection state.
+  useLayoutEffect(() => {
+    cardActionsRef.current = {
+      click: handleCardClick,
+      toggleSelect: (item, index, event) => handleToggleSelect(item.id, index, event),
+      requestDelete: item => requestSingleDelete(item),
+      preview: (item, blob) => openPreviewItem(item, blob),
+      toast: showToast,
+    }
+  })
 
   return (
     <div className={`dsh-ig-gallery-page${inSidebar ? ' dsh-ig-page-in-sidebar' : ''}`} data-conversation-composer-overlay="">
@@ -1370,13 +1325,22 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
                   className="dsh-ig-studio-btn"
                   disabled={importing}
                   title={t('importPickHint')}
+                  aria-label={t('importImages')}
                   onClick={() => importInputRef.current?.click()}
                 >
                   <Upload size={13} />
-                  <span>{t('importImages')}</span>
                 </button>
               </>
             )}
+
+            <button
+              type="button"
+              className="dsh-ig-studio-btn"
+              title={t('storageTitle')}
+              onClick={() => void openStorageStats()}
+            >
+              <HardDrive size={13} />
+            </button>
 
             {/* Sort Dropdown */}
             <select
@@ -1440,7 +1404,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
             </div>
           ) : (
             <div className="dsh-ig-gallery-grid">
-              {filteredItems.map((item, idx) => (
+              {filteredItems.slice(0, renderLimit).map((item, idx) => (
                 <GalleryCard
                   lang={lang}
                   key={item.id}
@@ -1449,13 +1413,12 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
                   isManageMode={isManageMode}
                   isSelected={selectedIds.has(item.id)}
                   t={t}
-                  onClick={(e, blob) => handleCardClick(item, idx, e, blob)}
-                  onToggleSelect={(e) => handleToggleSelect(item.id, idx, e)}
-                  onRequestDelete={() => requestSingleDelete(item)}
-                  onPreview={(blob) => openPreviewItem(item, blob)}
-                  onToast={showToast}
+                  actions={cardActions}
                 />
               ))}
+              {filteredItems.length > renderLimit && (
+                <div ref={gallerySentinelRef} className="dsh-ig-gallery-sentinel" aria-hidden="true" />
+              )}
             </div>
           )
         ) : activeTab === 'inspiration' ? (
@@ -1468,7 +1431,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
       {toast && <div className="dsh-ig-gallery-page-toast">{toast}</div>}
 
       {/* 4. Floating Batch Action Bar */}
-      {(isManageMode || selectedIds.size > 0) && (
+      {shouldShowBatchBar(activeTab, isManageMode, selectedIds.size) && (
         <div className="dsh-ig-batch-bar">
           <div className="dsh-ig-batch-bar-left">
             <span className="dsh-ig-batch-counter">
@@ -1526,14 +1489,28 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
             >
               <Download size={13} />
               <span>
-                {isDownloadingBatch && batchDownloadProgress
-                  ? t('batchDownloading', {
-                      current: batchDownloadProgress.split('/')[0] ?? '',
-                      total: batchDownloadProgress.split('/')[1] ?? '',
-                    })
-                  : t('batchDownload')}
+                {isDownloadingBatch && batchDownloadStatus
+                  ? batchDownloadStatus
+                  : isDownloadingBatch && batchDownloadProgress
+                    ? t('batchDownloading', {
+                        current: batchDownloadProgress.split('/')[0] ?? '',
+                        total: batchDownloadProgress.split('/')[1] ?? '',
+                      })
+                    : t('batchDownload')}
               </span>
             </button>
+
+            {isZipDownload && (
+              <button
+                type="button"
+                className="dsh-ig-batch-btn"
+                onClick={() => void cancelZipDownload()}
+                title={t('cancel')}
+              >
+                <X size={13} />
+                <span>{t('cancel')}</span>
+              </button>
+            )}
 
             <span className="dsh-ig-batch-divider" />
 
@@ -1624,6 +1601,69 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
                   : selectedIds.size === 1
                   ? t('confirmDeleteSingle')
                   : t('confirmBatchDelete', { count: String(selectedIds.size) })}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 5b. Storage usage modal (read-only) */}
+      {showStorageModal && (
+        <div
+          className="dsh-ig-modal-backdrop"
+          onClick={() => {
+            if (!isStorageScanning) setShowStorageModal(false)
+          }}
+        >
+          <div className="dsh-ig-modal-box" onClick={(e) => e.stopPropagation()}>
+            <div className="dsh-ig-modal-header">
+              <div className="dsh-ig-regenerate-modal-icon"><HardDrive size={18} /></div>
+              <div className="dsh-ig-modal-title">{t('storageTitle')}</div>
+            </div>
+            <div className="dsh-ig-modal-body">
+              {isStorageScanning || storageStats === null ? (
+                <p className="dsh-ig-modal-desc">{t('storageScanning')}</p>
+              ) : (
+                <>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+                      <span>{t('storageAttachments')}</span>
+                      <span>{t('storageItems', { n: String(storageStats.attachments.count) })} · {formatStorageBytes(storageStats.attachments.bytes)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+                      <span>{t('storageThumbs')}</span>
+                      <span>{t('storageItems', { n: String(storageStats.thumbs.count) })} · {formatStorageBytes(storageStats.thumbs.bytes)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+                      <span>{t('storageRequestCache')}</span>
+                      <span>{t('storageItems', { n: String(storageStats.requestImages.count) })} · {formatStorageBytes(storageStats.requestImages.bytes)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+                      <span>{t('storageOrphans')}</span>
+                      <span>{t('storageItems', { n: String(storageStats.orphans.count) })} · {formatStorageBytes(storageStats.orphans.bytes)}</span>
+                    </div>
+                  </div>
+                  <p className="dsh-ig-modal-desc">{t('storageThumbsHint')}</p>
+                  <p className="dsh-ig-modal-desc">{t('storageOrphanHint')}</p>
+                  <button
+                    type="button"
+                    className="dsh-ig-modal-btn"
+                    onClick={exportOrphanList}
+                    disabled={storageStats.orphans.count === 0}
+                  >
+                    {t('storageExport')}
+                  </button>
+                </>
+              )}
+            </div>
+            <div className="dsh-ig-modal-footer">
+              <button
+                type="button"
+                className="dsh-ig-modal-btn dsh-ig-modal-btn-cancel"
+                onClick={() => setShowStorageModal(false)}
+                disabled={isStorageScanning}
+              >
+                {t('storageClose')}
               </button>
             </div>
           </div>
@@ -1747,15 +1787,47 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
 
           {/* Centered Image / Loading state */}
           <div className="dsh-ig-lightbox-img-wrap" onClick={(e) => e.stopPropagation()}>
-            {previewLoading ? (
-              <div className="dsh-ig-lightbox-loading">
-                <div className="dsh-ig-lightbox-spinner" />
-              </div>
-            ) : previewUrl ? (
+            {/* Render the image first: the GET route paints progressively, and
+                gating it on previewLoading left the spinner on screen forever
+                because the <img> never mounted to fire onLoad. */}
+            {previewUrl ? (
               <img
                 className="dsh-ig-lightbox-img"
                 src={previewUrl}
                 alt={previewItem.prompt}
+                decoding="async"
+                onLoad={() => setPreviewLoading(false)}
+                onError={() => {
+                  const failedUrl = previewUrl
+                  // A blob URL that cannot be decoded is terminal; retrying
+                  // would bounce between the original and a fresh blob forever.
+                  if (failedUrl.startsWith('blob:')) {
+                    setPreviewLoading(false)
+                    return
+                  }
+                  const original = imageUrlFor(previewItem.attachment)
+                  if (failedUrl !== original) {
+                    // The 1600 px variant is unavailable; fall back to the
+                    // original GET before giving up on the route entirely.
+                    if (previewUrlRef.current !== null) URL.revokeObjectURL(previewUrlRef.current)
+                    previewUrlRef.current = null
+                    setPreviewBlob(null)
+                    setPreviewUrl(original)
+                    return
+                  }
+                  const requestId = previewRequestRef.current
+                  fetchAttachmentBlob(previewItem.attachment)
+                    .then((fetched) => {
+                      if (previewRequestRef.current !== requestId) return
+                      if (previewUrlRef.current !== null) URL.revokeObjectURL(previewUrlRef.current)
+                      const objectUrl = URL.createObjectURL(fetched)
+                      previewUrlRef.current = objectUrl
+                      setPreviewBlob(fetched)
+                      setPreviewUrl(objectUrl)
+                      setPreviewLoading(false)
+                    })
+                    .catch(() => setPreviewLoading(false))
+                }}
               />
             ) : null}
           </div>
@@ -1787,9 +1859,15 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
                 className="dsh-ig-lightbox-btn"
                 title={t('copyImg')}
                 onClick={async () => {
-                  if (!previewBlob) return
-                  const ok = await copyImageBlob(previewBlob)
-                  showToast(ok ? t('copiedImage') : t('copyFailed'))
+                  try {
+                    const target = previewItem.original !== undefined
+                      ? await fetchOriginalBlob(previewItem)
+                      : previewBlob ?? await fetchAttachmentBlob(previewItem.attachment)
+                    const ok = await copyImageBlob(target)
+                    showToast(ok ? t('copiedImage') : t('copyFailed'))
+                  } catch {
+                    showToast(t('copyFailed'))
+                  }
                 }}
               >
                 <Copy size={14} />
@@ -1800,15 +1878,22 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
                 type="button"
                 className="dsh-ig-lightbox-btn"
                 title={t('download')}
-                onClick={() => {
-                  if (!previewUrl) return
-                  const a = document.createElement('a')
-                  a.href = previewUrl
-                  a.download = `dsh-${previewItem.provider}-${previewItem.id}.png`
-                  document.body.appendChild(a)
-                  a.click()
-                  document.body.removeChild(a)
-                }}
+                onClick={async () => {
+                  const extension = extensionFor(previewItem.original?.mediaType ?? previewItem.attachment.mediaType)
+                  // The lightbox shows a 1600 px variant; downloads keep the
+                  // original bytes and fall back to the attachment when the vault
+                  // copy was evicted.
+                  try {
+                    const blob = previewItem.original !== undefined
+                      ? await fetchOriginalBlob(previewItem)
+                      : previewBlob ?? await fetchAttachmentBlob(previewItem.attachment)
+                    const objectUrl = URL.createObjectURL(blob)
+                    downloadBlobUrl(objectUrl, `dsh-${previewItem.provider}-${previewItem.id}.${extension}`)
+                    URL.revokeObjectURL(objectUrl)
+                  } catch {
+                    showToast(t('batchDownloadFailed'))
+                  }}
+                }
               >
                 <Download size={14} />
                 <span>{t('download')}</span>
@@ -1856,224 +1941,6 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
           </div>
         </div>
       )}
-    </div>
-  )
-}
-
-interface GalleryCardProps {
-  lang: 'zh' | 'en'
-  item: GalleryItem
-  index: number
-  isManageMode: boolean
-  isSelected: boolean
-  t: (key: DictKey, params?: Record<string, string>) => string
-  onClick: (e: MouseEvent, blob?: Blob) => void
-  onToggleSelect: (e: MouseEvent) => void
-  onRequestDelete: () => void
-  onPreview: (blob: Blob) => void
-  onToast: (msg: string) => void
-}
-
-const GalleryCard: FC<GalleryCardProps> = ({
-  lang,
-  item,
-  index: _index,
-  isManageMode,
-  isSelected,
-  t,
-  onClick,
-  onToggleSelect,
-  onRequestDelete,
-  onPreview: _onPreview,
-  onToast,
-}) => {
-  const [setCardRef, inView] = useInView<HTMLDivElement>()
-  const [url, setUrl] = useState<string>()
-  const [blob, setBlob] = useState<Blob>()
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string>()
-
-  useEffect(() => {
-    if (!inView) return
-    let active = true
-    let objectUrl: string | undefined
-
-    setUrl(undefined)
-    setBlob(undefined)
-    setError(undefined)
-    setLoading(true)
-    void fetchAttachmentBlob(item.attachment)
-      .then((resBlob) => {
-        if (!active) return
-        setBlob(resBlob)
-        objectUrl = URL.createObjectURL(resBlob)
-        setUrl(objectUrl)
-        setLoading(false)
-      })
-      .catch((err) => {
-        if (active) {
-          setError(err instanceof Error ? err.message : String(err))
-          setLoading(false)
-        }
-      })
-
-    return () => {
-      active = false
-      if (objectUrl) URL.revokeObjectURL(objectUrl)
-    }
-  }, [item.attachment.attachmentId, inView])
-
-  const copyPrompt = async (e: MouseEvent) => {
-    e.stopPropagation()
-    try {
-      await navigator.clipboard.writeText(item.prompt)
-      onToast(t('copiedPrompt'))
-    } catch {
-      onToast(t('copyFailed'))
-    }
-  }
-
-  const copyImage = async (e: MouseEvent) => {
-    e.stopPropagation()
-    if (!blob) return
-    const ok = await copyImageBlob(blob)
-    onToast(ok ? t('copiedImage') : t('copyFailed'))
-  }
-
-  const downloadImage = (e: MouseEvent) => {
-    e.stopPropagation()
-    if (!url) return
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `dsh-${item.provider}-${item.id}.png`
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-  }
-
-  const toggleFavorite = async (e: MouseEvent) => {
-    e.stopPropagation()
-    const nextStatus = await toggleFavoriteGalleryItem(item.id)
-    onToast(nextStatus ? t('favoriteAdded') : t('favoriteRemoved'))
-  }
-
-  // Label for top badge: show model or fallback to provider
-  const badgeLabel = item.model || item.provider
-
-  return (
-    <div
-      ref={setCardRef}
-      className={`dsh-ig-gallery-card ${isSelected ? 'is-selected' : ''} ${isManageMode ? 'is-manage-mode' : ''}`}
-      onClick={(e) => onClick(e, blob)}
-    >
-      {/* Upper media container */}
-      <div className="dsh-ig-gallery-card-media">
-        {/* Selection Checkbox (Top Left) */}
-        <button
-          type="button"
-          className={`dsh-ig-card-checkbox ${isSelected ? 'is-checked' : ''}`}
-          title={isSelected ? t('clearSelect') : t('manage')}
-          onClick={onToggleSelect}
-        >
-          {isSelected && <Check size={11} strokeWidth={3} />}
-        </button>
-
-        {loading && <div className="dsh-ig-gallery-card-loading">...</div>}
-        {error && <div className="dsh-ig-gallery-card-error">⚠️ {error}</div>}
-        {url && (
-          <img
-            className="dsh-ig-gallery-card-img"
-            src={url}
-            alt={item.prompt}
-            loading="lazy"
-            draggable={!isManageMode && Boolean(blob?.size)}
-            onDragStart={event => {
-              if (isManageMode) event.preventDefault()
-              else startGalleryImageDrag(event, item, blob)
-            }}
-          />
-        )}
-
-        {/* Hover quick action toolbar */}
-        <div className="dsh-ig-card-toolbar">
-          {!isManageMode && <GalleryCanvasButton item={item} lang={lang} disabled={!blob?.size} className="dsh-ig-tool-btn" onToast={onToast} />}
-          <button
-            type="button"
-            className="dsh-ig-tool-btn"
-            title={t('copyImg')}
-            onClick={(e) => {
-              void copyImage(e)
-            }}
-          >
-            <Copy size={13} />
-          </button>
-          <button
-            type="button"
-            className="dsh-ig-tool-btn"
-            title={t('download')}
-            onClick={downloadImage}
-          >
-            <Download size={13} />
-          </button>
-          <button
-            type="button"
-            className="dsh-ig-tool-btn"
-            title={t('copyPpt')}
-            onClick={(e) => {
-              void copyPrompt(e)
-            }}
-          >
-            <FileText size={13} />
-          </button>
-          <button
-            type="button"
-            className="dsh-ig-tool-btn dsh-ig-tool-btn-danger"
-            title={t('delete')}
-            onClick={(e) => {
-              e.stopPropagation()
-              onRequestDelete()
-            }}
-          >
-            <Trash2 size={13} />
-          </button>
-        </div>
-      </div>
-
-      {/* Lower metadata container aligned with mockup */}
-      <div className="dsh-ig-gallery-card-meta">
-        {/* Top badge */}
-        <div className="dsh-ig-card-badge-row">
-          <span className="dsh-ig-card-badge" title={badgeLabel}>
-            {badgeLabel}
-          </span>
-        </div>
-
-        {/* Prompt single-line title */}
-        <div className="dsh-ig-gallery-card-prompt-line" title={item.prompt}>
-          {item.prompt}
-        </div>
-
-        {/* Bottom meta row: dimension/ratio + relative time + heart favorite */}
-        <div className="dsh-ig-card-footer-row">
-          <span className="dsh-ig-card-meta-text">
-            {formatCardMeta(item)} | {formatRelativeTime(item.createdAt, t)}
-          </span>
-
-          <button
-            type="button"
-            className={`dsh-ig-card-fav-btn ${item.isFavorite ? 'is-favorited' : ''}`}
-            title={item.isFavorite ? t('favoriteRemoved') : t('favoriteAdded')}
-            onClick={(e) => {
-              void toggleFavorite(e)
-            }}
-          >
-            <Heart
-              size={15}
-              fill={item.isFavorite ? 'currentColor' : 'none'}
-            />
-          </button>
-        </div>
-      </div>
     </div>
   )
 }

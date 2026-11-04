@@ -3,6 +3,48 @@ import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attach
 
 /** Browser route used by the generated-image card. */
 export const IMAGE_ROUTE = '/plugins/dsh-image-gen/image'
+
+/** Encode a durable image reference for the cacheable GET form of IMAGE_ROUTE. */
+export function encodeImageRef(ref: ImageAttachmentRef): string {
+  const bytes = new TextEncoder().encode(JSON.stringify(ref))
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+/** Decode a GET query value; the caller supplies the reference parser. */
+export function decodeImageRef(value: string, parse: (input: unknown) => ImageAttachmentRef | undefined): ImageAttachmentRef | undefined {
+  try {
+    const base64 = value.replace(/-/g, '+').replace(/_/g, '/')
+    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4)
+    const binary = atob(padded)
+    const bytes = Uint8Array.from(binary, character => character.charCodeAt(0))
+    return parse(JSON.parse(new TextDecoder().decode(bytes)))
+  } catch {
+    return undefined
+  }
+}
+
+/** Same-origin GET URL for one attachment; safe to put in an <img src>. */
+export function imageUrlFor(ref: ImageAttachmentRef): string {
+  return IMAGE_ROUTE + '?ref=' + encodeImageRef(ref)
+}
+
+/** Same-origin GET URL for a host-rendered thumbnail of one attachment. */
+export function thumbUrlFor(ref: ImageAttachmentRef, width = 320): string {
+  return THUMB_ROUTE + '?w=' + String(width) + '&ref=' + encodeImageRef(ref)
+}
+
+/** Mid-size preview used by the lightbox; originals stay for copy/download/drag. */
+export function previewUrlFor(ref: ImageAttachmentRef): string {
+  return PREVIEW_ROUTE + '?ref=' + encodeImageRef(ref)
+}
+
+/** Content-addressed raw copy, served when the attachment layer normalized the import. */
+export function vaultUrlFor(key: string, mediaType?: string): string {
+  const base = VAULT_ROUTE + '?key=' + encodeURIComponent(key)
+  return mediaType === undefined ? base : base + '&mediaType=' + encodeURIComponent(mediaType)
+}
 /** Browser route that uploads user-picked images as DSH attachments. */
 export const IMPORT_ROUTE = '/plugins/dsh-image-gen/import'
 /** Browser route used for deleting generated images and workspace files. */
@@ -13,6 +55,17 @@ export const STUDIO_ROUTE = '/plugins/dsh-image-gen/studio'
 export const INSPIRATION_ROUTE = '/plugins/dsh-image-gen/inspiration'
 /** Browser route used for saving generated images to workspace on demand. */
 export const SAVE_WORKSPACE_ROUTE = '/plugins/dsh-image-gen/save-workspace'
+/** Browser route that streams a ZIP export of the selected gallery images. */
+export const ZIP_ROUTE = '/plugins/dsh-image-gen/zip'
+/** Browser route that serves host-rendered gallery thumbnails. */
+export const THUMB_ROUTE = '/plugins/dsh-image-gen/thumb'
+export const PREVIEW_ROUTE = '/plugins/dsh-image-gen/preview'
+export const VAULT_ROUTE = '/plugins/dsh-image-gen/vault'
+export const VAULT_REFS_ROUTE = '/plugins/dsh-image-gen/vault-refs'
+export const VAULT_DELETE_ROUTE = '/plugins/dsh-image-gen/vault-delete'
+export const ZIP_PROGRESS_ROUTE = '/plugins/dsh-image-gen/zip/progress'
+export const ZIP_CANCEL_ROUTE = '/plugins/dsh-image-gen/zip/cancel'
+export const STORAGE_STATS_ROUTE = '/plugins/dsh-image-gen/storage-stats'
 /** Browser route the settings card probes provider connectivity through. */
 export const TEST_CONNECTION_ROUTE = '/plugins/dsh-image-gen/test'
 /** Non-secret settings capability probe, available even when the host cannot serve a form. */

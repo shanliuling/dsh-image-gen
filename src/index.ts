@@ -18,11 +18,18 @@ import { editDashScopeImage, generateDashScopeImage } from './dashscope.js'
 import { editGoogleImage, generateGoogleImage } from './google.js'
 import { IMAGE_ROUTE, DELETE_ROUTE, SAVE_WORKSPACE_ROUTE, imageAttachmentFromMeta, serveImage, serveDelete, serveSaveWorkspace } from './image-route.js'
 import { serveImport } from './import-route.js'
+import { serveZip } from './zip-route.js'
+import { serveZipCancel, serveZipProgress } from './zip-progress.js'
+import { serveStorageStats } from './storage-stats.js'
+import { serveVault, serveVaultDelete, serveVaultRefs } from './vault-route.js'
+import { readOriginal, resolveVaultPath, saveOriginal } from './vault-store.js'
+import { servePreview, serveThumb } from './thumb-route.js'
+import { durableAttachmentsRoot, pruneRequestImageCache, resolveRequestImageCacheDir } from './request-cache.js'
 import { editOpenAICompatibleImage, generateOpenAICompatibleImage } from './openai-compatible.js'
 import { type ResolvedReferenceImage, resolveReferenceImages } from './reference-image.js'
 import { editSeedreamImage } from './seedream.js'
 import { generateSubscriptionImage, registerSubscriptionRoutes, subscriptionToolParameters, SubscriptionManager } from './subscription.js'
-import { CANVAS_STATE_ROUTE, DEFAULT_CLOUD_TIMEOUT_MS, IMAGE_GENERATION_NAMESPACE, IMAGE_PROVIDERS, IMPORT_ROUTE, INSPIRATION_ROUTE, STUDIO_ROUTE, TEST_CONNECTION_ROUTE, mergeComfyUIPrompt, resolveOpenAICompatChannel, type ImageProvider } from './shared.js'
+import { CANVAS_STATE_ROUTE, DEFAULT_CLOUD_TIMEOUT_MS, IMAGE_GENERATION_NAMESPACE, IMAGE_PROVIDERS, IMPORT_ROUTE, INSPIRATION_ROUTE, PREVIEW_ROUTE, STORAGE_STATS_ROUTE, STUDIO_ROUTE, TEST_CONNECTION_ROUTE, THUMB_ROUTE, VAULT_DELETE_ROUTE, VAULT_REFS_ROUTE, VAULT_ROUTE, ZIP_CANCEL_ROUTE, ZIP_PROGRESS_ROUTE, ZIP_ROUTE, mergeComfyUIPrompt, resolveOpenAICompatChannel, type ImageProvider } from './shared.js'
 import { createInspirationRoute } from './inspiration-route.js'
 import { BUNDLED_INSPIRATION_CATALOG, searchInspirationCases } from './inspiration.js'
 import { generateFromStudio, describeStudio } from './studio.js'
@@ -153,10 +160,57 @@ export function apply(ctx: Context, config: Config = {}): void {
     } catch { /* Keep the last credential-free snapshot when status reads fail. */ }
   }
 
+  // Raw-image vault: off by default only when explicitly disabled; paths and
+  // caps are re-read on every call so settings changes apply without a restart.
+  const vaultConfig = () => {
+    const config = current()
+    return {
+      enabled: config.vaultEnabled !== false,
+      // Relative overrides stay below the DSH home instead of the process cwd.
+      dir: resolveVaultPath(config.vaultDir ?? ''),
+    }
+  }
+
   const settingsHealth = installImageSettings(ctx, current(), {
     setSource: source => { current = () => migrateOpenAICompatConfig(plainConfig(source())) },
     onChange: () => { void refreshImageToolContext() },
   })
+  // Request-image variants are generated on demand and cached forever by the
+  // attachment backend; keep that cache bounded without touching fresh files.
+  ctx.effect(() => {
+    const run = (): void => {
+      const config = current()
+      if (config.requestCachePrune === false) return
+      const ttlDays = config.requestCacheTtlDays ?? 14
+      const maxBytes = config.requestCacheMaxBytes ?? 256 * 1024 * 1024
+      const configured = config.requestCacheDir ?? ''
+      const dir = configured.length > 0 ? configured : resolveRequestImageCacheDir()
+      void pruneRequestImageCache({
+        dir,
+        ttlMs: ttlDays * 24 * 60 * 60 * 1000,
+        maxBytes,
+        // Never prune the durable attachment objects or raw vault originals,
+        // even when requestCacheDir is a Windows case variant or a junction.
+        protectedRoots: [durableAttachmentsRoot(), vaultConfig().dir],
+      })
+        .then(stats => {
+          if (stats.removed > 0) {
+            ctx.logger.info('dsh-image-gen: pruned ' + String(stats.removed) + ' request-image variants (' + String(stats.freedBytes) + ' bytes)')
+          }
+        })
+        .catch((error: unknown) => {
+          ctx.logger.warn('dsh-image-gen: request-image cache prune failed: ' + (error instanceof Error ? error.message : String(error)))
+        })
+    }
+    const startup = setTimeout(run, 30_000)
+    const daily = setInterval(run, 24 * 60 * 60 * 1000)
+    startup.unref()
+    daily.unref()
+    return () => {
+      clearTimeout(startup)
+      clearInterval(daily)
+    }
+  }, 'dsh-image-gen: request image cache upkeep')
   let webAdmission: WebAdmission | undefined
   ctx.inject(['connection'], (connectionCtx: Context) => {
     webAdmission = request => connectionCtx.connection.requestRejection(request)
@@ -176,13 +230,66 @@ export function apply(ctx: Context, config: Config = {}): void {
       handler: (req, res) => serveImage(req, res, { readImage: ref => ctx.attachments.readImage(ref) }),
     }), 'dsh-image-gen: image route')
     webCtx.effect(() => register({
+      kind: 'exact', path: THUMB_ROUTE,
+      handler: (req, res) => serveThumb(req, res, {
+        readImageRequest: (ref, target, signal) => ctx.attachments.readImageRequest(ref, target, signal),
+      }),
+    }), 'dsh-image-gen: thumbnail route')
+    webCtx.effect(() => register({
+      kind: 'exact', path: PREVIEW_ROUTE,
+      handler: (req, res) => servePreview(req, res, {
+        readImageRequest: (ref, target, signal) => ctx.attachments.readImageRequest(ref, target, signal),
+      }),
+    }), 'dsh-image-gen: preview route')
+    webCtx.effect(() => register({
       kind: 'exact', path: IMPORT_ROUTE,
       handler: (req, res) => serveImport(req, res, {
         saveImage: image => ctx.attachments.saveImage(image),
         maxImageBytes: ctx.attachments.imageLimits.maxImageBytes,
         mediaTypes: ctx.attachments.imageLimits.mediaTypes,
+        // Warm the 320 px gallery tile while the import response is still fresh,
+        // so the first gallery scroll hits the on-disk request-image cache.
+        warmThumbnail: ref => {
+          void ctx.attachments.readImageRequest(ref, { width: 320, height: 320, maxBytes: 96 * 1024 }).catch(() => undefined)
+        },
+        saveOriginal: input => saveOriginal(vaultConfig(), input),
       }),
     }), 'dsh-image-gen: import route')
+    webCtx.effect(() => register({
+      kind: 'exact', path: ZIP_ROUTE,
+      handler: (req, res) => serveZip(req, res, {
+        readImage: ref => ctx.attachments.readImage(ref),
+        readVault: (key, mediaType) => readOriginal(vaultConfig(), key, mediaType),
+        maxEntries: 2000,
+      }),
+    }), 'dsh-image-gen: zip export route')
+    webCtx.effect(() => register({
+      kind: 'exact', path: ZIP_PROGRESS_ROUTE,
+      handler: (req, res) => serveZipProgress(req, res),
+    }), 'dsh-image-gen: zip progress route')
+    webCtx.effect(() => register({
+      kind: 'exact', path: ZIP_CANCEL_ROUTE,
+      handler: (req, res) => serveZipCancel(req, res),
+    }), 'dsh-image-gen: zip cancel route')
+    webCtx.effect(() => register({
+      kind: 'exact', path: VAULT_ROUTE,
+      handler: (req, res) => serveVault(req, res, vaultConfig()),
+    }), 'dsh-image-gen: vault route')
+    webCtx.effect(() => register({
+      kind: 'exact', path: VAULT_REFS_ROUTE,
+      handler: (req, res) => serveVaultRefs(req, res, vaultConfig()),
+    }), 'dsh-image-gen: vault refs route')
+    webCtx.effect(() => register({
+      kind: 'exact', path: VAULT_DELETE_ROUTE,
+      handler: (req, res) => serveVaultDelete(req, res, vaultConfig()),
+    }), 'dsh-image-gen: vault delete route')
+    webCtx.effect(() => register({
+      kind: 'exact', path: STORAGE_STATS_ROUTE,
+      handler: (req, res) => {
+        const configured = current().requestCacheDir?.trim() ?? ''
+        void serveStorageStats(req, res, { requestImagesRoot: configured.length > 0 ? configured : resolveRequestImageCacheDir() })
+      },
+    }), 'dsh-image-gen: storage stats route')
     webCtx.effect(() => register({
       kind: 'exact', path: DELETE_ROUTE,
       handler: (req, res) => serveDelete(req, res, {
@@ -555,7 +662,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         const quality = active.provider === 'openai-compat' ? compatRequestQuality(requestConfig, args.quality) : active.provider === 'openai' ? args.quality : undefined
         if (active.provider === 'openai' && quality !== undefined && !officialQualityOptions(active.model).some(option => option.value === quality)) throw new Error('该 OpenAI 模型不支持所选生成质量')
         const xaiExtraBody = active.provider === 'xai' ? xaiToolParameters({ ...(args.aspect_ratio !== undefined ? { aspectRatio: args.aspect_ratio } : {}), ...(args.image_size !== undefined ? { imageSize: args.image_size } : {}), ...(args.size !== undefined ? { size: args.size } : {}) }) : undefined
-        const generated = await editOpenAICompatibleImage({ apiKey: credential, baseURL: active.baseURL, model: active.model, prompt: args.prompt, sourceImages, ...(active.provider === 'xai' ? {} : { size }), ...(quality === undefined ? {} : { quality }), maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal: exec.signal, ...(active.provider === 'openai-compat' ? { editFormat: active.editFormat, editExtra: active.editExtra, editSizeMode: requestConfig.openaiCompatEditSizeMode ?? 'auto' } : active.provider === 'xai' ? { editFormat: 'xaiJson' as const, ...(xaiExtraBody === undefined ? {} : { extraBody: xaiExtraBody }) } : {}) })
+        const generated = await editOpenAICompatibleImage({ apiKey: credential, baseURL: active.baseURL, model: active.model, prompt: args.prompt, sourceImages, ...(active.provider === 'xai' ? {} : { size }), ...(quality === undefined ? {} : { quality }), maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal: exec.signal, ...(active.provider === 'openai-compat' ? { editFormat: active.editFormat, editExtra: active.editExtra, editSizeMode: requestConfig.openaiCompatEditSizeMode ?? 'auto', editResponseFormat: 'auto' as const, onResponseFormatRetry: status => { ctx.logger.warn('dsh-image-gen: openai-compatible relay rejected response_format=b64_json (' + String(status) + '); retrying without it') } } : active.provider === 'xai' ? { editFormat: 'xaiJson' as const, ...(xaiExtraBody === undefined ? {} : { extraBody: xaiExtraBody }) } : {}) })
         const value = await saveGenerated(ctx, generated, active.provider, active.model, active.provider === 'xai' ? (xaiExtraBody?.aspect_ratio ?? 'auto') : quality === undefined ? size : `${size}, quality=${quality}`, current(), exec, knownWorkspaceRoots)
         return active.provider === 'openai-compat' ? { ...value, channel: resolveOpenAICompatChannel(requestConfig, args.channel).id } : value
       }

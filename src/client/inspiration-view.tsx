@@ -31,7 +31,7 @@ function loadInspirationFavorites(): Set<string> {
       const parsed = JSON.parse(raw)
       if (Array.isArray(parsed)) return new Set(parsed)
     }
-  } catch {}
+  } catch { /* best effort */ }
   return new Set()
 }
 
@@ -39,7 +39,7 @@ function saveInspirationFavorites(favorites: Set<string>): void {
   if (typeof localStorage === 'undefined') return
   try {
     localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify(Array.from(favorites)))
-  } catch {}
+  } catch { /* best effort */ }
 }
 
 const TAG_MAP_ZH: Record<string, string> = {

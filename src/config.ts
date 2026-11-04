@@ -184,6 +184,18 @@ export interface Config {
   workspaceFolder?: string
   /** Show the provider switcher beside the chat input. */
   showProviderPill?: boolean
+  /** Prune the host request-image cache once at startup and then daily. */
+  requestCachePrune?: boolean
+  /** Retain request-image variants for this many days. */
+  requestCacheTtlDays?: number
+  /** Byte budget for the request-image cache; 0 disables the cap. */
+  requestCacheMaxBytes?: number
+  /** Override the request-image cache root (empty keeps the DSH_HOME default). */
+  requestCacheDir?: string
+  /** Keep the pre-normalization bytes when the attachment layer changes an import. */
+  vaultEnabled?: boolean
+  /** Override the raw-image vault root (empty keeps the DSH_HOME default). */
+  vaultDir?: string
 }
 
 /**
@@ -261,6 +273,12 @@ export const Config = z.object({
   saveToWorkspace: volatile(z.boolean().default(true)),
   workspaceFolder: volatile(z.string().default(DEFAULT_WORKSPACE_FOLDER)),
   showProviderPill: volatile(z.boolean().default(false)),
+  requestCachePrune: volatile(z.boolean().default(true)),
+  requestCacheTtlDays: volatile(z.number().min(1).max(365).default(14)),
+  requestCacheMaxBytes: volatile(z.number().min(0).default(256 * 1024 * 1024)),
+  requestCacheDir: volatile(z.string().default('')),
+  vaultEnabled: volatile(z.boolean().default(true)),
+  vaultDir: volatile(z.string().default('')),
 }) as unknown as z<Config>
 
 /** Resolve exactly one provider profile for a tool call. */
