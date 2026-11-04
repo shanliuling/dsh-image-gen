@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 
 type Request = { onsuccess: (() => void) | null; onerror: (() => void) | null; result: unknown }
@@ -70,6 +70,7 @@ describe('gallery thumbnail cache lifecycle', () => {
   beforeEach(() => {
     vi.resetModules()
   })
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
   it('drops the thumbnail even when the record id is not the attachment id', async () => {
     const stores = installFakeIndexedDB()
@@ -102,6 +103,7 @@ describe('gallery thumbnail cache lifecycle', () => {
   })
 
   it('drops thumbnails unused past the age window', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
     const stores = installFakeIndexedDB()
     const store = await import('../src/client/gallery-store.js')
     await store.putGalleryThumb('sha256:old@320', HELLO)

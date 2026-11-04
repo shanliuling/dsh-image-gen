@@ -165,4 +165,3 @@ export function postZipDownload(items: GalleryItem[], token: string): void {
   // old 60 s timer, which could cancel a still-streaming archive.
   window.setTimeout(() => sink.remove(), 30 * 60_000)
 }
-

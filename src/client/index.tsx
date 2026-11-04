@@ -237,9 +237,7 @@ export function apply(ctx: Context): void {
     ?? degradedScope<ImageSettings>()
   const locale = ctx.get('locale') as LocaleService | undefined
   const promotion = { enabled: false }
-  // Chromium keeps a native datalist popup at its original position while the
-  // page or a panel scrolls, so close it on scroll/resize; focusing reopens it.
-  installDatalistScrollFix()
+  ctx.effect(() => installDatalistScrollFix() || (() => {}), 'dsh-image-gen: datalist scroll handling')
 
   ;(ctx.inject as unknown as (services: string[], callback: (owner: Context) => void) => void)(
     ['sessions'],

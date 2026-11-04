@@ -83,4 +83,3 @@ export function formatCardMeta(item: GalleryItem): string {
   }
   return '1:1'
 }
-

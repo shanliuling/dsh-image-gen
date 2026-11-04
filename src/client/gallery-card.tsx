@@ -300,4 +300,3 @@ export const GalleryCard = memo(function GalleryCard({
     </div>
   )
 })
-

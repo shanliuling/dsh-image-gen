@@ -1,101 +1,92 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { closeDatalistPopup, installDatalistScrollFix, isDatalistInput, type FocusableElement } from '../src/client/datalist-scroll-fix.js'
 
-function element(tagName: string, hasList: boolean, blur = vi.fn()): FocusableElement {
-  return { tagName, hasAttribute: name => hasList && name === 'list', blur }
+const stops: Array<() => void> = []
+afterEach(() => { for (const stop of stops.splice(0)) stop(); vi.useRealTimers() })
+
+function input(tagName = 'INPUT', hasList = true): FocusableElement {
+  return { tagName, hasAttribute: name => hasList && name === 'list', blur: vi.fn() }
 }
 
-function environment(activeElement: FocusableElement | null) {
-  const listeners = new Map<string, () => void>()
-  const schedule = (callback: () => void): void => { callback() }
-  return {
-    listeners,
-    env: {
-      window: { addEventListener: (type: string, listener: () => void) => { listeners.set('window:' + type, listener) } },
-      document: {
-        activeElement,
-        addEventListener: (type: string, listener: () => void) => { listeners.set('document:' + type, listener) },
-      },
-      schedule,
-    },
+function environment(activeElement: FocusableElement | null = input()) {
+  const listeners = new Map<string, (event?: { key?: string; target?: unknown }) => void>()
+  const frames: Array<() => void> = []
+  const target = (prefix: string) => ({
+    addEventListener: (type: string, fn: (event?: { key?: string; target?: unknown }) => void) => { listeners.set(prefix + ':' + type, fn) },
+    removeEventListener: (type: string) => { listeners.delete(prefix + ':' + type) },
+  })
+  const env = {
+    window: target('window'), document: { ...target('document'), activeElement },
+    schedule: (fn: () => void) => { frames.push(fn) },
   }
+  const stop = installDatalistScrollFix(env)
+  if (stop) stops.push(stop)
+  return { env, listeners, frames, stop, fire: (type: string, event?: { key?: string; target?: unknown }) => listeners.get(type)?.(event), flush: () => frames.splice(0).forEach(fn => fn()) }
 }
 
-describe('datalist scroll fix', () => {
-  it('recognizes only inputs backed by a datalist', () => {
-    expect(isDatalistInput(element('INPUT', true))).toBe(true)
-    expect(isDatalistInput(element('INPUT', false))).toBe(false)
-    expect(isDatalistInput(element('DIV', true))).toBe(false)
-    expect(isDatalistInput(null)).toBe(false)
+describe('datalist scroll lifecycle', () => {
+  it('recognizes datalist inputs and leaves other controls alone', () => {
+    expect(isDatalistInput(input())).toBe(true)
+    expect(isDatalistInput(input('INPUT', false))).toBe(false)
+    expect(isDatalistInput(input('TEXTAREA'))).toBe(false)
+    expect(closeDatalistPopup(null)).toBe(false)
   })
-
-  it('closes a focused datalist input on scroll and resize', () => {
-    const input = element('INPUT', true)
-    const { env, listeners } = environment(input)
-    expect(installDatalistScrollFix(env)).toBe(true)
-    expect([...listeners.keys()].sort()).toEqual(['document:scroll', 'window:resize', 'window:scroll'])
-
-    listeners.get('document:scroll')?.()
-    expect(input.blur).toHaveBeenCalledTimes(1)
-
-    listeners.get('window:scroll')?.()
-    expect(input.blur).toHaveBeenCalledTimes(2)
+  it('closes the same input after deliberate scrolling', () => {
+    const active = input(), e = environment(active)
+    e.fire('document:wheel'); e.fire('document:scroll'); e.flush()
+    expect(active.blur).toHaveBeenCalledOnce()
   })
-
-  it('leaves other focused elements alone', () => {
-    const other = element('TEXTAREA', false)
-    const { env, listeners } = environment(other)
-    installDatalistScrollFix(env)
-    listeners.get('window:resize')?.()
-    expect(other.blur).not.toHaveBeenCalled()
+  it('does not blur a newly focused off-screen input on automatic scroll/resize', () => {
+    const active = input(), e = environment(active)
+    e.fire('document:focusin'); e.fire('document:scroll'); e.fire('window:resize'); e.flush()
+    expect(active.blur).not.toHaveBeenCalled()
   })
-
-  it('installs at most once per window', () => {
-    const { env } = environment(element('INPUT', true))
-    expect(installDatalistScrollFix(env)).toBe(true)
-    expect(installDatalistScrollFix(env)).toBe(false)
+  it('does not blur a different input focused before the queued callback', () => {
+    const previous = input(), next = input(), e = environment(previous)
+    e.fire('document:wheel'); e.fire('document:scroll')
+    e.env.document.activeElement = next
+    e.fire('document:focusin'); e.flush()
+    expect(previous.blur).not.toHaveBeenCalled()
+    expect(next.blur).not.toHaveBeenCalled()
   })
-
-  it('is a no-op without a browser environment', () => {
-    expect(installDatalistScrollFix()).toBe(false)
+  it('does not treat Tab as an explicit scroll gesture', () => {
+    const active = input(), e = environment(active)
+    e.fire('document:keydown', { key: 'Tab' }); e.fire('document:scroll'); e.flush()
+    expect(active.blur).not.toHaveBeenCalled()
   })
-
-  it('falls back to a macrotask when no frame scheduler is available', () => {
+  it('preserves editing focus when the input scrolls its own text', () => {
+    const active = input(), e = environment(active)
+    e.fire('document:pointerdown'); e.fire('document:scroll', { target: active }); e.flush()
+    e.fire('document:keydown', { key: ' ' }); e.fire('document:scroll'); e.flush()
+    expect(active.blur).not.toHaveBeenCalled()
+  })
+  it('expires old gestures rather than applying them to later programmatic scrolling', () => {
     vi.useFakeTimers()
-    try {
-      const input = element('INPUT', true)
-      const listeners = new Map<string, () => void>()
-      installDatalistScrollFix({
-        window: { addEventListener: (type, listener) => { listeners.set('window:' + type, listener) } },
-        document: {
-          activeElement: input,
-          addEventListener: (type, listener) => { listeners.set('document:' + type, listener) },
-        },
-      })
-      listeners.get('document:scroll')?.()
-      expect(input.blur).not.toHaveBeenCalled()
-      vi.runAllTimers()
-      expect(input.blur).toHaveBeenCalledTimes(1)
-    } finally {
-      vi.useRealTimers()
-    }
+    const active = input(), e = environment(active)
+    e.fire('document:pointerdown'); vi.advanceTimersByTime(251)
+    e.fire('document:scroll'); e.flush()
+    expect(active.blur).not.toHaveBeenCalled()
   })
-
-  it('coalesces bursts into one close', () => {
-    const input = element('INPUT', true)
-    const callbacks: Array<() => void> = []
-    const env = {
-      window: { addEventListener: vi.fn() },
-      document: { activeElement: input, addEventListener: vi.fn() },
-      schedule: (callback: () => void) => { callbacks.push(callback) },
-    }
-    installDatalistScrollFix(env)
-    const handler = env.document.addEventListener.mock.calls[0]?.[1] as () => void
-    handler()
-    handler()
-    handler()
-    expect(callbacks).toHaveLength(1)
-    callbacks[0]?.()
-    expect(input.blur).toHaveBeenCalledTimes(1)
+  it('coalesces duplicate scroll events and removes every listener on unload', () => {
+    const active = input(), e = environment(active)
+    expect(installDatalistScrollFix(e.env)).toBe(false)
+    e.fire('document:wheel'); e.fire('document:scroll'); e.fire('window:scroll')
+    expect(e.frames).toHaveLength(1)
+    if (e.stop) e.stop()
+    e.flush()
+    expect(active.blur).not.toHaveBeenCalled()
+    expect(e.listeners.size).toBe(0)
+    const replacement = installDatalistScrollFix(e.env)
+    expect(typeof replacement).toBe('function')
+    if (replacement) replacement()
   })
+  it('leaves host controls outside this plugin untouched', () => {
+    const active = input(), e = environment(active)
+    if (e.stop) e.stop()
+    const stop = installDatalistScrollFix({ ...e.env, ownsInput: () => false })
+    if (stop) stops.push(stop)
+    e.fire('document:wheel'); e.fire('document:scroll'); e.flush()
+    expect(active.blur).not.toHaveBeenCalled()
+  })
+  it('is a no-op without a browser', () => expect(installDatalistScrollFix()).toBe(false))
 })

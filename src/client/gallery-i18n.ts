@@ -253,4 +253,3 @@ export const DICT = {
 } as const
 
 export type DictKey = keyof typeof DICT.zh
-

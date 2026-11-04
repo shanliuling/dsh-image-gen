@@ -225,11 +225,11 @@ export async function createImageThumbnail(source: Blob, width: number): Promise
       const context = canvas.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null
       if (!context) return source
       context.drawImage(bitmap, 0, 0)
-      if (canvas instanceof OffscreenCanvas) {
+      if (typeof OffscreenCanvas === 'function' && canvas instanceof OffscreenCanvas) {
         return await canvas.convertToBlob({ type: 'image/webp', quality: 0.82 })
       }
       return await new Promise<Blob>((resolve, reject) => {
-        canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('thumbnail encode failed'))), 'image/webp', 0.82)
+        ;(canvas as HTMLCanvasElement).toBlob((blob: Blob | null) => (blob ? resolve(blob) : reject(new Error('thumbnail encode failed'))), 'image/webp', 0.82)
       })
     } finally {
       bitmap.close?.()
