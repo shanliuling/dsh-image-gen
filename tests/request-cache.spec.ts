@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, writeFile, utimes, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, symlink, writeFile, utimes, rm } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -50,6 +50,30 @@ describe('request-image cache pruning', () => {
       if (previous === undefined) delete process.env.DSH_HOME
       else process.env.DSH_HOME = previous
     }
+  })
+
+  it('refuses a cache root that contains a protected vault root', async () => {
+    const vault = await makeRoot()
+    const old = await writeVariant(vault, 'ab', 'original', 100, 20 * DAY)
+    const stats = await pruneRequestImageCache({
+      dir: join(vault, 'cache'),
+      ttlMs: 14 * DAY,
+      maxBytes: 0,
+      protectedRoots: [vault],
+    })
+    expect(stats).toEqual({ scanned: 0, removed: 0, freedBytes: 0, remainingBytes: 0 })
+    expect(existsSync(old)).toBe(true)
+  })
+
+  it('does not follow symlinked directories or files', async () => {
+    const root = await makeRoot()
+    const outside = await makeRoot()
+    const target = await writeVariant(outside, 'ab', 'original', 100, 20 * DAY)
+    await symlink(join(outside, 'ab'), join(root, 'linked-dir'), 'dir')
+    await symlink(target, join(root, 'linked-file'), 'file')
+    const stats = await pruneRequestImageCache({ dir: root, ttlMs: 14 * DAY, maxBytes: 0 })
+    expect(stats.scanned).toBe(0)
+    expect(existsSync(target)).toBe(true)
   })
 
   it('ignores a missing cache directory', async () => {

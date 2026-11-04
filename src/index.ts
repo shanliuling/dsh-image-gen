@@ -24,7 +24,7 @@ import { serveStorageStats } from './storage-stats.js'
 import { serveVault, serveVaultDelete, serveVaultRefs } from './vault-route.js'
 import { readOriginal, resolveVaultPath, saveOriginal } from './vault-store.js'
 import { servePreview, serveThumb } from './thumb-route.js'
-import { pruneRequestImageCache, resolveRequestImageCacheDir } from './request-cache.js'
+import { durableAttachmentsRoot, pruneRequestImageCache, resolveRequestImageCacheDir } from './request-cache.js'
 import { editOpenAICompatibleImage, generateOpenAICompatibleImage } from './openai-compatible.js'
 import { type ResolvedReferenceImage, resolveReferenceImages } from './reference-image.js'
 import { editSeedreamImage } from './seedream.js'
@@ -185,7 +185,14 @@ export function apply(ctx: Context, config: Config = {}): void {
       const maxBytes = config.requestCacheMaxBytes ?? 256 * 1024 * 1024
       const configured = config.requestCacheDir ?? ''
       const dir = configured.length > 0 ? configured : resolveRequestImageCacheDir()
-      void pruneRequestImageCache({ dir, ttlMs: ttlDays * 24 * 60 * 60 * 1000, maxBytes })
+      void pruneRequestImageCache({
+        dir,
+        ttlMs: ttlDays * 24 * 60 * 60 * 1000,
+        maxBytes,
+        // Never prune the durable attachment objects or raw vault originals,
+        // even when requestCacheDir is a Windows case variant or a junction.
+        protectedRoots: [durableAttachmentsRoot(), vaultConfig().dir],
+      })
         .then(stats => {
           if (stats.removed > 0) {
             ctx.logger.info('dsh-image-gen: pruned ' + String(stats.removed) + ' request-image variants (' + String(stats.freedBytes) + ' bytes)')
