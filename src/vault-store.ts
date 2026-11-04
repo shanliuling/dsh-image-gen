@@ -24,8 +24,6 @@ const MEDIA_TYPE: Record<string, ImageMediaType> = {
 export interface VaultConfig {
   enabled: boolean
   dir: string
-  /** 0 disables the size cap; referenced files may be evicted oldest-first. */
-  maxBytes: number
 }
 
 export interface SavedOriginal {
@@ -106,43 +104,46 @@ export async function readOriginal(
   return undefined
 }
 
-export interface VaultGcOptions {
-  /** Keep files written this recently even when unreferenced (multi-window import race). */
-  protectRecentMs?: number
-  /** Abandoned .tmp-* files older than this are removed; 0 disables the sweep. */
-  tempMaxAgeMs?: number
-}
-
-const TEMPORARY_NAME = /^[a-f0-9]{64}\.(?:png|jpg|webp|gif)\.tmp-\d+-\d+$/
-
-/** Remove write temporaries left behind by a crash; older than the cutoff only. */
-async function removeStaleTemporaries(config: VaultConfig, maxAgeMs: number): Promise<void> {
-  if (maxAgeMs <= 0) return
-  const cutoff = Date.now() - maxAgeMs
-  try {
-    for (const shard of await readdir(config.dir, { withFileTypes: true })) {
-      if (!shard.isDirectory() || !/^[a-f0-9]{2}$/.test(shard.name)) continue
-      for (const entry of await readdir(join(config.dir, shard.name), { withFileTypes: true })) {
-        if (!entry.isFile() || !TEMPORARY_NAME.test(entry.name)) continue
-        const path = join(config.dir, shard.name, entry.name)
-        try {
-          const info = await stat(path)
-          if (info.mtimeMs <= cutoff) await unlink(path)
-        } catch {
-          // Removed concurrently or still being written.
-        }
-      }
-    }
-  } catch {
-    // The vault directory may not exist yet.
-  }
-}
-
 interface VaultFile {
   path: string
   key: string
   bytes: number
   mtimeMs: number
+}
+
+export async function deleteVaultKeys(config: VaultConfig, keys: Iterable<string>): Promise<{ removed: number; bytes: number }> {
+  if (!config.enabled) return { removed: 0, bytes: 0 }
+  const targets = new Set<string>()
+  for (const key of keys) {
+    if (isValidVaultKey(key)) targets.add(key)
+  }
+  if (targets.size === 0) return { removed: 0, bytes: 0 }
+  const files = await listVaultFiles(config)
+  let removed = 0
+  let bytes = 0
+  for (const file of files) {
+    if (!targets.has(file.key)) continue
+    try {
+      await unlink(file.path)
+      removed += 1
+      bytes += file.bytes
+    } catch {
+      // A locked or concurrently removed file stays for the next manual action.
+    }
+  }
+  await removeEmptyShards(config)
+  return { removed, bytes }
+}
+
+async function removeEmptyShards(config: VaultConfig): Promise<void> {
+  try {
+    for (const shard of await readdir(config.dir, { withFileTypes: true })) {
+      if (!shard.isDirectory() || !/^[a-f0-9]{2}$/.test(shard.name)) continue
+      try { await rmdir(join(config.dir, shard.name)) } catch { /* non-empty or locked */ }
+    }
+  } catch {
+    // The vault directory may not exist yet.
+  }
 }
 
 async function listVaultFiles(config: VaultConfig): Promise<VaultFile[]> {
@@ -170,69 +171,4 @@ async function listVaultFiles(config: VaultConfig): Promise<VaultFile[]> {
   return files
 }
 
-/** Remove files no gallery record references, then evict oldest if the cap is exceeded. */
-export async function gcVault(
-  config: VaultConfig,
-  referencedKeys: Iterable<string>,
-  options: VaultGcOptions = {},
-): Promise<{ removed: number; bytes: number }> {
-  if (!config.enabled) return { removed: 0, bytes: 0 }
-  await removeStaleTemporaries(config, options.tempMaxAgeMs ?? 60 * 60 * 1000)
-  const protectRecentMs = options.protectRecentMs ?? 0
-  const now = Date.now()
-  const references = new Set<string>()
-  for (const key of referencedKeys) {
-    if (isValidVaultKey(key)) references.add(key)
-  }
-  const files = await listVaultFiles(config)
-  let removed = 0
-  let bytes = 0
-  const keep: VaultFile[] = []
-  for (const file of files) {
-    if (references.has(file.key)) {
-      keep.push(file)
-      continue
-    }
-    // A concurrent window may have saved this key but not yet written its
-    // gallery record; deleting it here would silently lose the original.
-    if (protectRecentMs > 0 && now - file.mtimeMs < protectRecentMs) {
-      keep.push(file)
-      continue
-    }
-    try {
-      await unlink(file.path)
-      removed += 1
-      bytes += file.bytes
-    } catch {
-      // A concurrent gc or a locked file: leave it for the next sweep.
-    }
-  }
-  if (config.maxBytes > 0) {
-    let total = keep.reduce((sum, file) => sum + file.bytes, 0)
-    if (total > config.maxBytes) {
-      keep.sort((a, b) => a.mtimeMs - b.mtimeMs)
-      for (const file of keep) {
-        if (total <= config.maxBytes) break
-        try {
-          await unlink(file.path)
-          removed += 1
-          bytes += file.bytes
-          total -= file.bytes
-        } catch {
-          // Keep the budget calculation conservative on failure.
-        }
-      }
-    }
-  }
-  // Drop shard directories that became empty so deleting every image also
-  // removes the visible folder tree, not just the files.
-  try {
-    for (const shard of await readdir(config.dir, { withFileTypes: true })) {
-      if (!shard.isDirectory() || !/^[a-f0-9]{2}$/.test(shard.name)) continue
-      try { await rmdir(join(config.dir, shard.name)) } catch { /* non-empty or locked */ }
-    }
-  } catch {
-    // The vault directory itself may not exist yet.
-  }
-  return { removed, bytes }
-}
+/** Delete only the explicitly requested originals; callers must prove they are unreferenced. */

@@ -21,7 +21,7 @@ import { serveImport } from './import-route.js'
 import { serveZip } from './zip-route.js'
 import { serveZipCancel, serveZipProgress } from './zip-progress.js'
 import { serveStorageStats } from './storage-stats.js'
-import { serveVault, serveVaultGc } from './vault-route.js'
+import { serveVault, serveVaultDelete, serveVaultRefs } from './vault-route.js'
 import { readOriginal, resolveVaultPath, saveOriginal } from './vault-store.js'
 import { servePreview, serveThumb } from './thumb-route.js'
 import { pruneRequestImageCache, resolveRequestImageCacheDir } from './request-cache.js'
@@ -29,7 +29,7 @@ import { editOpenAICompatibleImage, generateOpenAICompatibleImage } from './open
 import { type ResolvedReferenceImage, resolveReferenceImages } from './reference-image.js'
 import { editSeedreamImage } from './seedream.js'
 import { generateSubscriptionImage, registerSubscriptionRoutes, subscriptionToolParameters, SubscriptionManager } from './subscription.js'
-import { CANVAS_STATE_ROUTE, DEFAULT_CLOUD_TIMEOUT_MS, IMAGE_GENERATION_NAMESPACE, IMAGE_PROVIDERS, IMPORT_ROUTE, INSPIRATION_ROUTE, PREVIEW_ROUTE, STORAGE_STATS_ROUTE, STUDIO_ROUTE, TEST_CONNECTION_ROUTE, THUMB_ROUTE, VAULT_GC_ROUTE, VAULT_ROUTE, ZIP_CANCEL_ROUTE, ZIP_PROGRESS_ROUTE, ZIP_ROUTE, mergeComfyUIPrompt, resolveOpenAICompatChannel, type ImageProvider } from './shared.js'
+import { CANVAS_STATE_ROUTE, DEFAULT_CLOUD_TIMEOUT_MS, IMAGE_GENERATION_NAMESPACE, IMAGE_PROVIDERS, IMPORT_ROUTE, INSPIRATION_ROUTE, PREVIEW_ROUTE, STORAGE_STATS_ROUTE, STUDIO_ROUTE, TEST_CONNECTION_ROUTE, THUMB_ROUTE, VAULT_DELETE_ROUTE, VAULT_REFS_ROUTE, VAULT_ROUTE, ZIP_CANCEL_ROUTE, ZIP_PROGRESS_ROUTE, ZIP_ROUTE, mergeComfyUIPrompt, resolveOpenAICompatChannel, type ImageProvider } from './shared.js'
 import { createInspirationRoute } from './inspiration-route.js'
 import { BUNDLED_INSPIRATION_CATALOG, searchInspirationCases } from './inspiration.js'
 import { generateFromStudio, describeStudio } from './studio.js'
@@ -168,7 +168,6 @@ export function apply(ctx: Context, config: Config = {}): void {
       enabled: config.vaultEnabled !== false,
       // Relative overrides stay below the DSH home instead of the process cwd.
       dir: resolveVaultPath(config.vaultDir ?? ''),
-      maxBytes: config.vaultMaxBytes ?? 0,
     }
   }
 
@@ -270,9 +269,13 @@ export function apply(ctx: Context, config: Config = {}): void {
       handler: (req, res) => serveVault(req, res, vaultConfig()),
     }), 'dsh-image-gen: vault route')
     webCtx.effect(() => register({
-      kind: 'exact', path: VAULT_GC_ROUTE,
-      handler: (req, res) => serveVaultGc(req, res, vaultConfig()),
-    }), 'dsh-image-gen: vault gc route')
+      kind: 'exact', path: VAULT_REFS_ROUTE,
+      handler: (req, res) => serveVaultRefs(req, res, vaultConfig()),
+    }), 'dsh-image-gen: vault refs route')
+    webCtx.effect(() => register({
+      kind: 'exact', path: VAULT_DELETE_ROUTE,
+      handler: (req, res) => serveVaultDelete(req, res, vaultConfig()),
+    }), 'dsh-image-gen: vault delete route')
     webCtx.effect(() => register({
       kind: 'exact', path: STORAGE_STATS_ROUTE,
       handler: (req, res) => {

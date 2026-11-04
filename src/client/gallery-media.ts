@@ -1,17 +1,51 @@
 import type { GalleryItem } from './gallery-store.js'
-import { VAULT_GC_ROUTE, ZIP_ROUTE, vaultUrlFor } from '../shared.js'
+import { VAULT_DELETE_ROUTE, VAULT_REFS_ROUTE, ZIP_ROUTE, vaultUrlFor } from '../shared.js'
 import { fetchAttachmentBlob } from './image-cache.js'
 
 /** Hover prefetch stops pulling raw originals above this size; drag-out then uses the attachment. */
 export const GALLERY_PREFETCH_ORIGINAL_MAX_BYTES = 4 * 1024 * 1024
 
 /** Drop vault files the gallery no longer references; failures are non-fatal. */
-export function sendVaultGc(keys: string[]): void {
-  void fetch(VAULT_GC_ROUTE, {
+const VAULT_PROFILE_KEY = 'dsh-ig-vault-profile-v1'
+
+/** Stable per-browser-profile identity; the vault registry unions all profiles. */
+export function vaultProfileId(): string {
+  try {
+    const existing = localStorage.getItem(VAULT_PROFILE_KEY)
+    if (existing !== null && /^[A-Za-z0-9_-]{8,128}$/.test(existing)) return existing
+    const created = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : 'profile-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10)
+    localStorage.setItem(VAULT_PROFILE_KEY, created)
+    return created
+  } catch {
+    return 'profile-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10)
+  }
+}
+
+/** Sync this profile's references; the server never deletes originals here. */
+export function syncVaultRefs(keys: string[]): void {
+  void fetch(VAULT_REFS_ROUTE, {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ keys }),
+    body: JSON.stringify({ profileId: vaultProfileId(), keys }),
+  }).catch(() => undefined)
+}
+
+/** Manual gallery deletion: remove originals only after the server checks every profile. */
+export function deleteVaultOriginals(deleteKeys: string[], remainingKeys: string[]): void {
+  if (deleteKeys.length === 0) return
+  void fetch(VAULT_DELETE_ROUTE, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      profileId: vaultProfileId(),
+      keys: remainingKeys,
+      deleteKeys: Array.from(new Set(deleteKeys)),
+      confirm: true,
+    }),
   }).catch(() => undefined)
 }
 

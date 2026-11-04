@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { mkdtemp, rm, utimes } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { serveVault, serveVaultGc } from '../src/vault-route.js'
-import { saveOriginal, type VaultConfig } from '../src/vault-store.js'
+import { serveVault, serveVaultDelete, serveVaultRefs } from '../src/vault-route.js'
+import { readOriginal, saveOriginal, type VaultConfig } from '../src/vault-store.js'
 
 class FakeResponse {
   chunks: Buffer[] = []
@@ -84,17 +84,86 @@ describe('raw vault routes', () => {
     expect(missing.status).toBe(404)
   })
 
-  it('garbage-collects unreferenced files over POST', async () => {
+  it('syncs references without deleting originals', async () => {
     const config = await makeConfig()
     const kept = await saveOriginal(config, { data: new Uint8Array([1]), mediaType: 'image/png' })
-    const dropped = await saveOriginal(config, { data: new Uint8Array([2]), mediaType: 'image/png' })
-    // Past the recent-write protection window.
-    for (const key of [kept!.key, dropped!.key]) {
-      await utimes(join(config.dir, key.slice(0, 2), key + '.png'), new Date(1_000), new Date(1_000))
-    }
+    const unreferenced = await saveOriginal(config, { data: new Uint8Array([2]), mediaType: 'image/png' })
     const res = new FakeResponse()
-    await serveVaultGc(request('POST', '/plugins/dsh-image-gen/vault-gc', JSON.stringify({ keys: [kept!.key] })), res as unknown as ServerResponse, config)
+    await serveVaultRefs(request('POST', '/plugins/dsh-image-gen/vault-refs', JSON.stringify({ profileId: 'profile-a-1234', keys: [kept!.key] })), res as unknown as ServerResponse, config)
+    expect(res.status).toBe(200)
+    expect(JSON.parse(res.body().toString())).toMatchObject({ removed: 0, bytes: 0 })
+    expect(await readOriginal(config, kept!.key)).toBeDefined()
+    expect(await readOriginal(config, unreferenced!.key)).toBeDefined()
+  })
+
+  it('deletes only keys unreferenced by every profile', async () => {
+    const config = await makeConfig()
+    const kept = await saveOriginal(config, { data: new Uint8Array([1]), mediaType: 'image/png' })
+    const deleted = await saveOriginal(config, { data: new Uint8Array([2]), mediaType: 'image/png' })
+    await serveVaultRefs(request('POST', '/plugins/dsh-image-gen/vault-refs', JSON.stringify({ profileId: 'profile-a-1234', keys: [kept!.key, deleted!.key] })), new FakeResponse() as unknown as ServerResponse, config)
+
+    const res = new FakeResponse()
+    await serveVaultDelete(request('POST', '/plugins/dsh-image-gen/vault-delete', JSON.stringify({
+      profileId: 'profile-a-1234',
+      keys: [kept!.key],
+      deleteKeys: [deleted!.key],
+      confirm: true,
+    })), res as unknown as ServerResponse, config)
     expect(res.status).toBe(200)
     expect(JSON.parse(res.body().toString())).toEqual({ removed: 1, bytes: 1 })
+    expect(await readOriginal(config, kept!.key)).toBeDefined()
+    expect(await readOriginal(config, deleted!.key)).toBeUndefined()
   })
-})
+
+  it('keeps an original that another profile still references', async () => {
+    const config = await makeConfig()
+    const kept = await saveOriginal(config, { data: new Uint8Array([1]), mediaType: 'image/png' })
+    const shared = await saveOriginal(config, { data: new Uint8Array([2]), mediaType: 'image/png' })
+    await serveVaultRefs(request('POST', '/plugins/dsh-image-gen/vault-refs', JSON.stringify({ profileId: 'profile-a-1234', keys: [kept!.key, shared!.key] })), new FakeResponse() as unknown as ServerResponse, config)
+    await serveVaultRefs(request('POST', '/plugins/dsh-image-gen/vault-refs', JSON.stringify({ profileId: 'profile-b-5678', keys: [shared!.key] })), new FakeResponse() as unknown as ServerResponse, config)
+
+    const blocked = new FakeResponse()
+    await serveVaultDelete(request('POST', '/plugins/dsh-image-gen/vault-delete', JSON.stringify({
+      profileId: 'profile-a-1234',
+      keys: [kept!.key],
+      deleteKeys: [shared!.key],
+      confirm: true,
+    })), blocked as unknown as ServerResponse, config)
+    expect(JSON.parse(blocked.body().toString())).toEqual({ removed: 0, bytes: 0 })
+    expect(await readOriginal(config, shared!.key)).toBeDefined()
+
+    const allowed = new FakeResponse()
+    await serveVaultDelete(request('POST', '/plugins/dsh-image-gen/vault-delete', JSON.stringify({
+      profileId: 'profile-b-5678',
+      keys: [],
+      deleteKeys: [shared!.key],
+      confirm: true,
+    })), allowed as unknown as ServerResponse, config)
+    expect(JSON.parse(allowed.body().toString())).toEqual({ removed: 1, bytes: 1 })
+  })
+
+  it('does not delete when a legacy client omits profileId', async () => {
+    const config = await makeConfig()
+    const original = await saveOriginal(config, { data: new Uint8Array([1]), mediaType: 'image/png' })
+    const res = new FakeResponse()
+    await serveVaultRefs(request('POST', '/plugins/dsh-image-gen/vault-refs', JSON.stringify({ keys: [] })), res as unknown as ServerResponse, config)
+    expect(res.status).toBe(200)
+    expect(JSON.parse(res.body().toString())).toEqual({ removed: 0, bytes: 0 })
+    expect(await readOriginal(config, original!.key)).toBeDefined()
+  })
+
+  it('does not delete when the registry is corrupt', async () => {
+    const config = await makeConfig()
+    const original = await saveOriginal(config, { data: new Uint8Array([1]), mediaType: 'image/png' })
+    await writeFile(join(config.dir, '.refs.json'), '{not-json')
+    const res = new FakeResponse()
+    await serveVaultDelete(request('POST', '/plugins/dsh-image-gen/vault-delete', JSON.stringify({
+      profileId: 'profile-a-1234',
+      keys: [],
+      deleteKeys: [original!.key],
+      confirm: true,
+    })), res as unknown as ServerResponse, config)
+    expect(res.status).toBe(409)
+    expect(await readOriginal(config, original!.key)).toBeDefined()
+  })
+});

@@ -196,8 +196,6 @@ export interface Config {
   vaultEnabled?: boolean
   /** Override the raw-image vault root (empty keeps the DSH_HOME default). */
   vaultDir?: string
-  /** Byte cap enforced by vault gc; 0 disables it. */
-  vaultMaxBytes?: number
 }
 
 /**
@@ -281,7 +279,6 @@ export const Config = z.object({
   requestCacheDir: volatile(z.string().default('')),
   vaultEnabled: volatile(z.boolean().default(true)),
   vaultDir: volatile(z.string().default('')),
-  vaultMaxBytes: volatile(z.number().min(0).default(0)),
 }) as unknown as z<Config>
 
 /** Resolve exactly one provider profile for a tool call. */

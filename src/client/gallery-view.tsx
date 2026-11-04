@@ -5,7 +5,7 @@
  */
 import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useState, useMemo, useRef, type FC, type MouseEvent } from 'react'
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
-import { DELETE_ROUTE, IMPORT_ROUTE, STORAGE_STATS_ROUTE, VAULT_GC_ROUTE, ZIP_CANCEL_ROUTE, ZIP_PROGRESS_ROUTE, ZIP_ROUTE, imageUrlFor, previewUrlFor, thumbUrlFor, vaultUrlFor, type ImageProvider } from '../shared.js'
+import { DELETE_ROUTE, IMPORT_ROUTE, STORAGE_STATS_ROUTE, ZIP_CANCEL_ROUTE, ZIP_PROGRESS_ROUTE, ZIP_ROUTE, imageUrlFor, previewUrlFor, thumbUrlFor, vaultUrlFor, type ImageProvider } from '../shared.js'
 import {
   Image as ImageIcon,
   SlidersHorizontal,
@@ -50,7 +50,7 @@ import { conversationRegenerateRequest } from './conversation-regenerate.js'
 import { STUDIO_ROUTE, type StudioWorkspaceInfo, type StudioGenerateResponse } from '../shared.js'
 
 import { DICT, type DictKey } from './gallery-i18n.js'
-import { canUseServerZip, extensionFor, fetchGalleryItemBlob, formatStorageBytes, imageMediaTypeOf, postZipDownload, sendVaultGc, vaultKeysOf, type GalleryStorageStats } from './gallery-media.js'
+import { canUseServerZip, deleteVaultOriginals, extensionFor, fetchGalleryItemBlob, formatStorageBytes, imageMediaTypeOf, postZipDownload, syncVaultRefs, vaultKeysOf, type GalleryStorageStats } from './gallery-media.js'
 import { formatCardMeta, formatRelativeTime, getItemRatio } from './gallery-format.js'
 import { GalleryCard, type GalleryCardActions } from './gallery-card.js'
 
@@ -374,7 +374,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
           pruned = true
           void pruneGalleryThumbs(res.map(item => String(item.attachment.attachmentId)))
           void pruneTombstones()
-          sendVaultGc(vaultKeysOf(res))
+          syncVaultRefs(vaultKeysOf(res))
         }
       }).catch((err: unknown) => {
         console.warn('[dsh-image-gen] Failed to read gallery items:', err)
@@ -1147,11 +1147,13 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
 
     // 2. Perform IndexedDB deletion with real error handling
     try {
+      const deletedVaultKeys = vaultKeysOf(itemsToDelete)
+      const remainingVaultKeys = vaultKeysOf(items.filter(item => !idsToDelete.includes(item.id)))
       await bulkDeleteGalleryItems(idsToDelete)
       for (const item of itemsToDelete) {
         evictAttachmentCache(item.attachment.attachmentId)
       }
-      sendVaultGc(vaultKeysOf(items.filter(item => !idsToDelete.includes(item.id))))
+      deleteVaultOriginals(deletedVaultKeys, remainingVaultKeys)
     } catch (err) {
       setIsDeleting(false)
       showToast(t('deleteFailedDatabase'))
