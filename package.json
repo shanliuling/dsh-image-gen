@@ -56,7 +56,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "tsc && tsdown",
+    "build": "node scripts/clean-lib.mjs && tsc && tsdown",
     "prepare": "pnpm run build",
     "test": "vitest run",
     "test:package": "node scripts/check-package.mjs",
