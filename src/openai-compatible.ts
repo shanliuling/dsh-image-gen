@@ -1,3 +1,4 @@
+import { downloadPublicImage } from './public-image-download.js'
 /** OpenAI Images API and compatible response adapter. */
 import type { ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import { guardedFetch, readResponseBody } from './fetch-diagnostics.js'
@@ -289,32 +290,30 @@ async function downloadImage(
 ): Promise<GeneratedCompatibleImage> {
   if (url === undefined) throw new Error(`${provider} image request returned no image data`)
   if (url.startsWith('data:')) {
+    if (url.length > input.maxBytes * 2 + 1024) throw new Error('Image data URL exceeds the byte limit')
     const parsed = parseDataUrl(url)
     if (parsed === undefined) throw new Error(`${provider} image request returned invalid data URL`)
     const data = decodeBase64(parsed.base64, provider)
+    if (data.byteLength > input.maxBytes) throw new Error('Image data URL exceeds the byte limit')
     return { data, mediaType: detectImageMediaType(data) ?? imageMediaType(parsed.mediaType) ?? 'image/png' }
   }
   // Relative URLs are legal for self-hosted gateways (SGLang returns
   // "/v1/images/<id>/content"): resolve them against the configured base URL,
   // then fall back to the origin path for relays whose real route drops /v1.
   const candidates = imageDownloadCandidates(url, input.baseURL, provider)
-  let response: Response | undefined
   let failure: unknown
   for (const candidate of candidates) {
     try {
-      response = await requestImageCandidate(candidate, provider, input)
-      if (response.ok) break
-      failure = new Error(`${provider} image download failed (${response.status})`)
-      response = undefined
-    } catch (err) {
-      failure = err
+      const { data, contentType } = await requestImageCandidate(candidate, provider, input)
+      const mediaType = detectImageMediaType(data) ?? imageMediaType(contentType)
+      if (mediaType === undefined) throw new Error(`${provider} image download returned unsupported content type`)
+      return { data, mediaType }
+    } catch (error) {
+      const status = error instanceof Error ? /^Image download HTTP (\d+)$/.exec(error.message)?.[1] : undefined
+      failure = status === undefined ? error : new Error(`${provider} image download failed (${status})`)
     }
   }
-  if (response === undefined) throw failure instanceof Error ? failure : new Error(`${provider} image download failed`)
-  const data = await readBoundedBytes(response, input.maxBytes)
-  const mediaType = detectImageMediaType(data) ?? imageMediaType(response.headers.get('content-type'))
-  if (mediaType === undefined) throw new Error(`${provider} image download returned unsupported content type`)
-  return { data, mediaType }
+  throw failure instanceof Error ? failure : new Error(`${provider} image download failed`)
 }
 
 function imageDownloadCandidates(url: string, baseURL: string, provider: string): string[] {
@@ -340,18 +339,19 @@ async function requestImageCandidate(
   candidate: string,
   provider: string,
   input: { baseURL: string; maxBytes: number; signal: AbortSignal; apiKey?: string },
-): Promise<Response> {
+): Promise<{ data: Uint8Array; contentType: string | undefined }> {
   const sameOrigin = new URL(candidate).origin === new URL(input.baseURL).origin
-  let response = await guardedFetch(provider + ' image download', input.signal, () => fetch(candidate, {
-    redirect: 'follow', signal: input.signal,
-    ...(input.apiKey === undefined || !sameOrigin ? {} : { headers: { authorization: 'Bearer ' + input.apiKey } }),
-  }), input.apiKey)
-  // Some same-origin relays reject Authorization on public image URLs, so the
-  // legacy retry remains available without ever sending the key to another origin.
-  if (!response.ok && input.apiKey !== undefined && sameOrigin) {
-    response = await guardedFetch(provider + ' image download', input.signal, () => fetch(candidate, { redirect: 'follow', signal: input.signal }), input.apiKey)
+  const options = { maxBytes: input.maxBytes, signal: input.signal }
+  try {
+    return await downloadPublicImage(candidate, {
+      ...options,
+      ...(sameOrigin && input.apiKey !== undefined ? { authorization: 'Bearer ' + input.apiKey } : {}),
+    })
+  } catch (error) {
+    // Preserve authenticated same-origin assets and the existing public-asset retry.
+    if (input.apiKey === undefined || !sameOrigin) throw error
+    return downloadPublicImage(candidate, options)
   }
-  return response
 }
 
 function parseDataUrl(value: string): { mediaType: string; base64: string } | undefined {

@@ -1,3 +1,4 @@
+import './fixtures/mock-public-image-download.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { generateDashScopeImage } from '../src/dashscope.js'
 
