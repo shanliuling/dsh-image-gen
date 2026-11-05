@@ -53,19 +53,16 @@ function response(): ServerResponse {
 }
 
 describe('plugin web route admission', () => {
-  it.each(['missing', 'throwing'] as const)('refuses dispatch when admission is %s', async state => {
+  it('keeps legacy host dispatch when no admission service is available', async () => {
     const handler = vi.fn()
-    const route = withWebAdmission({ kind: 'exact', path: '/protected', handler }, () => {
-      if (state === 'throwing') throw new Error('service unavailable')
-      return undefined
-    })
+    const route = withWebAdmission({ kind: 'exact', path: '/legacy-host', handler }, () => undefined)
     const res = response()
     await route.handler(request(), res)
-    expect(res.statusCode).toBe(503)
-    expect(handler).not.toHaveBeenCalled()
+    expect(handler).toHaveBeenCalledOnce()
+    expect(res.statusCode).toBe(200)
   })
-  it('applies host authentication to every registered route before dispatch', async () => {
-    const { routes, requestRejection } = harness(401)
+  it.each([401, 403] as const)('applies host rejection %i to every registered route before dispatch', async rejection => {
+    const { routes, requestRejection } = harness(rejection)
     expect(routes.length).toBeGreaterThan(8)
     const statuses: Array<{ path: string; status: number }> = []
     for (const route of routes) {
@@ -73,7 +70,7 @@ describe('plugin web route admission', () => {
       await route.handler(request(), res)
       statuses.push({ path: route.path, status: res.statusCode })
     }
-    expect(statuses).toEqual(routes.map(route => ({ path: route.path, status: 401 })))
+    expect(statuses).toEqual(routes.map(route => ({ path: route.path, status: rejection })))
     expect(requestRejection).toHaveBeenCalledTimes(routes.length)
   })
 

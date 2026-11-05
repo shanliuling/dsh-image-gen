@@ -214,11 +214,7 @@ export function apply(ctx: Context, config: Config = {}): void {
   }, 'dsh-image-gen: request image cache upkeep')
   let webAdmission: WebAdmission | undefined
   ctx.inject(['connection'], (connectionCtx: Context) => {
-    const check: WebAdmission = request => connectionCtx.connection.requestRejection(request)
-    connectionCtx.effect(() => {
-      webAdmission = check
-      return () => { if (webAdmission === check) webAdmission = undefined }
-    }, 'dsh-image-gen: connection admission')
+    webAdmission = request => connectionCtx.connection.requestRejection(request)
   })
   // Every HTTP surface needs webServer, which only the web-app bundle (web,
   // desktop) provides; the headless, acp and sdk profiles have none. Mount the

@@ -9,10 +9,9 @@ function harness(settings?: object) {
     tools: { register: vi.fn() },
     effect: (setup: () => unknown) => setup(),
     webServer: { register: (route: typeof routes[number]) => { routes.push(route); return () => {} } },
-    connection: { requestRejection: () => undefined },
     credentials: {}, attachments: {}, logger: { warn },
     inject: (services: string[], callback: (owner: unknown) => unknown) => {
-      if (services.includes('webServer') || services.includes('connection')) return callback(ctx)
+      if (services.includes('webServer')) return callback(ctx)
       if (services.includes('settings') && settings !== undefined) return callback({ settings })
     },
   }
