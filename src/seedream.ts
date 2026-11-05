@@ -5,7 +5,6 @@ import { guardedFetch, readResponseBody } from './fetch-diagnostics.js'
 import { redactSecrets } from './redact.js'
 import { detectImageMediaType } from './reference-image.js'
 import { arkOutputBody, type ArkOutputOptions } from './shared.js'
-import { fetchProviderImage } from './image-download.js'
 
 const ERROR_LIMIT = 4096
 
@@ -82,9 +81,9 @@ function firstImage(value: unknown): { b64_json?: string; url?: string; mime_typ
       : undefined
 }
 
-async function downloadImage(url: string | undefined, input: { baseURL: string; maxBytes: number; signal: AbortSignal; apiKey: string }): Promise<GeneratedCompatibleImage> {
+async function downloadImage(url: string | undefined, input: { maxBytes: number; signal: AbortSignal; apiKey: string }): Promise<GeneratedCompatibleImage> {
   if (url === undefined) throw new Error('seedream image editing returned no image data')
-  const response = await guardedFetch('seedream image download', input.signal, () => fetchProviderImage(url, { baseURL: input.baseURL, signal: input.signal }), input.apiKey)
+  const response = await guardedFetch('seedream image download', input.signal, () => fetch(url, { redirect: 'follow', signal: input.signal }), input.apiKey)
   if (!response.ok) {
     await response.body?.cancel().catch(() => undefined)
     throw new Error(`seedream image download failed (${response.status})`)

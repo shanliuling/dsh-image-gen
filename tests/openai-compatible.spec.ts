@@ -1,9 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { editOpenAICompatibleImage, generateOpenAICompatibleImage } from '../src/openai-compatible.js'
 
-// Provider protocol fixtures use fake public hosts and a stubbed fetch.
-vi.mock('node:dns/promises', () => ({ lookup: async () => [{ address: '8.8.8.8', family: 4 }] }))
-
 afterEach(() => { vi.unstubAllGlobals() })
 const signal = new AbortController().signal
 

@@ -39,4 +39,3 @@ describe('editDashScopeImage', () => {
     })).rejects.toThrow('Configure a qwen-image model.')
   })
 })
-vi.mock('node:dns/promises', () => ({ lookup: async () => [{ address: '8.8.8.8', family: 4 }] }))

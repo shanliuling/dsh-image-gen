@@ -4,7 +4,6 @@ import { guardedFetch, readResponseBody } from './fetch-diagnostics.js'
 import { redactSecrets } from './redact.js'
 import { detectImageMediaType } from './reference-image.js'
 import { arkOutputBody, type ArkOutputOptions } from './shared.js'
-import { fetchProviderImage } from './image-download.js'
 
 const ERROR_LIMIT = 4096
 
@@ -335,11 +334,6 @@ async function downloadImage(
     }
   }
   if (response === undefined) throw failure instanceof Error ? failure : new Error(`${provider} image download failed`)
-  const contentType = response.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase()
-  if (contentType !== undefined && contentType !== 'application/octet-stream' && imageMediaType(contentType) === undefined) {
-    await response.body?.cancel().catch(() => undefined)
-    throw new Error(`${provider} image download returned unsupported content type`)
-  }
   const data = await readBoundedBytes(response, input.maxBytes)
   const mediaType = detectImageMediaType(data) ?? imageMediaType(response.headers.get('content-type'))
   if (mediaType === undefined) throw new Error(`${provider} image download returned unsupported content type`)
@@ -353,7 +347,7 @@ function imageDownloadCandidates(url: string, baseURL: string, provider: string)
   } catch {
     // A malformed baseURL still leaves the origin fallback below for "/path".
   }
-  if (url.startsWith('/') && !url.startsWith('//')) {
+  if (url.startsWith('/')) {
     try {
       const stripped = new URL(baseURL).origin + url.replace(/^\/v1(?=\/)/, '')
       if (!candidates.includes(stripped)) candidates.push(stripped)
@@ -371,12 +365,15 @@ async function requestImageCandidate(
   input: { baseURL: string; maxBytes: number; signal: AbortSignal; apiKey?: string },
 ): Promise<Response> {
   const sameOrigin = new URL(candidate).origin === new URL(input.baseURL).origin
-  let response = await guardedFetch(provider + ' image download', input.signal, () => fetchProviderImage(candidate, input), input.apiKey)
+  let response = await guardedFetch(provider + ' image download', input.signal, () => fetch(candidate, {
+    redirect: 'follow', signal: input.signal,
+    ...(input.apiKey === undefined || !sameOrigin ? {} : { headers: { authorization: 'Bearer ' + input.apiKey } }),
+  }), input.apiKey)
   // Some same-origin relays reject Authorization on public image URLs, so the
   // legacy retry remains available without ever sending the key to another origin.
   if (!response.ok && input.apiKey !== undefined && sameOrigin) {
     await response.body?.cancel().catch(() => undefined)
-    response = await guardedFetch(provider + ' image download', input.signal, () => fetchProviderImage(candidate, { baseURL: input.baseURL, signal: input.signal }), input.apiKey)
+    response = await guardedFetch(provider + ' image download', input.signal, () => fetch(candidate, { redirect: 'follow', signal: input.signal }), input.apiKey)
   }
   return response
 }

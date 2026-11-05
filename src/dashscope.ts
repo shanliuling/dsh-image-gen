@@ -3,7 +3,6 @@ import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attach
 import { guardedFetch, readResponseBody } from './fetch-diagnostics.js'
 import { redactSecrets } from './redact.js'
 import { detectImageMediaType } from './reference-image.js'
-import { fetchProviderImage } from './image-download.js'
 
 export interface DashScopeImageOptions {
   apiKey: string
@@ -109,7 +108,6 @@ async function requestQwenImage(options: DashScopeImageOptions & {
   const base = options.endpoint.replace(/\/+$/, '')
   const response = await guardedFetch(`DashScope image ${options.operation}`, options.signal, () => fetch(`${base}/services/aigc/multimodal-generation/generation`, {
     method: 'POST',
-    redirect: 'error',
     ...(options.signal ? { signal: options.signal } : {}),
     headers: {
       'content-type': 'application/json',
@@ -146,11 +144,10 @@ async function downloadImageBlob(
   imageUrl: string,
   options: DashScopeImageOptions,
 ): Promise<{ data: Uint8Array; mediaType: ImageAttachmentRef['mediaType'] }> {
-  const imageResponse = await guardedFetch('DashScope image download', options.signal, () => fetchProviderImage(imageUrl, {
-    baseURL: options.endpoint, signal: options.signal ?? AbortSignal.timeout(240_000),
+  const imageResponse = await guardedFetch('DashScope image download', options.signal, () => fetch(imageUrl, {
+    ...(options.signal ? { signal: options.signal } : {}),
   }), options.apiKey)
   if (!imageResponse.ok) {
-    await imageResponse.body?.cancel().catch(() => undefined)
     throw new Error(`Failed to fetch DashScope image from URL (${String(imageResponse.status)})`)
   }
   const buffer = await readResponseBody(imageResponse, () => imageResponse.arrayBuffer())

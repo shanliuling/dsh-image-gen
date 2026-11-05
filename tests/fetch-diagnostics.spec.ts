@@ -211,4 +211,3 @@ describe('complete provider transport diagnostics (#79 regressions)', () => {
     await expect(requestCases[3]!.run()).rejects.toBeInstanceOf(SyntaxError)
   })
 })
-vi.mock('node:dns/promises', () => ({ lookup: async () => [{ address: '8.8.8.8', family: 4 }] }))
