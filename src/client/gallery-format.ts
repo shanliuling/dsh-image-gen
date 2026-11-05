@@ -25,11 +25,16 @@ export function formatRelativeTime(
   return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`
 }
 
+function hasImageDimensions(item: GalleryItem): boolean {
+  const { width, height } = item.attachment
+  return Number.isSafeInteger(width) && width > 0 && Number.isSafeInteger(height) && height > 0
+}
+
 /** Extract standard aspect ratio for precise filtering */
 export function getItemRatio(item: GalleryItem): string {
-  // Codex subscription may ignore its requested ratio. Filter these cards by
-  // the saved image's dimensions instead of the Studio selection.
-  if (item.provider === 'chatgpt-sub' && item.attachment.width && item.attachment.height) {
+  // Imports have no requested ratio; subscription output can ignore one.
+  // Filter these cards by saved pixels, including records imported earlier.
+  if ((item.provider === 'import' || item.provider === 'chatgpt-sub') && hasImageDimensions(item)) {
     const actual = item.attachment.width / item.attachment.height
     for (const [label, value] of [
       ['1:1', 1], ['16:9', 16 / 9], ['9:16', 9 / 16],
@@ -65,6 +70,9 @@ export function getItemRatio(item: GalleryItem): string {
 
 /** Format aspect ratio or dimensions for card metadata (e.g., 1024×1024 or 16:9) */
 export function formatCardMeta(item: GalleryItem): string {
+  if (item.provider === 'import' && hasImageDimensions(item)) {
+    return `${item.attachment.width}×${item.attachment.height}`
+  }
   if (item.output) {
     const dimMatch = item.output.match(/(\d{3,4})\s*[×x*]\s*(\d{3,4})/)
     if (dimMatch?.[1] && dimMatch[2]) {

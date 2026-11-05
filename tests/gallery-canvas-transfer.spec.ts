@@ -48,7 +48,18 @@ describe('gallery image transfer into the canvas', () => {
     expect(await event.dataTransfer.files[0]?.text()).toBe('original')
   })
 
-  it.each([null, undefined, new Blob(), new Blob(['x'], { type: 'text/plain' }), new Blob(['x'], { type: 'constructor' })])('cancels an unloaded, empty or unsupported image instead of starting a fake drag', blob => {
+  it.each([null, undefined, new Blob()])('starts an internal reference drag before the original Blob loads, without a fake file', blob => {
+    const event = dragStore()
+    event.dataTransfer.setData('text/uri-list', 'blob:thumbnail')
+    expect(startGalleryImageDrag(event, item, blob)).toBe(true)
+    expect(event.dataTransfer.files).toHaveLength(0)
+    expect(event.dataTransfer.types).toEqual([GALLERY_IMAGE_MIME])
+    expect(event.dataTransfer.effectAllowed).toBe('copy')
+    expect(readGalleryImageDrop(event.dataTransfer)?.attachment).toEqual(item.attachment)
+    expect(event.preventDefault).not.toHaveBeenCalled()
+  })
+
+  it.each([new Blob(['x'], { type: 'text/plain' }), new Blob(['x'], { type: 'constructor' })])('cancels unsupported image types instead of creating a fake file', blob => {
     const event = dragStore()
     expect(startGalleryImageDrag(event, item, blob)).toBe(false)
     expect(event.preventDefault).toHaveBeenCalledOnce()
@@ -61,10 +72,26 @@ describe('gallery image transfer into the canvas', () => {
     expect(event.dataTransfer.files[0]?.type).toBe('image/png')
   })
 
-  it('cancels safely if a host rejects adding files', () => {
+  it.each(['null', 'throw'])('retains the internal reference when a host rejects adding files (%s)', failure => {
     const event = dragStore()
-    event.dataTransfer.items.add = () => null
-    expect(startGalleryImageDrag(event, item, new Blob(['png']))).toBe(false)
+    event.dataTransfer.items.add = () => { if (failure === 'throw') throw new Error('unsupported'); return null }
+    expect(startGalleryImageDrag(event, item, new Blob(['png']))).toBe(true)
+    expect(event.dataTransfer.files).toHaveLength(0)
+    expect(readGalleryImageDrop(event.dataTransfer)?.galleryId).toBe(item.id)
+    expect(event.preventDefault).not.toHaveBeenCalled()
+  })
+
+  it('cancels an unloaded drag when the host also rejects custom MIME', () => {
+    const event = dragStore()
+    event.dataTransfer.setData = () => { throw new Error('unsupported') }
+    expect(startGalleryImageDrag(event, item, null)).toBe(false)
+    expect(event.preventDefault).toHaveBeenCalledOnce()
+    expect(event.dataTransfer.files).toHaveLength(0)
+  })
+
+  it('cancels safely without a transfer store', () => {
+    const event = { dataTransfer: null, preventDefault: vi.fn() }
+    expect(startGalleryImageDrag(event, item, null)).toBe(false)
     expect(event.preventDefault).toHaveBeenCalledOnce()
   })
 
