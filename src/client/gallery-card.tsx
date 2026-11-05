@@ -15,7 +15,7 @@ import { copyImageBlob, createImageThumbnail, downloadBlobUrl } from './browser-
 import { startGalleryImageDrag } from './tl/gallery-image-transfer.js'
 import { GalleryCanvasButton } from './tl/gallery-canvas-button.js'
 import type { DictKey } from './gallery-i18n.js'
-import { fetchGalleryItemBlob, extensionFor, GALLERY_PREFETCH_ORIGINAL_MAX_BYTES } from './gallery-media.js'
+import { fetchGalleryItemBlob, galleryDownloadName, GALLERY_PREFETCH_ORIGINAL_MAX_BYTES } from './gallery-media.js'
 import { formatCardMeta, formatRelativeTime } from './gallery-format.js'
 
 /** Stable dispatchers shared by every card, so memoized cards never re-render for selection changes. */
@@ -141,10 +141,11 @@ export const GalleryCard = memo(function GalleryCard({
   const downloadImage = async (e: MouseEvent) => {
     e.stopPropagation()
     try {
-      const objectUrl = URL.createObjectURL(await ensureOriginal())
+      const blob = await ensureOriginal()
+      const objectUrl = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = objectUrl
-      a.download = `dsh-${item.provider}-${item.id}.${extensionFor(item.original?.mediaType ?? item.attachment.mediaType)}`
+      a.download = galleryDownloadName(item, blob)
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)

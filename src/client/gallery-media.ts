@@ -28,13 +28,15 @@ export function vaultProfileId(): string | undefined {
 /** Sync this profile's references; the server never deletes originals here. */
 export function syncVaultRefs(keys: string[]): Promise<void> {
   const profileId = vaultProfileId()
-  if (profileId === undefined) return Promise.resolve()
+  if (profileId === undefined) return keys.length === 0 ? Promise.resolve() : Promise.reject(new Error('Original reference storage unavailable'))
   return fetch(VAULT_REFS_ROUTE, {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ profileId, keys }),
-  }).then(() => undefined).catch(() => undefined)
+  }).then(response => {
+    if (!response.ok) throw new Error('Original reference sync failed (HTTP ' + String(response.status) + ')')
+  })
 }
 
 /** Manual gallery deletion: remove originals only after the server checks every profile. */
@@ -123,6 +125,11 @@ export function extensionFor(mediaType: string): string {
   return 'png'
 }
 
+/** Download names must follow the resolved bytes, including vault fallbacks. */
+export function galleryDownloadName(item: GalleryItem, blob: Blob): string {
+  return `dsh-${item.provider}-${item.id}.${extensionFor(blob.type || item.attachment.mediaType)}`
+}
+
 /**
  * Ask the host to stream the archive through a hidden form post.
  * A real form navigation would replace the SPA, so the response lands in an
@@ -131,7 +138,13 @@ export function extensionFor(mediaType: string): string {
 export function postZipDownload(items: GalleryItem[], token: string): void {
   const payload = items.map(item => ({
     name: `dsh-${item.provider}-${item.id.slice(0, 8)}.${extensionFor(item.original?.mediaType ?? item.attachment.mediaType)}`,
-    attachment: item.attachment,
+    attachment: {
+      attachmentId: item.attachment.attachmentId,
+      mediaType: item.attachment.mediaType,
+      bytes: item.attachment.bytes,
+      width: item.attachment.width,
+      height: item.attachment.height,
+    },
     ...(item.original === undefined ? {} : { originalKey: item.original.key, originalMediaType: item.original.mediaType }),
   }))
   const sink = document.createElement('iframe')
@@ -142,7 +155,7 @@ export function postZipDownload(items: GalleryItem[], token: string): void {
   document.body.appendChild(sink)
   const form = document.createElement('form')
   form.method = 'POST'
-  form.action = ZIP_ROUTE
+  form.action = ZIP_ROUTE + (token === '' ? '' : '?token=' + encodeURIComponent(token))
   form.target = sink.name
   form.style.display = 'none'
   const field = document.createElement('input')

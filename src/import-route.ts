@@ -213,11 +213,9 @@ async function persistImport(
   })
   let original: { key: string; bytes: number; mediaType: ImageMediaType } | undefined
   if (deps.saveOriginal !== undefined && (attachment.mediaType !== mediaType || attachment.bytes !== bytes.byteLength)) {
-    try {
-      original = await deps.saveOriginal({ data: bytes, mediaType })
-    } catch {
-      // A missing vault copy must never fail the import itself.
-    }
+    // Do not acknowledge a full-resolution import whose original could not be
+    // stored and protected. The caller can retry instead of silently losing it.
+    original = await deps.saveOriginal({ data: bytes, mediaType })
   }
   return { attachment, ...(original === undefined ? {} : { original }) }
 }

@@ -22,7 +22,8 @@ import { serveZip } from './zip-route.js'
 import { serveZipCancel, serveZipProgress } from './zip-progress.js'
 import { serveStorageStats } from './storage-stats.js'
 import { serveVault, serveVaultDelete, serveVaultRefs } from './vault-route.js'
-import { readOriginal, resolveVaultPath, saveOriginal } from './vault-store.js'
+import { readOriginal, resolveVaultPath } from './vault-store.js'
+import { saveImportedOriginal } from './vault-registry.js'
 import { servePreview, serveThumb } from './thumb-route.js'
 import { durableAttachmentsRoot, pruneRequestImageCache, resolveRequestImageCacheDir } from './request-cache.js'
 import { editOpenAICompatibleImage, generateOpenAICompatibleImage } from './openai-compatible.js'
@@ -213,7 +214,11 @@ export function apply(ctx: Context, config: Config = {}): void {
   }, 'dsh-image-gen: request image cache upkeep')
   let webAdmission: WebAdmission | undefined
   ctx.inject(['connection'], (connectionCtx: Context) => {
-    webAdmission = request => connectionCtx.connection.requestRejection(request)
+    const check: WebAdmission = request => connectionCtx.connection.requestRejection(request)
+    connectionCtx.effect(() => {
+      webAdmission = check
+      return () => { if (webAdmission === check) webAdmission = undefined }
+    }, 'dsh-image-gen: connection admission')
   })
   // Every HTTP surface needs webServer, which only the web-app bundle (web,
   // desktop) provides; the headless, acp and sdk profiles have none. Mount the
@@ -252,7 +257,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         warmThumbnail: ref => {
           void ctx.attachments.readImageRequest(ref, { width: 320, height: 320, maxBytes: 96 * 1024 }).catch(() => undefined)
         },
-        saveOriginal: input => saveOriginal(vaultConfig(), input),
+        saveOriginal: input => saveImportedOriginal(vaultConfig(), input, typeof req.headers['x-dsh-vault-profile'] === 'string' ? req.headers['x-dsh-vault-profile'] : undefined),
       }),
     }), 'dsh-image-gen: import route')
     webCtx.effect(() => register({

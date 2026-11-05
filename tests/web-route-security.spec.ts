@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { apply } from '../src/index.js'
 import { SETTINGS_HEALTH_ROUTE } from '../src/shared.js'
+import { withWebAdmission } from '../src/web-route.js'
 
 function harness(rejection: 401 | 403 | undefined) {
   const routes: WebRoute[] = []
@@ -52,6 +53,17 @@ function response(): ServerResponse {
 }
 
 describe('plugin web route admission', () => {
+  it.each(['missing', 'throwing'] as const)('refuses dispatch when admission is %s', async state => {
+    const handler = vi.fn()
+    const route = withWebAdmission({ kind: 'exact', path: '/protected', handler }, () => {
+      if (state === 'throwing') throw new Error('service unavailable')
+      return undefined
+    })
+    const res = response()
+    await route.handler(request(), res)
+    expect(res.statusCode).toBe(503)
+    expect(handler).not.toHaveBeenCalled()
+  })
   it('applies host authentication to every registered route before dispatch', async () => {
     const { routes, requestRejection } = harness(401)
     expect(routes.length).toBeGreaterThan(8)

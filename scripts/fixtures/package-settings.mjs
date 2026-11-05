@@ -51,6 +51,7 @@ async function start() {
     // Settings services, schema resolution, disk writes and restart are real.
     ctx.provide('tools', { register: () => () => {} })
     ctx.provide('credentials', { resolve: async () => undefined })
+    ctx.provide('connection', { requestRejection: () => undefined })
     ctx.provide('attachments', { imageLimits: { maxImageBytes: 10_000_000, mediaTypes: ['image/png'] } })
     ctx.provide('webServer', { register: route => { routes.set(route.path, route); return () => routes.delete(route.path) } })
     Object.assign(ctx.loader.builtins, { editor: ConfigEditor, settings: Settings, image: plugin })

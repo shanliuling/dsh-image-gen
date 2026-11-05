@@ -151,3 +151,4 @@ describe('generateDashScopeImage', () => {
     })).rejects.toThrow('DashScope image generation returned no image URL')
   })
 })
+vi.mock('node:dns/promises', () => ({ lookup: async () => [{ address: '8.8.8.8', family: 4 }] }))

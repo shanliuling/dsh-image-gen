@@ -349,9 +349,12 @@ Bring private image generation on your local GPU directly into Agent conversatio
 - **BYOK:** API keys are stored through the DSH Credentials service and are never displayed in plaintext on the settings page.
 - **Subscription sign-in:** Subscription tokens are saved in DSH Credentials after your authorized sign-in, fully isolated from API keys; the browser side never touches a token.
 - **Cloud requests:** The prompt and reference images used for a request are sent to the selected Provider. Follow that Provider's terms of service.
+- **Provider image downloads:** Each target and redirect is checked, and connections use the validated DNS addresses. Private images are allowed only on the same origin as a provider explicitly configured with `localhost` or a private IP. Local ComfyUI continues to use its configured address.
+  With a Fake-IP proxy, image domains must resolve to real public addresses. Public domains mapped to reserved or loopback addresses are blocked.
 - **Local ComfyUI:** Requests are sent to the configured ComfyUI address.
 - **Workspace files:** When workspace saving is enabled, chat results are written to disk; Studio saves only the candidates you select.
 - **Gallery and favorites:** Gallery metadata and favorite state are stored in the current browser's local storage.
+- **Deleted records:** Normal deletion retains a small image ID marker, including after 30 days, so reopening an old conversation does not silently restore the image to the gallery.
 - **Inspiration cache:** Example metadata ships with the plugin. Images load on demand and are cached locally, and the cache can be cleared at any time.
 
 ## FAQ

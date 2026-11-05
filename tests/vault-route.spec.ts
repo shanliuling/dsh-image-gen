@@ -5,6 +5,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { serveVault, serveVaultDelete, serveVaultRefs } from '../src/vault-route.js'
 import { readOriginal, saveOriginal, type VaultConfig } from '../src/vault-store.js'
+import { apply } from '../src/index.js'
+import type { Context } from '@deepseek-ai/cordis'
+import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 
 const io = vi.hoisted(() => ({
   beforeReadDirectory: undefined as ((path: string) => Promise<void>) | undefined,
@@ -75,6 +78,41 @@ afterEach(async () => {
 })
 
 describe('raw vault routes', () => {
+  it('protects an imported original before the browser can publish its new gallery snapshot', async () => {
+    const config = await makeConfig()
+    const data = new Uint8Array([9, 7, 5])
+    const saved = await saveOriginal(config, { data, mediaType: 'image/png' })
+    await serveVaultRefs(request('POST', '/', JSON.stringify({ profileId: 'profile-a-1234', keys: [saved!.key] })), new FakeResponse() as unknown as ServerResponse, config)
+    const routes: WebRoute[] = [], cleanup: Array<() => void> = []
+    const ctx = {
+      tools: { register: vi.fn() },
+      effect: (setup: () => unknown) => { const dispose = setup(); if (typeof dispose === 'function') cleanup.push(dispose as () => void) },
+      webServer: { register: (route: WebRoute) => { routes.push(route); return () => {} } },
+      connection: { requestRejection: () => undefined },
+      credentials: { resolve: async () => undefined },
+      inject: (services: readonly string[], callback: (owner: Context) => void) => { if (services.includes('webServer') || services.includes('connection')) callback(ctx as unknown as Context) },
+      attachments: {
+        imageLimits: { maxImageBytes: 1024, mediaTypes: ['image/png', 'image/jpeg'] },
+        saveImage: async () => ({ attachmentId: 'sha256:' + 'c'.repeat(64), mediaType: 'image/jpeg', bytes: 1 }),
+        readImageRequest: async () => { throw new Error('no thumbnail needed') },
+      },
+      logger: { warn: vi.fn(), info: vi.fn() },
+    }
+    try {
+      apply(ctx as unknown as Context, { vaultEnabled: true, vaultDir: config.dir, saveToWorkspace: false })
+      const req = request('POST', '/plugins/dsh-image-gen/import', JSON.stringify({ images: [{ data: Buffer.from(data).toString('base64'), mediaType: 'image/png' }] }))
+      req.headers['x-dsh-vault-profile'] = 'profile-b-5678'
+      const imported = new FakeResponse()
+      await routes.find(route => route.path === '/plugins/dsh-image-gen/import')!.handler(req, imported as unknown as ServerResponse)
+      expect(JSON.parse(imported.body().toString()).images[0].original.key).toBe(saved!.key)
+      // An older empty snapshot may arrive after the server-side import claim.
+      await serveVaultRefs(request('POST', '/', JSON.stringify({ profileId: 'profile-b-5678', keys: [] })), new FakeResponse() as unknown as ServerResponse, config)
+      const deleted = new FakeResponse()
+      await serveVaultDelete(request('POST', '/', JSON.stringify({ profileId: 'profile-a-1234', keys: [], deleteKeys: [saved!.key], confirm: true })), deleted as unknown as ServerResponse, config)
+      expect(await readOriginal(config, saved!.key)).toBeDefined()
+      expect(JSON.parse(deleted.body().toString()).removed).toBe(0)
+    } finally { for (const dispose of cleanup.reverse()) dispose() }
+  })
   it('serves an original with immutable headers and a 304 on ETag match', async () => {
     const config = await makeConfig()
     const saved = await saveOriginal(config, { data: new Uint8Array([9, 8, 7]), mediaType: 'image/png' })
@@ -190,6 +228,11 @@ describe('raw vault routes', () => {
       confirm: true,
     })), res as unknown as ServerResponse, config)
     expect(JSON.parse(res.body().toString())).toEqual({ removed: 0, bytes: 0 })
+    expect(await readOriginal(config, old!.key)).toBeDefined()
+    // One upgraded browser claiming a legacy key cannot speak for another
+    // legacy browser that has not opened yet.
+    await serveVaultRefs(request('POST', '/', JSON.stringify({ profileId: 'profile-a-1234', keys: [old!.key] })), new FakeResponse() as unknown as ServerResponse, config)
+    await serveVaultDelete(request('POST', '/', JSON.stringify({ profileId: 'profile-a-1234', keys: [], deleteKeys: [old!.key], confirm: true })), new FakeResponse() as unknown as ServerResponse, config)
     expect(await readOriginal(config, old!.key)).toBeDefined()
   })
 

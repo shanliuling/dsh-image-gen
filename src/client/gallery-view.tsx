@@ -50,7 +50,7 @@ import { conversationRegenerateRequest } from './conversation-regenerate.js'
 import { STUDIO_ROUTE, type StudioWorkspaceInfo, type StudioGenerateResponse } from '../shared.js'
 
 import { DICT, type DictKey } from './gallery-i18n.js'
-import { canUseServerZip, deleteVaultOriginals, extensionFor, fetchGalleryItemBlob, formatStorageBytes, imageMediaTypeOf, postZipDownload, syncVaultRefs, vaultKeysOf, type GalleryStorageStats } from './gallery-media.js'
+import { canUseServerZip, deleteVaultOriginals, extensionFor, fetchGalleryItemBlob, formatStorageBytes, galleryDownloadName, imageMediaTypeOf, postZipDownload, syncVaultRefs, vaultKeysOf, vaultProfileId, type GalleryStorageStats } from './gallery-media.js'
 import { formatCardMeta, formatRelativeTime, getItemRatio } from './gallery-format.js'
 import { GalleryCard, type GalleryCardActions } from './gallery-card.js'
 
@@ -281,9 +281,11 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
         const name = entry.file.name.length > 0 ? entry.file.name : `image.${extensionFor(entry.mediaType)}`
         form.append('images', entry.file, name)
       }
+      const profileId = vaultProfileId()
       const response = await fetch(IMPORT_ROUTE, {
         method: 'POST',
         credentials: 'same-origin',
+        ...(profileId === undefined ? {} : { headers: { 'x-dsh-vault-profile': profileId } }),
         body: form,
       })
       if (!response.ok) throw new Error(`HTTP ${String(response.status)}`)
@@ -375,11 +377,13 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
         setItems(prev => mergeGalleryItems(prev, res))
         if (!pruned) {
           // One sweep per mount drops thumbnails left behind by older deletions
-          // and tombstones past the multi-window retention window.
+          // and compact old deletion metadata without forgetting deleted IDs.
           pruned = true
           void pruneGalleryThumbs(res.map(item => String(item.attachment.attachmentId)))
           void pruneTombstones()
-          syncVaultRefs(vaultKeysOf(res))
+          void syncVaultRefs(vaultKeysOf(res)).catch((err: unknown) => {
+            console.warn('[dsh-image-gen] Failed to sync original references:', err)
+          })
         }
       }).catch((err: unknown) => {
         console.warn('[dsh-image-gen] Failed to read gallery items:', err)
@@ -972,7 +976,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
         // size cap, and a direct anchor would save the 404 JSON as an image.
         const blob = await fetchGalleryItemBlob(single)
         const objectUrl = URL.createObjectURL(blob)
-        downloadBlobUrl(objectUrl, `dsh-${single.provider}-${single.id}.${extensionFor(single.original?.mediaType ?? single.attachment.mediaType)}`)
+        downloadBlobUrl(objectUrl, galleryDownloadName(single, blob))
         URL.revokeObjectURL(objectUrl)
         showToast(t('batchDownloadSingleToast'))
         return
@@ -1879,7 +1883,6 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
                 className="dsh-ig-lightbox-btn"
                 title={t('download')}
                 onClick={async () => {
-                  const extension = extensionFor(previewItem.original?.mediaType ?? previewItem.attachment.mediaType)
                   // The lightbox shows a 1600 px variant; downloads keep the
                   // original bytes and fall back to the attachment when the vault
                   // copy was evicted.
@@ -1888,7 +1891,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
                       ? await fetchOriginalBlob(previewItem)
                       : previewBlob ?? await fetchAttachmentBlob(previewItem.attachment)
                     const objectUrl = URL.createObjectURL(blob)
-                    downloadBlobUrl(objectUrl, `dsh-${previewItem.provider}-${previewItem.id}.${extension}`)
+                    downloadBlobUrl(objectUrl, galleryDownloadName(previewItem, blob))
                     URL.revokeObjectURL(objectUrl)
                   } catch {
                     showToast(t('batchDownloadFailed'))

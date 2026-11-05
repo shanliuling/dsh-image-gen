@@ -74,3 +74,4 @@ describe('SiliconFlow edits', () => {
     expect(JSON.parse(String(fetchMock.mock.calls[0]![1]!.body)).model).toBe('Qwen/Qwen-Image-Edit')
   })
 })
+vi.mock('node:dns/promises', () => ({ lookup: async () => [{ address: '8.8.8.8', family: 4 }] }))

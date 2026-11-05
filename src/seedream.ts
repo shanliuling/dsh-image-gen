@@ -5,6 +5,7 @@ import { guardedFetch, readResponseBody } from './fetch-diagnostics.js'
 import { redactSecrets } from './redact.js'
 import { detectImageMediaType } from './reference-image.js'
 import { arkOutputBody, type ArkOutputOptions } from './shared.js'
+import { fetchProviderImage } from './image-download.js'
 
 const ERROR_LIMIT = 4096
 
@@ -81,12 +82,18 @@ function firstImage(value: unknown): { b64_json?: string; url?: string; mime_typ
       : undefined
 }
 
-async function downloadImage(url: string | undefined, input: { maxBytes: number; signal: AbortSignal; apiKey: string }): Promise<GeneratedCompatibleImage> {
+async function downloadImage(url: string | undefined, input: { baseURL: string; maxBytes: number; signal: AbortSignal; apiKey: string }): Promise<GeneratedCompatibleImage> {
   if (url === undefined) throw new Error('seedream image editing returned no image data')
-  const response = await guardedFetch('seedream image download', input.signal, () => fetch(url, { redirect: 'follow', signal: input.signal }), input.apiKey)
-  if (!response.ok) throw new Error(`seedream image download failed (${response.status})`)
+  const response = await guardedFetch('seedream image download', input.signal, () => fetchProviderImage(url, { baseURL: input.baseURL, signal: input.signal }), input.apiKey)
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined)
+    throw new Error(`seedream image download failed (${response.status})`)
+  }
   const mediaType = imageMediaType(response.headers.get('content-type'))
-  if (mediaType === undefined) throw new Error('seedream image download returned unsupported content type')
+  if (mediaType === undefined) {
+    await response.body?.cancel().catch(() => undefined)
+    throw new Error('seedream image download returned unsupported content type')
+  }
   return { data: await readBoundedBytes(response, input.maxBytes), mediaType }
 }
 
@@ -108,7 +115,7 @@ async function readBoundedText(response: Response, maxBytes: number): Promise<st
 async function readBoundedBytes(response: Response, maxBytes: number): Promise<Uint8Array> {
   if (response.body === null) return new Uint8Array()
   const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let bytes = 0
-  try { for (;;) { const next = await readResponseBody(response, () => reader.read()); if (next.done) break; bytes += next.value.byteLength; if (bytes > maxBytes) throw new Error(`Image response exceeded the ${String(maxBytes)} byte limit`); chunks.push(next.value) } } finally { reader.releaseLock() }
+  try { for (;;) { const next = await readResponseBody(response, () => reader.read()); if (next.done) break; bytes += next.value.byteLength; if (bytes > maxBytes) throw new Error(`Image response exceeded the ${String(maxBytes)} byte limit`); chunks.push(next.value) } } catch (error) { await reader.cancel().catch(() => undefined); throw error } finally { reader.releaseLock() }
   const joined = new Uint8Array(bytes); let offset = 0
   for (const chunk of chunks) { joined.set(chunk, offset); offset += chunk.byteLength }
   return joined
