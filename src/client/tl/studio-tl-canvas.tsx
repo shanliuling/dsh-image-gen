@@ -16,7 +16,7 @@ import { CANVAS_MAX_PROMPT_CHARS } from '../../shared.js'
 import { applyBrandTheme, syncTldrawThemeWithHost } from './tl-brand-theme.js'
 import { startCanvasSync, type CanvasSyncStatus } from './canvas-sync.js'
 import { clearTlLandings, getTlLandingGeneration, registerTlLandingConsumer, type TlLandingItem } from './tl-canvas-bridge.js'
-import { readGalleryImageDrop } from './gallery-image-transfer.js'
+import { GALLERY_IMAGE_MIME, readGalleryImageDrop } from './gallery-image-transfer.js'
 
 /**
  * Infinite canvas surface for the Studio workbench, backed by tldraw.
@@ -310,7 +310,14 @@ export const StudioTlCanvas: FC<{ lang?: 'zh' | 'en' }> = memo(function StudioTl
         : '选区同步失败'
 
   return (
-    <div className="dsh-ig-tl-canvas" onDropCapture={event => {
+    <div className="dsh-ig-tl-canvas" onDragOverCapture={event => {
+      // Drag-over runs in protected mode: inspect types, not getData().
+      // A cold internal drag has no Files payload for tldraw's handler.
+      if (!editorRef.current || !event.dataTransfer.types.includes(GALLERY_IMAGE_MIME)) return
+      event.preventDefault()
+      event.stopPropagation()
+      event.dataTransfer.dropEffect = 'copy'
+    }} onDropCapture={event => {
       const item = readGalleryImageDrop(event.dataTransfer)
       const editor = editorRef.current
       if (!item || !editor) return

@@ -10,26 +10,34 @@ export function galleryLanding(item: GalleryItem): TlLandingItem {
   return { galleryId: item.id, attachment: item.attachment, prompt: item.prompt.slice(0, CANVAS_MAX_PROMPT_CHARS), provider: item.provider, model: item.model }
 }
 
-/** A real file also works when the host drops custom MIME data between containers. */
+/** Internal drops resolve the attachment after landing; loaded blobs also support file drag-out. */
 export function startGalleryImageDrag(event: DragStart, item: GalleryItem, blob: Blob | null | undefined): boolean {
   const transfer = event.dataTransfer
   const mediaType = blob?.type || item.attachment.mediaType
   const extension = EXTENSIONS.get(mediaType)
-  if (!transfer || !blob?.size || !extension) { event.preventDefault(); return false }
+  if (!transfer || !extension) { event.preventDefault(); return false }
   try {
-    const name = item.id.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 100) || 'image'
-    const file = new File([blob], `${name}.${extension}`, { type: mediaType })
     // Remove the browser's URL-only payload (and any native file) before adding ours.
     transfer.items.clear()
-    if (transfer.items.add(file) === null) throw new Error('Drag file unavailable')
     transfer.effectAllowed = 'copy'
-    // A host may reject custom MIME while still accepting the actual file.
-    try { transfer.setData(GALLERY_IMAGE_MIME, JSON.stringify(galleryLanding(item))) } catch { /* File fallback. */ }
-    return true
-  } catch {
-    event.preventDefault()
-    return false
-  }
+    let supported = false
+    if (blob?.size) {
+      try {
+        const name = item.id.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 100) || 'image'
+        const file = new File([blob], `${name}.${extension}`, { type: mediaType })
+        supported = transfer.items.add(file) !== null
+      } catch { /* The internal reference can still work when files are rejected. */ }
+    }
+    // Starting an internal drag must not wait for hover-prefetched originals.
+    // Keep these independent: a host may accept only files or only custom MIME.
+    try {
+      transfer.setData(GALLERY_IMAGE_MIME, JSON.stringify(galleryLanding(item)))
+      supported = true
+    } catch { /* File fallback when an original is already available. */ }
+    if (supported) return true
+  } catch { /* An unavailable transfer store cannot start a drag. */ }
+  event.preventDefault()
+  return false
 }
 
 export function readGalleryImageDrop(transfer: Pick<DataTransfer, 'getData'>): TlLandingItem | undefined {

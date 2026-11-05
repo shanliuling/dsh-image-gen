@@ -207,7 +207,7 @@ export const GalleryCard = memo(function GalleryCard({
               if (thumbAttempt === 0) setThumbAttempt(1)
               else setThumbFailed(true)
             }}
-            draggable={!isManageMode && Boolean(blob?.size)}
+            draggable={!isManageMode}
             onDragStart={event => {
               if (isManageMode) event.preventDefault()
               else startGalleryImageDrag(event, item, blob)

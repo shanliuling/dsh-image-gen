@@ -126,7 +126,7 @@ export const RecentItem = memo(function RecentItem({ item, active, mode, lang, a
         className="dsh-ig-recent-select"
         onClick={() => { if (mode === 'favorite') actions.favorite(item); else actions.select(item) }}
         title={item.prompt}
-        draggable={Boolean(image.blob?.size)}
+        draggable
         onDragStart={event => { startGalleryImageDrag(event, item, image.blob) }}
       >
         <div className="dsh-ig-recent-thumb">
@@ -142,7 +142,7 @@ export const RecentItem = memo(function RecentItem({ item, active, mode, lang, a
             : <ImagePlus size={18} />}
         </div>
       </button>
-      <GalleryCanvasButton item={item} lang={lang} disabled={!image.blob?.size} className="dsh-ig-recent-send" onToast={actions.toast} />
+      <GalleryCanvasButton item={item} lang={lang} className="dsh-ig-recent-send" onToast={actions.toast} />
     </div>
   )
 })
