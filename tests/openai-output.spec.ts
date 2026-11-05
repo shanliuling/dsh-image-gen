@@ -1,3 +1,4 @@
+import './fixtures/mock-public-image-download.js'
 import { describe, expect, it } from 'vitest'
 import { compatQualityOptions, compatRequestQuality, compatWatermarkField, officialQualityOptions, officialSizeTable, PROVIDER_DEFAULT_QUALITY, validateOfficialSize } from '../src/openai-output.js'
 import { parseExtraFields, parseSizeTable } from '../src/client/output-settings.js'

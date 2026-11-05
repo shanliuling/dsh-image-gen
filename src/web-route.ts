@@ -7,7 +7,11 @@ export function withWebAdmission(route: WebRoute, admission: () => WebAdmission 
   return {
     ...route,
     handler: (req, res) => {
-      const rejection = admission()?.(req)
+      let rejection: number | undefined
+      try {
+        const check = admission()
+        rejection = typeof check === 'function' ? check(req) : 503
+      } catch { rejection = 503 }
       if (rejection === undefined) return route.handler(req, res)
       res.writeHead(rejection, { 'content-type': 'application/json; charset=utf-8' })
       res.end(JSON.stringify({ error: rejection === 401 ? 'unauthorized' : 'forbidden' }))

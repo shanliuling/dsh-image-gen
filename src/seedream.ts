@@ -1,3 +1,4 @@
+import { downloadPublicImage } from './public-image-download.js'
 /** Volcengine Ark Seedream image-editing adapter. */
 import type { ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import type { GeneratedCompatibleImage } from './openai-compatible.js'
@@ -83,11 +84,10 @@ function firstImage(value: unknown): { b64_json?: string; url?: string; mime_typ
 
 async function downloadImage(url: string | undefined, input: { maxBytes: number; signal: AbortSignal; apiKey: string }): Promise<GeneratedCompatibleImage> {
   if (url === undefined) throw new Error('seedream image editing returned no image data')
-  const response = await guardedFetch('seedream image download', input.signal, () => fetch(url, { redirect: 'follow', signal: input.signal }), input.apiKey)
-  if (!response.ok) throw new Error(`seedream image download failed (${response.status})`)
-  const mediaType = imageMediaType(response.headers.get('content-type'))
+  const { data, contentType } = await downloadPublicImage(url, input)
+  const mediaType = imageMediaType(contentType)
   if (mediaType === undefined) throw new Error('seedream image download returned unsupported content type')
-  return { data: await readBoundedBytes(response, input.maxBytes), mediaType }
+  return { data, mediaType }
 }
 
 function decodeBase64(value: string): Uint8Array {
