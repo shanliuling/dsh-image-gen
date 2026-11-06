@@ -389,6 +389,12 @@ export function useGifSpeed(player: GifPlayer | undefined): GifSpeed | undefined
   return useSyncExternalStore(player?.subscribe ?? noSubscription, speed, speed)
 }
 
+/** The frame on screen for a view that follows it; while not enabled it reads 0, so the card is not re-rendered on every frame. */
+export function useGifIndex(player: GifPlayer | undefined, enabled: boolean): number {
+  const index = () => enabled ? player?.getSnapshot().index ?? 0 : 0
+  return useSyncExternalStore(player?.subscribe ?? noSubscription, index, () => 0)
+}
+
 function useGifSnapshot(player: GifPlayer): GifPlayerSnapshot {
   return useSyncExternalStore(player.subscribe, player.getSnapshot, player.getSnapshot)
 }

@@ -106,9 +106,44 @@ export const PLUGIN_STYLE = `
 .dsh-ig-gif-block .dsh-ig-toast{white-space:normal;max-width:220px}
 .dsh-ig-gif-scrub{flex:1;min-width:48px;margin:0;accent-color:var(--dsw-alias-brand-primary,#4c78ff);cursor:pointer}
 .dsh-ig-gif-counter{flex:none;min-width:34px;text-align:center;font-variant-numeric:tabular-nums}
-.dsh-ig-gif-speed{display:inline-flex;flex:none;gap:2px;padding:2px;border-radius:6px;background:var(--dsw-alias-bg-layer-2,rgba(0,0,0,0.05))}
-.dsh-ig-gif-speed button{appearance:none;border:0;background:transparent;color:inherit;padding:3px 6px;border-radius:4px;font-size:11px;cursor:pointer;font-variant-numeric:tabular-nums}
-.dsh-ig-gif-speed button[aria-pressed="true"]{background:var(--dsw-alias-bg-layer-3,#fff);color:var(--dsw-alias-brand-primary,#4c78ff);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,0.12)}
+.dsh-ig-gif-speed,.dsh-ig-gif-view{display:inline-flex;flex:none;gap:2px;padding:2px;border-radius:6px;background:var(--dsw-alias-bg-layer-2,rgba(0,0,0,0.05))}
+.dsh-ig-gif-speed button,.dsh-ig-gif-view button{appearance:none;border:0;background:transparent;color:inherit;padding:3px 6px;border-radius:4px;font-size:11px;cursor:pointer;font-variant-numeric:tabular-nums}
+.dsh-ig-gif-speed button[aria-pressed="true"],.dsh-ig-gif-view button[aria-pressed="true"]{background:var(--dsw-alias-bg-layer-3,#fff);color:var(--dsw-alias-brand-primary,#4c78ff);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,0.12)}
+.dsh-ig-tool-btn:disabled{opacity:.45;cursor:default}
+.dsh-ig-tool-btn:disabled:hover{background:transparent}
+.dsh-ig-gif-editing{overflow:visible}
+.dsh-ig-gif-editing .dsh-ig-regenerate-overlay{z-index:6}
+.dsh-ig-gif-edit-stage-hidden{position:absolute;inset:0;opacity:0;pointer-events:none}
+.dsh-ig-gif-edit-layer{position:absolute;inset:0;cursor:crosshair;z-index:3}
+.dsh-ig-gif-sheet{display:block;max-width:100%;max-height:520px;height:auto;border-radius:12px;background:#fff}
+.dsh-ig-gif-sheet-cell{position:absolute;box-sizing:border-box;outline:1px solid rgba(255,255,255,0.65);outline-offset:-1px;cursor:crosshair;z-index:3}
+.dsh-ig-gif-sheet-cell.is-current{outline:2px solid var(--dsw-alias-brand-primary,#4c78ff);outline-offset:-2px}
+.dsh-ig-gif-sheet-cell.is-blank{cursor:default;background:rgba(0,0,0,0.04)}
+.dsh-ig-gif-edit-layer:focus-visible,.dsh-ig-gif-sheet-cell:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#4c78ff);outline-offset:-2px}
+.dsh-ig-gif-sheet-cell span{position:absolute;left:4px;top:4px;padding:2px 4px;border-radius:4px;background:rgba(0,0,0,0.55);color:#fff;font-size:10px;line-height:1;pointer-events:none}
+.dsh-ig-gif-pin{position:absolute;z-index:4;width:22px;height:22px;margin:-11px 0 0 -11px;padding:0;border:2px solid #fff;border-radius:50%;background:var(--dsw-alias-brand-primary,#4c78ff);color:#fff;font-size:11px;font-weight:600;line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,0.4)}
+.dsh-ig-gif-pin.is-other-frame{opacity:.45}
+.dsh-ig-gif-pin.is-active,.dsh-ig-gif-pin.is-draft{box-shadow:0 0 0 3px rgba(76,120,255,0.35),0 1px 3px rgba(0,0,0,0.4)}
+.dsh-ig-gif-pin.is-draft{background:#fff;color:var(--dsw-alias-brand-primary,#4c78ff);border-color:var(--dsw-alias-brand-primary,#4c78ff)}
+.dsh-ig-gif-comment-pop{position:absolute;z-index:5;width:220px;max-width:calc(100% - 16px);box-sizing:border-box;padding:8px;border:1px solid var(--dsw-alias-border-l2,#dfe3ea);border-radius:10px;background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-primary,#172033);box-shadow:0 8px 24px rgba(11,17,29,0.22);display:grid;gap:6px;line-height:1.4;font-size:12px;transform:translate(12px,12px)}
+.dsh-ig-gif-comment-pop.is-left{transform:translate(calc(-100% - 12px),12px)}
+.dsh-ig-gif-comment-pop.is-up{transform:translate(12px,calc(-100% - 12px))}
+.dsh-ig-gif-comment-pop.is-left.is-up{transform:translate(calc(-100% - 12px),calc(-100% - 12px))}
+.dsh-ig-gif-comment-pop textarea{box-sizing:border-box;width:100%;resize:none;border:1px solid var(--dsw-alias-border-l2,#d7dce5);border-radius:7px;padding:6px 8px;background:var(--dsw-alias-bg-layer-2,#fff);color:inherit;font:inherit;font-size:12px;line-height:1.45;outline:none}
+.dsh-ig-gif-comment-pop textarea:focus{border-color:var(--dsw-alias-brand-primary,#4c78ff);box-shadow:0 0 0 3px rgba(76,120,255,.12)}
+.dsh-ig-gif-comment-pop-actions{display:flex;justify-content:flex-end;gap:6px}
+.dsh-ig-gif-edit{display:grid;gap:8px;line-height:1.4}
+.dsh-ig-gif-edit-hint{margin:0;font-size:12px;line-height:1.45;color:var(--dsw-alias-label-tertiary,#737d8f)}
+.dsh-ig-gif-edit-notice,.dsh-ig-gif-edit-error{display:grid;gap:6px;justify-items:start;padding:8px 10px;border-radius:8px;font-size:12px;line-height:1.45;white-space:pre-wrap;word-break:break-word}
+.dsh-ig-gif-edit-notice{background:var(--dsw-alias-bg-layer-2,rgba(0,0,0,0.05));color:var(--dsw-alias-label-secondary,inherit)}
+.dsh-ig-gif-edit-error{background:rgba(239,68,68,0.08);color:var(--dsw-alias-label-error,#d33)}
+.dsh-ig-gif-edit-bar{display:flex;align-items:center;flex-wrap:wrap;gap:6px;font-size:12px;line-height:1;color:var(--dsw-alias-label-secondary,inherit)}
+.dsh-ig-gif-edit-counter{flex:1;min-width:0;font-variant-numeric:tabular-nums}
+.dsh-ig-gif-edit-btn,.dsh-ig-gif-edit-send{appearance:none;height:26px;padding:0 10px;border-radius:6px;font:inherit;font-size:12px;font-weight:550;line-height:1;cursor:pointer;flex:none}
+.dsh-ig-gif-edit-btn{border:1px solid var(--dsw-alias-border-l2,#d7dce5);background:transparent;color:inherit}
+.dsh-ig-gif-edit-btn:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2,rgba(0,0,0,0.06))}
+.dsh-ig-gif-edit-send{border:1px solid var(--dsw-alias-brand-primary,#3569ed);background:var(--dsw-alias-brand-primary,#3569ed);color:#fff}
+.dsh-ig-gif-edit-btn:disabled,.dsh-ig-gif-edit-send:disabled{opacity:.5;cursor:default}
 .dsh-ig-version-nav{position:absolute;right:8px;bottom:8px;display:flex;align-items:center;gap:2px;padding:3px;border-radius:999px;background:rgba(15,23,42,.72);color:#fff;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);font-size:11px;line-height:1;z-index:2}
 .dsh-ig-version-nav button{appearance:none;border:0;background:transparent;color:inherit;width:25px;height:25px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;font-size:17px;line-height:1}
 .dsh-ig-version-nav button:hover:not(:disabled){background:rgba(255,255,255,.2)}

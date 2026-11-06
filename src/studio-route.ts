@@ -140,6 +140,8 @@ export function parseStudioGenerateRequest(value: unknown): StudioGenerateReques
   const references = rawReferences.map(parseReference)
   if (input.mode === 'edit' && references.length === 0) throw new Error('图生图需要至少一张参考图')
   if (references.length > 5) throw new Error('最多支持上传 5 张参考图')
+  // A GIF edit's reference is the frame sheet; several references plus GIF output have no defined meaning.
+  if (input.mode === 'edit' && output !== undefined && references.length > 1) throw new Error('动图修改只接受一张参考拼图')
   const workspaceRoot = typeof input.workspaceRoot === 'string' && input.workspaceRoot.trim().length > 0
     ? input.workspaceRoot.trim()
     : undefined
