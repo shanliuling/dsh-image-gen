@@ -217,6 +217,7 @@ Sketch on an infinite canvas, lay out references, circle what should change, the
 - Use natural language for text-to-image, image-to-image, multi-image reference, and style transfer.
 - **Identity consistency**: when you ask to keep a person, character, or object the same, the plugin tells the model to reuse the subject from the references and change only the scene, clothing, pose, or style, rather than drawing a similar-looking replacement.
 - Edit the original prompt to regenerate, then switch between revisions on the same image card.
+- When a result is a GIF, the chat card and the enlarged view play it: pause, step through frames, switch between 0.5× / 1× / 2×, download the GIF at the chosen speed, copy or download a single frame, or drag the GIF file straight out of the card. Regenerating keeps it a GIF; downloading or dragging from the Gallery gives you the original GIF as well (the clipboard only takes still images, so copying gives the first frame).
 
 <br />
 
@@ -353,6 +354,7 @@ Bring private image generation on your local GPU directly into Agent conversatio
 - **Provider image downloads:** Downloads use the host's existing network and proxy configuration without additional Fake-IP, private-address or loopback blocking. Complete SSRF target restrictions are not currently provided.
 - **Local ComfyUI:** Requests are sent to the configured ComfyUI address.
 - **Workspace files:** When workspace saving is enabled, chat results are written to disk; Studio saves only the candidates you select.
+- **GIF originals:** The original file of an animated result is also kept in the raw-image vault (`vaultEnabled` turns it off) so the card can play and export it; it is removed together with the gallery entry.
 - **Gallery and favorites:** Gallery metadata and favorite state are stored in the current browser's local storage.
 - **Deleted records:** Normal deletion retains a small image ID marker, including after 30 days, so reopening an old conversation does not silently restore the image to the gallery.
 - **Inspiration cache:** Example metadata ships with the plugin. Images load on demand and are cached locally, and the cache can be cleared at any time.

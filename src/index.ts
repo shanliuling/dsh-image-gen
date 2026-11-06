@@ -22,8 +22,8 @@ import { serveZip } from './zip-route.js'
 import { serveZipCancel, serveZipProgress } from './zip-progress.js'
 import { serveStorageStats } from './storage-stats.js'
 import { serveVault, serveVaultDelete, serveVaultRefs } from './vault-route.js'
-import { readOriginal, resolveVaultPath } from './vault-store.js'
-import { saveImportedOriginal } from './vault-registry.js'
+import { readOriginal, vaultConfigOf, type SavedOriginal } from './vault-store.js'
+import { keepGifOriginal, saveImportedOriginal } from './vault-registry.js'
 import { servePreview, serveThumb } from './thumb-route.js'
 import { durableAttachmentsRoot, pruneRequestImageCache, resolveRequestImageCacheDir } from './request-cache.js'
 import { editOpenAICompatibleImage, generateOpenAICompatibleImage } from './openai-compatible.js'
@@ -41,7 +41,7 @@ import { SETTINGS_HEALTH_ROUTE, type SettingsHealth } from './shared.js'
 import { deleteImageFromWorkspace, getDshWorkspaceRoots, getDshWorkspacesFull, saveImageToWorkspace } from './workspace-save.js'
 import { xaiToolParameters } from './xai-params.js'
 import { compatRequestQuality, gifRequestFields, officialQualityOptions, validateGifFrameSize, validateOfficialSize } from './openai-output.js'
-import { readGifInfo } from './gif-info.js'
+import { gifFrameDurationMs, readGifInfo } from './gif-info.js'
 import { imageToolContext } from './image-tool-context.js'
 import { withWebAdmission, type WebAdmission } from './web-route.js'
 
@@ -68,6 +68,8 @@ interface GeneratedValue {
   seed?: number
   /** Frame facts read from an animated GIF result; absent for still images. */
   animation?: { frames: number; frameDurationMs: number; durationMs: number }
+  /** Raw GIF bytes kept in the vault when the attachment layer normalized the animation away. */
+  original?: SavedOriginal
 }
 
 /** Capped prompt hits for the find_inspiration tool; `total` counts all matches. */
@@ -120,6 +122,8 @@ const editGifToolParameters = {
 
 /** Output schema node for GeneratedValue.animation; every object node must state additionalProperties. */
 const animationSchema = { type: 'object', additionalProperties: false, properties: { frames: { type: 'integer', required: true }, frameDurationMs: { type: 'integer', required: true }, durationMs: { type: 'integer', required: true } } } as const
+/** Output schema node for GeneratedValue.original, the same shape the gallery stores for imports. */
+const originalSchema = { type: 'object', additionalProperties: false, properties: { key: { type: 'string', required: true }, bytes: { type: 'integer', required: true }, mediaType: { type: 'string', required: true } } } as const
 
 /** Ordered per-item outcomes for the generate_images batch tool. */
 interface BatchGeneratedValue {
@@ -190,16 +194,8 @@ export function apply(ctx: Context, config: Config = {}): void {
     } catch { /* Keep the last credential-free snapshot when status reads fail. */ }
   }
 
-  // Raw-image vault: off by default only when explicitly disabled; paths and
-  // caps are re-read on every call so settings changes apply without a restart.
-  const vaultConfig = () => {
-    const config = current()
-    return {
-      enabled: config.vaultEnabled !== false,
-      // Relative overrides stay below the DSH home instead of the process cwd.
-      dir: resolveVaultPath(config.vaultDir ?? ''),
-    }
-  }
+  // Raw-image vault: re-read on every call so settings changes apply without a restart.
+  const vaultConfig = () => vaultConfigOf(current())
 
   const settingsHealth = installImageSettings(ctx, current(), {
     setSource: source => { current = () => migrateOpenAICompatConfig(plainConfig(source())) },
@@ -557,7 +553,7 @@ export function apply(ctx: Context, config: Config = {}): void {
             attachment: { type: 'object', required: true, additionalProperties: false, properties: {
               attachmentId: { type: 'string', required: true }, mediaType: { type: 'string', required: true }, bytes: { type: 'integer', required: true }, width: { type: 'integer', required: true }, height: { type: 'integer', required: true }, name: { type: 'string' }, originalDimensions: { type: 'object', additionalProperties: false, properties: { width: { type: 'integer', required: true }, height: { type: 'integer', required: true } } },
             } },
-            provider: { type: 'string', required: true }, channel: { type: 'string' }, model: { type: 'string', required: true }, output: { type: 'string', required: true }, savedTo: { type: 'string' }, saveError: { type: 'string' }, seed: { type: 'integer' }, animation: animationSchema, prompt: { type: 'string', required: true },
+            provider: { type: 'string', required: true }, channel: { type: 'string' }, model: { type: 'string', required: true }, output: { type: 'string', required: true }, savedTo: { type: 'string' }, saveError: { type: 'string' }, seed: { type: 'integer' }, animation: animationSchema, original: originalSchema, prompt: { type: 'string', required: true },
           } } },
           failures: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
             index: { type: 'integer', required: true }, prompt: { type: 'string', required: true }, error: { type: 'string', required: true },
@@ -786,7 +782,7 @@ function imageOutput(verb: 'Generated' | 'Edited') {
         attachment: { type: 'object', required: true, additionalProperties: false, properties: {
           attachmentId: { type: 'string', required: true }, mediaType: { type: 'string', required: true }, bytes: { type: 'integer', required: true }, width: { type: 'integer', required: true }, height: { type: 'integer', required: true }, name: { type: 'string' }, originalDimensions: { type: 'object', additionalProperties: false, properties: { width: { type: 'integer', required: true }, height: { type: 'integer', required: true } } },
         } },
-        provider: { type: 'string', required: true }, channel: { type: 'string' }, model: { type: 'string', required: true }, output: { type: 'string', required: true }, savedTo: { type: 'string' }, saveError: { type: 'string' }, seed: { type: 'integer' }, animation: animationSchema,
+        provider: { type: 'string', required: true }, channel: { type: 'string' }, model: { type: 'string', required: true }, output: { type: 'string', required: true }, savedTo: { type: 'string' }, saveError: { type: 'string' }, seed: { type: 'integer' }, animation: animationSchema, original: originalSchema,
       },
     },
     render: (args: unknown, value: GeneratedValue) => {
@@ -805,6 +801,7 @@ function imageOutput(verb: 'Generated' | 'Edited') {
       ...(verb === 'Edited' ? { operation: 'edit' } : {}),
       ...(typeof value.savedTo === 'string' ? { savedTo: value.savedTo } : {}),
       ...(typeof value.seed === 'number' ? { seed: value.seed } : {}),
+      ...(value.original === undefined ? {} : { original: { key: value.original.key, bytes: value.original.bytes, mediaType: value.original.mediaType } }),
       prompt: (args as { prompt: string }).prompt,
     }),
   } as const
@@ -824,8 +821,15 @@ function animationNotes(args: unknown, value: GeneratedValue): string {
   }
   let notes = ` The image is an animated GIF: ${String(animation.frames)} frames × ${String(animation.frameDurationMs)} ms (${String(animation.durationMs / 1000)}s loop). It is complete; do not regenerate or redraw individual frames unless the user asks.`
   if (value.attachment.mediaType !== 'image/gif') notes += ' The attached preview shows only its first frame.'
+  // The card plays the raw GIF from the vault, or the attachment itself when
+  // the host kept it animated; embedding the file as well would show the same
+  // animation twice. A run_code result has no presentation meta, so its card
+  // cannot reach the vault copy and the embed stays the way to show it there.
   // Forward slashes keep a Windows path intact inside a Markdown link target.
-  if (typeof value.savedTo === 'string') notes += ` To show the animation, embed the saved file in your reply with Markdown: ![animated GIF](<${value.savedTo.replace(/\\/g, '/')}>)`
+  const embed = typeof value.savedTo === 'string' ? `![animated GIF](<${value.savedTo.replace(/\\/g, '/')}>)` : undefined
+  if (value.attachment.mediaType === 'image/gif' || (value.original !== undefined && embed === undefined)) notes += ' The result card in the conversation plays the animation; do not embed the file unless the user asks.'
+  else if (value.original !== undefined) notes += ` The result card plays the animation when this tool is called directly; do not embed the file then. A run_code call shows no animated card: embed the saved file with Markdown: ${embed}`
+  else if (embed !== undefined) notes += ` To show the animation, embed the saved file in your reply with Markdown: ${embed}`
   const mismatches: string[] = []
   if (typeof requested.frame_count === 'number' && requested.frame_count !== animation.frames) mismatches.push(`Requested ${String(requested.frame_count)} frames but received ${String(animation.frames)}`)
   // GIF delays are stored in 10 ms ticks and the provider rounds to them, so
@@ -840,11 +844,7 @@ function animationOf(generated: { data: Uint8Array; mediaType: ImageAttachmentRe
   if (generated.mediaType !== 'image/gif') return undefined
   const info = readGifInfo(generated.data)
   if (info === undefined || info.frames < 2) return undefined
-  const counts = new Map<number, number>()
-  for (const delay of info.delaysMs) counts.set(delay, (counts.get(delay) ?? 0) + 1)
-  let frameDurationMs = info.delaysMs[0] ?? 0
-  for (const [delay, count] of counts) if (count > (counts.get(frameDurationMs) ?? 0)) frameDurationMs = delay
-  return { frames: info.frames, frameDurationMs, durationMs: info.delaysMs.reduce((sum, delay) => sum + delay, 0) }
+  return { frames: info.frames, frameDurationMs: gifFrameDurationMs(info.delaysMs), durationMs: info.delaysMs.reduce((sum, delay) => sum + delay, 0) }
 }
 
 function attachmentMeta(ref: ImageAttachmentRef) {
@@ -868,10 +868,14 @@ async function saveGenerated(
   if (!ctx.attachments.imageLimits.mediaTypes.includes(generated.mediaType)) throw new Error(`This DSH deployment does not accept ${generated.mediaType} generated images`)
   const attachment = await ctx.attachments.saveImage({ data: generated.data, mediaType: generated.mediaType, name: 'generated-image' })
   const animation = animationOf(generated)
+  // Kept before the workspace step so a result without a file (or a disabled
+  // workspace) still carries the animation the card plays.
+  const original = await keepGifOriginal(vaultConfigOf(config), generated, attachment, message => { ctx.logger.warn(message) })
   const value: GeneratedValue = {
     attachment, provider, model, output,
     ...(typeof generated.seed === 'number' ? { seed: generated.seed } : {}),
     ...(animation === undefined ? {} : { animation }),
+    ...(original === undefined ? {} : { original }),
   }
   if (config.saveToWorkspace === false) return value
   const workspaceRoot = exec.agent?.session.header.cwd

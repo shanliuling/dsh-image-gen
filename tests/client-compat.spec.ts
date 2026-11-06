@@ -129,6 +129,19 @@ describe('DSH client compatibility', () => {
     expect(promoted).not.toContain('<section')
   })
 
+  it('renders a GIF result with its badge and without a canvas outside a browser', () => {
+    const results = [{
+      attachment: { attachmentId: 'sha256:gif', mediaType: 'image/webp', bytes: 12, width: 32, height: 24 },
+      prompt: 'a waving cat', provider: 'openai-compat', model: 'relay', output: 'auto',
+      original: { key: 'a'.repeat(64), bytes: 500, mediaType: 'image/gif' },
+    }]
+    const markup = renderToStaticMarkup(createElement(plugin.PromotedImageResultNode, { node: { data: { results } } } as never))
+    expect(markup).toContain('dsh-ig-gif-badge')
+    expect(markup).not.toContain('<canvas')
+    const still = renderToStaticMarkup(createElement(plugin.PromotedImageResultNode, { node: { data: { results: [{ ...results[0], original: undefined }] } } } as never))
+    expect(still).not.toContain('dsh-ig-gif-badge')
+  })
+
   it('shows a completed batch failure instead of an endless image loader', () => {
     const block = { kind: 'tool-result', content: [{ type: 'text', text: 'Generated 0 of 1 images. failed: quota' }] }
     const rendered = renderToStaticMarkup(createElement(plugin.GeneratedImagesCard, { block, promoted: true } as never))

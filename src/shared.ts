@@ -40,7 +40,10 @@ export function previewUrlFor(ref: ImageAttachmentRef): string {
   return PREVIEW_ROUTE + '?ref=' + encodeImageRef(ref)
 }
 
-/** Content-addressed raw copy, served when the attachment layer normalized the import. */
+/** Content-addressed vault key: the sha256 of the original bytes, validated on both faces. */
+export const VAULT_KEY_PATTERN = /^[a-f0-9]{64}$/
+
+/** Content-addressed raw copy, served when the attachment layer normalized an import or a generated GIF. */
 export function vaultUrlFor(key: string, mediaType?: string): string {
   const base = VAULT_ROUTE + '?key=' + encodeURIComponent(key)
   return mediaType === undefined ? base : base + '&mediaType=' + encodeURIComponent(mediaType)
@@ -511,6 +514,15 @@ export interface StudioAttachmentReference {
 
 export type StudioReference = StudioEncodedReference | StudioAttachmentReference
 
+/** Animated output for OpenAI-shaped providers; the frame ranges follow the GIF_FRAME_* constants. */
+export interface GifOutputRequest {
+  format: 'gif'
+  frameCount?: number
+  frameDurationMs?: number
+  /** Single-frame size (`WIDTHxHEIGHT`); absent leaves it to the provider, never to the still-image table. */
+  size?: string
+}
+
 /** One browser workbench generation or editing request. */
 export interface StudioGenerateRequest {
   mode: 'generate' | 'edit'
@@ -524,6 +536,8 @@ export interface StudioGenerateRequest {
   resolution?: string
   generationQuality?: string
   watermark?: StudioWatermark
+  /** Animated output; absent keeps the still-image request unchanged. */
+  output?: GifOutputRequest
   reference?: StudioReference
   references?: StudioReference[]
   count?: number | undefined
@@ -535,6 +549,8 @@ export interface StudioGeneratedItem {
   attachment: ImageAttachmentRef
   output: string
   savedTo?: string | undefined
+  /** Raw bytes kept in the vault when the attachment layer normalized an animated result. */
+  original?: { key: string; bytes: number; mediaType: ImageMediaType } | undefined
 }
 
 /** One completed workbench request. */

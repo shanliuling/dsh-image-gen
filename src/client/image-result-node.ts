@@ -1,5 +1,6 @@
 /** Modern DSH conversation node that keeps image artifacts outside Tool process folding. */
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
+import { VAULT_KEY_PATTERN } from '../shared.js'
 
 export const IMAGE_RESULT_NODE_KIND = 'dsh-image-result'
 
@@ -15,6 +16,8 @@ export interface ImageResultPresentation {
   readonly seed?: number
   /** Attachment ids of the edit sources when this image came from edit_image; used to rebuild canvas edit chains. */
   readonly sourceAttachmentIds?: readonly string[]
+  /** Raw bytes in the vault when the attachment is a normalized copy; today only an animated GIF. */
+  readonly original?: { readonly key: string; readonly bytes: number; readonly mediaType: ImageMediaType }
 }
 
 interface ImageResultState {
@@ -147,6 +150,7 @@ export function imageResultFromMeta(value: unknown): ImageResultPresentation | u
   if (meta?.kind !== 'dsh-image-gen') return undefined
   const attachment = imageAttachment(meta.attachment)
   if (attachment === undefined) return undefined
+  const original = originalFromMeta(meta.original)
   return {
     attachment,
     prompt: stringValue(meta.prompt, 'Generated Image'),
@@ -156,6 +160,7 @@ export function imageResultFromMeta(value: unknown): ImageResultPresentation | u
     output: stringValue(meta.output, ''),
     ...(typeof meta.savedTo === 'string' ? { savedTo: meta.savedTo } : {}),
     ...(typeof meta.seed === 'number' ? { seed: meta.seed } : {}),
+    ...(original === undefined ? {} : { original }),
   }
 }
 
@@ -281,6 +286,16 @@ function positiveInteger(value: unknown): value is number {
 
 function stringValue(value: unknown, fallback: string): string {
   return typeof value === 'string' ? value : fallback
+}
+
+/** Parse a vault reference; anything malformed drops the reference, never the image that carries it. */
+export function originalFromMeta(value: unknown): ImageResultPresentation['original'] {
+  const candidate = record(value)
+  if (candidate === undefined
+    || typeof candidate.key !== 'string' || !VAULT_KEY_PATTERN.test(candidate.key)
+    || !positiveInteger(candidate.bytes)
+    || !isImageMediaType(candidate.mediaType)) return undefined
+  return { key: candidate.key, bytes: candidate.bytes, mediaType: candidate.mediaType }
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {

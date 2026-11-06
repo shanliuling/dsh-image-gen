@@ -2,8 +2,13 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
+import { mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { apply } from '../src/index.js'
+import { gifBytes } from './gif-fixture.js'
 import { THUMB_ROUTE, VAULT_DELETE_ROUTE, VAULT_REFS_ROUTE, ZIP_ROUTE } from '../src/shared.js'
 import { createImageResultDefinition } from '../src/client/image-result-node.js'
 
@@ -809,12 +814,6 @@ describe('image tool registration', () => {
 })
 
 describe('GIF output through the conversation tools', () => {
-  /** GIF89a with the given number of identical 100 ms frames, small enough to inline; the reader walks it, nothing decodes it. */
-  const gifBytes = (frames: number) => Uint8Array.from([
-    0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x10, 0x00, 0x08, 0x00, 0x80, 0x00, 0x00, 0, 0, 0, 255, 255, 255,
-    ...Array.from({ length: frames }, () => [0x21, 0xf9, 0x04, 0x00, 0x0a, 0x00, 0x00, 0x00, 0x2c, 0, 0, 0, 0, 0x10, 0x00, 0x08, 0x00, 0x00, 0x02, 0x02, 0x44, 0x01, 0x00]).flat(),
-    0x3b,
-  ])
   const gifResponse = (frames = 2) => new Response(JSON.stringify({ data: [{ b64_json: Buffer.from(gifBytes(frames)).toString('base64') }] }), { headers: { 'content-type': 'application/json' } })
   const pngResponse = () => new Response(JSON.stringify({ data: [{ b64_json: 'iVBORw0KGgo=' }] }), { headers: { 'content-type': 'application/json' } })
   const exec = () => ({ signal: new AbortController().signal }) as never
@@ -952,10 +951,12 @@ describe('GIF output through the conversation tools', () => {
     const unsaved = renderText(tools, 'generate_image', { prompt: 'wave' }, gifValue())
     expect(unsaved).toContain('The attached preview shows only its first frame.')
     expect(unsaved).not.toContain('![animated GIF]')
+    // A GIF attachment animates on every card, so the embed would show it twice.
     const native = renderText(tools, 'generate_image', { prompt: 'wave' }, gifValue({ attachment: { ...attachment('sha256:gif'), mediaType: 'image/gif' }, savedTo: '/ws/a.gif' }))
     expect(native).toContain('animated GIF: 8 frames')
     expect(native).not.toContain('first frame')
-    expect(native).toContain('![animated GIF](</ws/a.gif>)')
+    expect(native).toContain('The result card in the conversation plays the animation; do not embed the file unless the user asks.')
+    expect(native).not.toContain('![animated GIF]')
   })
 
   it('tells the model when the provider ignored the requested frame parameters or returned a still image', () => {
@@ -982,7 +983,8 @@ describe('GIF output through the conversation tools', () => {
     const { ctx, tools } = harnessContext()
     apply(ctx, { provider: 'openai-compat', saveToWorkspace: false })
     const args = { prompt: 'a waving cat', output_format: 'gif', frame_count: 8 }
-    const content = toolByName(tools, 'generate_image').output.render(args, gifValue({ savedTo: '/ws/images/image-1.gif' }) as never)
+    const original = { key: 'a'.repeat(64), bytes: 500, mediaType: 'image/gif' }
+    const content = toolByName(tools, 'generate_image').output.render(args, gifValue({ savedTo: '/ws/images/image-1.gif', original }) as never)
     const definition = createImageResultDefinition()
     const event = { type: 'tool/ptc-dispatch', seq: 21, data: { name: 'generate_image', subCallId: 'sub-2', arguments: args, isError: false, content } }
     const identity = definition.match(event)
@@ -1105,5 +1107,115 @@ describe('GIF output through the conversation tools', () => {
       const generate = (toolByName(tools, 'generate_image').parameters as { properties: Record<string, { description?: string }> }).properties
       expect(generate.output_format?.description).toContain('edit_image with output_format=gif')
     })
+  })
+})
+
+describe('GIF originals kept for the conversation card', () => {
+  const dirs: string[] = []
+  afterEach(async () => {
+    vi.unstubAllGlobals()
+    for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true })
+  })
+  const vaultDir = async () => { const dir = await mkdtemp(join(tmpdir(), 'dsh-gif-vault-')); dirs.push(dir); return dir }
+  const gif = gifBytes(3)
+  const key = createHash('sha256').update(gif).digest('hex')
+  const original = { key, bytes: gif.byteLength, mediaType: 'image/gif' }
+  const webp = () => ({ ...attachment('sha256:gif'), mediaType: 'image/webp' as const, bytes: 48 })
+  const jsonResponse = (b64: string) => new Response(JSON.stringify({ data: [{ b64_json: b64 }] }), { headers: { 'content-type': 'application/json' } })
+  const gifResponse = () => jsonResponse(Buffer.from(gif).toString('base64'))
+  const compat = (vaultDir: string, extra: Record<string, unknown> = {}) => ({ provider: 'openai-compat' as const, openaiCompatBaseURL: 'https://relay.example/v1', openaiCompatModel: 'relay', saveToWorkspace: false, vaultDir, ...extra })
+  const exec = () => ({ signal: new AbortController().signal }) as never
+  const gifFiles = async (dir: string) => (await readdir(dir, { recursive: true })).filter(entry => entry.endsWith('.gif'))
+  const schemaOf = (tool: ToolDefinition) => tool.output.schema as { properties: Record<string, unknown> & { images?: { items: { properties: Record<string, unknown> } } } }
+  const metaOf = (tool: ToolDefinition, args: unknown, value: unknown) => (tool.output as unknown as { presentationMeta(args: unknown, value: unknown): Record<string, unknown> }).presentationMeta(args, value)
+
+  it('stores the raw GIF the host normalized and exposes the reference in the value, the meta and every output schema', async () => {
+    const { ctx, tools } = harnessContext()
+    vi.mocked(ctx.attachments.saveImage).mockResolvedValue(webp())
+    vi.stubGlobal('fetch', vi.fn(async () => gifResponse()))
+    const dir = await vaultDir()
+    apply(ctx, compat(dir))
+    const value = await toolByName(tools, 'generate_image').execute({ prompt: 'wave', output_format: 'gif' }, exec()) as Record<string, unknown>
+    expect(value.original).toEqual(original)
+    await expect(stat(join(dir, key.slice(0, 2), `${key}.gif`))).resolves.toMatchObject({ size: gif.byteLength })
+    expect(metaOf(toolByName(tools, 'generate_image'), { prompt: 'wave' }, value).original).toEqual(original)
+    const expected = { type: 'object', additionalProperties: false, properties: { key: { type: 'string' }, bytes: { type: 'integer' }, mediaType: { type: 'string' } }, required: ['key', 'bytes', 'mediaType'] }
+    expect(schemaOf(toolByName(tools, 'generate_image')).properties.original).toEqual(expected)
+    expect(schemaOf(toolByName(tools, 'edit_image')).properties.original).toEqual(expected)
+    expect(schemaOf(toolByName(tools, 'generate_images')).properties.images?.items.properties.original).toEqual(expected)
+  })
+
+  it('keeps no original when the host returns the same GIF bytes, when a still image was normalized, or when the vault is off', async () => {
+    const { ctx, tools } = harnessContext()
+    const fetchMock = vi.fn(async () => gifResponse())
+    vi.stubGlobal('fetch', fetchMock)
+    const dir = await vaultDir()
+    apply(ctx, compat(dir))
+    vi.mocked(ctx.attachments.saveImage).mockResolvedValueOnce({ ...attachment('sha256:gif'), mediaType: 'image/gif', bytes: gif.byteLength })
+    expect(await toolByName(tools, 'generate_image').execute({ prompt: 'wave', output_format: 'gif' }, exec())).not.toHaveProperty('original')
+    vi.mocked(ctx.attachments.saveImage).mockResolvedValueOnce(webp())
+    fetchMock.mockResolvedValueOnce(jsonResponse('iVBORw0KGgo='))
+    expect(await toolByName(tools, 'generate_image').execute({ prompt: 'wave' }, exec())).not.toHaveProperty('original')
+    // A single-frame GIF is a still image (as the animation notes say), so nothing animates to keep.
+    vi.mocked(ctx.attachments.saveImage).mockResolvedValueOnce(webp())
+    fetchMock.mockResolvedValueOnce(jsonResponse(Buffer.from(gifBytes(1)).toString('base64')))
+    expect(await toolByName(tools, 'generate_image').execute({ prompt: 'wave', output_format: 'gif' }, exec())).not.toHaveProperty('original')
+    expect(await gifFiles(dir)).toEqual([])
+
+    const off = harnessContext()
+    vi.mocked(off.ctx.attachments.saveImage).mockResolvedValue(webp())
+    apply(off.ctx, compat(dir, { vaultEnabled: false }))
+    expect(await toolByName(off.tools, 'generate_image').execute({ prompt: 'wave', output_format: 'gif' }, exec())).not.toHaveProperty('original')
+    expect(await gifFiles(dir)).toEqual([])
+  })
+
+  it('still returns the image and only warns when the vault cannot be written', async () => {
+    const { ctx, tools } = harnessContext()
+    vi.mocked(ctx.attachments.saveImage).mockResolvedValue(webp())
+    vi.stubGlobal('fetch', vi.fn(async () => gifResponse()))
+    const blocker = join(await vaultDir(), 'not-a-directory')
+    await writeFile(blocker, 'x')
+    apply(ctx, compat(blocker))
+    const value = await toolByName(tools, 'generate_image').execute({ prompt: 'wave', output_format: 'gif' }, exec()) as Record<string, unknown>
+    expect(value.attachment).toEqual(webp())
+    expect(value).not.toHaveProperty('original')
+    expect(ctx.logger.warn).toHaveBeenCalledWith(expect.stringContaining('original'))
+  })
+
+  it('shares one stored file across a batch of identical GIFs and reports it on every item', async () => {
+    const { ctx, tools } = harnessContext()
+    vi.mocked(ctx.attachments.saveImage).mockResolvedValue(webp())
+    vi.stubGlobal('fetch', vi.fn(async () => gifResponse()))
+    const dir = await vaultDir()
+    apply(ctx, compat(dir))
+    const batch = await toolByName(tools, 'generate_images').execute({ prompts: ['one', 'two'], output_format: 'gif' }, exec()) as { images: Record<string, unknown>[] }
+    expect(batch.images.map(image => image.original)).toEqual([original, original])
+    const meta = metaOf(toolByName(tools, 'generate_images'), { prompts: ['one', 'two'] }, batch) as { images: Record<string, unknown>[] }
+    expect(meta.images.map(image => image.original)).toEqual([original, original])
+    expect(await gifFiles(dir)).toHaveLength(1)
+  })
+
+  it('tells the model the card plays the animation and keeps the embed for run_code results, which have no card', () => {
+    const { ctx, tools } = harnessContext()
+    apply(ctx, { provider: 'openai-compat', saveToWorkspace: false })
+    const value = { attachment: webp(), provider: 'openai-compat', model: 'relay', output: 'auto', savedTo: '/ws/images/image-abc.gif', animation: { frames: 8, frameDurationMs: 120, durationMs: 960 } }
+    const render = (candidate: unknown) => {
+      const block = toolByName(tools, 'generate_image').output.render({ prompt: 'wave', output_format: 'gif' }, candidate as never)[0]
+      return block?.type === 'text' ? block.text : ''
+    }
+    const played = render({ ...value, original })
+    expect(played).toContain('animated GIF: 8 frames × 120 ms (0.96s loop)')
+    expect(played).toContain('The result card plays the animation when this tool is called directly; do not embed the file then. A run_code call shows no animated card: embed the saved file with Markdown: ![animated GIF](</ws/images/image-abc.gif>)')
+    const unsaved = render({ ...value, original, savedTo: undefined })
+    expect(unsaved).toContain('The result card in the conversation plays the animation; do not embed the file unless the user asks.')
+    expect(unsaved).not.toContain('![animated GIF]')
+    // A host that keeps the GIF attachment plays it on every card, run_code included.
+    const attached = render({ ...value, attachment: { ...webp(), mediaType: 'image/gif' } })
+    expect(attached).toContain('The result card in the conversation plays the animation; do not embed the file unless the user asks.')
+    expect(attached).not.toContain('![animated GIF]')
+    expect(attached).not.toContain('first frame')
+    const embedded = render(value)
+    expect(embedded).toContain('To show the animation, embed the saved file in your reply with Markdown: ![animated GIF](</ws/images/image-abc.gif>)')
+    expect(embedded).not.toContain('plays the animation')
   })
 })

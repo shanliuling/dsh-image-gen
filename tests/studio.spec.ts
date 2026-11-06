@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { EventEmitter } from 'node:events'
 import { Readable } from 'node:stream'
@@ -17,7 +21,8 @@ import {
   MAX_CACHE_COUNT,
 } from '../src/client/image-cache.js'
 import { formatRelativeTime, downloadBlobUrl } from '../src/client/browser-image-utils.js'
-import { conversationRegenerateRequest } from '../src/client/conversation-regenerate.js'
+import { conversationRegenerateRequest, gifOutputRequest } from '../src/client/conversation-regenerate.js'
+import { gifBytes } from './gif-fixture.js'
 import {
   appendConversationImageRevision,
   loadConversationImageRevisionChain,
@@ -625,6 +630,38 @@ describe('conversation and gallery image regeneration', () => {
     expect(loadConversationImageRevisionChain(originId).revisions).toEqual([revision])
     expect(selectConversationImageRevision(originId, 0).currentIndex).toBe(0)
     expect(loadConversationImageRevisionChain(originId).currentIndex).toBe(0)
+    vi.unstubAllGlobals()
+  })
+
+  it('asks for a GIF again with whichever frame facts of the current animation are within the contract', () => {
+    const delays = (frames: number, ms: number) => Array.from({ length: frames }, () => ms)
+    expect(gifOutputRequest({ frames: 8, delaysMs: delays(8, 120), width: 1024, height: 512 })).toEqual({ format: 'gif', frameCount: 8, frameDurationMs: 120, size: '1024x512' })
+    expect(gifOutputRequest({ frames: 17, delaysMs: delays(17, 120), width: 512, height: 512 })).toEqual({ format: 'gif', frameDurationMs: 120, size: '512x512' })
+    // An imported GIF whose frame size breaks the contract keeps the provider's default size, like its frame count.
+    expect(gifOutputRequest({ frames: 4, delaysMs: [0, 0, 0, 0], width: 300, height: 200 })).toEqual({ format: 'gif', frameCount: 4 })
+    expect(gifOutputRequest({ frames: 4, delaysMs: delays(4, 100), width: 4096, height: 16 })).toEqual({ format: 'gif', frameCount: 4, frameDurationMs: 100 })
+    expect(gifOutputRequest(undefined)).toEqual({ format: 'gif' })
+  })
+
+  it('keeps a valid original on a stored revision and drops a corrupt one without losing the revision', () => {
+    const values = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => { values.set(key, value) },
+    })
+    const originId = 'sha256:gif-origin'
+    const original = { key: 'a'.repeat(64), bytes: 10, mediaType: 'image/gif' as const }
+    const revision = {
+      attachment: { attachmentId: 'sha256:gif-revision' as any, mediaType: 'image/webp' as const, bytes: 8, width: 32, height: 32 },
+      prompt: 'a revised gif', provider: 'openai-compat' as const, model: 'relay', output: 'auto', createdAt: 123, ratio: '1:1', quality: 'standard', original,
+    }
+    appendConversationImageRevision(originId, revision)
+    expect(loadConversationImageRevisionChain(originId).revisions[0]).toEqual(revision)
+    const [storageKey] = [...values.keys()]
+    values.set(storageKey!, JSON.stringify({ originId, currentIndex: 1, revisions: [{ ...revision, original: { ...original, key: 'not-a-key' } }] }))
+    const loaded = loadConversationImageRevisionChain(originId)
+    expect(loaded.revisions).toHaveLength(1)
+    expect(loaded.revisions[0]).not.toHaveProperty('original')
     vi.unstubAllGlobals()
   })
 })
@@ -1548,5 +1585,123 @@ describe('streaming generation heartbeat', () => {
     } finally {
       await new Promise<void>(resolve => server.close(() => resolve()))
     }
+  })
+})
+
+describe('workbench GIF output and originals', () => {
+  const signal = new AbortController().signal
+  const dirs: string[] = []
+  afterEach(async () => {
+    vi.unstubAllGlobals()
+    for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true })
+  })
+  const relay = { openaiCompatModel: 'relay-image', openaiCompatBaseURL: 'https://relay.example/v1', saveToWorkspace: false }
+  const request = { mode: 'generate' as const, provider: 'openai-compat' as const, model: 'relay-image', prompt: 'wave', ratio: '1:1', quality: 'standard' }
+  const gif = { format: 'gif' as const, frameCount: 8, frameDurationMs: 120 }
+  const setup = (body: unknown = { data: [{ b64_json: TINY_PNG }] }) => {
+    const ctx = studioCtx()
+    ctx.credentials.resolve.mockResolvedValue({ value: 'test-key' })
+    ctx.attachments.imageLimits.mediaTypes.push('image/gif')
+    const fetch = vi.fn(async (_url: unknown, _init?: RequestInit) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetch)
+    return { ctx, fetch }
+  }
+  const bodyOf = (fetch: ReturnType<typeof vi.fn>, index = 0) => JSON.parse(String((fetch.mock.calls[index] as [unknown, RequestInit] | undefined)?.[1]?.body))
+
+  it('parses the GIF output shape and rejects other formats or non-numeric frame parameters', () => {
+    expect(parseStudioGenerateRequest({ ...request, output: gif })).toMatchObject({ output: gif })
+    expect(parseStudioGenerateRequest({ ...request, output: { format: 'gif' } })).toMatchObject({ output: { format: 'gif' } })
+    expect(parseStudioGenerateRequest(request)).not.toHaveProperty('output')
+    expect(() => parseStudioGenerateRequest({ ...request, output: { format: 'png' } })).toThrow('gif')
+    expect(() => parseStudioGenerateRequest({ ...request, output: { format: 'gif', frameCount: '8' } })).toThrow('帧')
+    expect(() => parseStudioGenerateRequest({ ...request, output: 'gif' })).toThrow()
+    expect(parseStudioGenerateRequest({ ...request, output: { format: 'gif', size: '512x512' } })).toMatchObject({ output: { format: 'gif', size: '512x512' } })
+    expect(() => parseStudioGenerateRequest({ ...request, output: { format: 'gif', size: 512 } })).toThrow('尺寸')
+  })
+
+  it('sends the frame size the card or the relay table chose, never the still-image default', async () => {
+    const { ctx, fetch } = setup()
+    await generateFromStudio(ctx, relay, { ...request, output: { format: 'gif', size: '1024x512' } }, signal)
+    expect(bodyOf(fetch)).toEqual({ model: 'relay-image', prompt: 'wave', size: '1024x512', output_format: 'gif' })
+    const tabled = { ...relay, openaiCompatSizes: { '1:1': { '512': '512x512' }, '16:9': { '1K': '1024x576' } } }
+    const result = await generateFromStudio(ctx, tabled, { ...request, quality: '512', output: { format: 'gif' } }, signal)
+    expect(bodyOf(fetch, 1)).toEqual({ model: 'relay-image', prompt: 'wave', size: '512x512', output_format: 'gif' })
+    expect(result.output).toBe('512x512')
+    // A ratio the table does not list (a card remembering a GIF that had no size) sends none rather than the legacy default.
+    await generateFromStudio(ctx, tabled, { ...request, ratio: '3:2', output: { format: 'gif' } }, signal)
+    expect(bodyOf(fetch, 2)).toEqual({ model: 'relay-image', prompt: 'wave', output_format: 'gif' })
+    const official = (size: string) => generateFromStudio(ctx, { saveToWorkspace: false }, { mode: 'generate', provider: 'openai', model: DEFAULT_OPENAI_MODEL, prompt: 'wave', ratio: '1:1', quality: 'auto', output: { format: 'gif', size } }, signal)
+    await expect(official('100x100')).rejects.toThrow('16')
+    expect(fetch).toHaveBeenCalledTimes(3)
+    await official('512x512')
+    expect(bodyOf(fetch, 3)).toEqual({ model: DEFAULT_OPENAI_MODEL, prompt: 'wave', size: '512x512', output_format: 'gif' })
+  })
+
+  it('sends the GIF fields after the channel extras and leaves the frame size to the provider', async () => {
+    const { ctx, fetch } = setup()
+    await generateFromStudio(ctx, { ...relay, openaiCompatExtraBody: { watermark: false, frame_count: 4 } }, { ...request, output: gif }, signal)
+    expect(bodyOf(fetch)).toEqual({ model: 'relay-image', prompt: 'wave', watermark: false, output_format: 'gif', frame_count: 8, frame_duration_ms: 120 })
+    // A channel whose extras already select GIF is a GIF request even without `output`, and a call may tune the frames alone.
+    await generateFromStudio(ctx, { ...relay, openaiCompatExtraBody: { output_format: 'gif' } }, request, signal)
+    expect(bodyOf(fetch, 1)).toEqual({ model: 'relay-image', prompt: 'wave', output_format: 'gif' })
+    await generateFromStudio(ctx, { ...relay, openaiCompatExtraBody: { output_format: 'gif' } }, { ...request, output: { format: 'gif', frameCount: 4 } }, signal)
+    expect(bodyOf(fetch, 2)).toEqual({ model: 'relay-image', prompt: 'wave', output_format: 'gif', frame_count: 4 })
+    await generateFromStudio(ctx, relay, request, signal)
+    expect(bodyOf(fetch, 3)).toEqual({ model: 'relay-image', prompt: 'wave', size: '1024x1024' })
+    const official = await generateFromStudio(ctx, { saveToWorkspace: false }, { mode: 'generate', provider: 'openai', model: DEFAULT_OPENAI_MODEL, prompt: 'wave', ratio: '1:1', quality: 'auto', output: { format: 'gif', frameCount: 4 } }, signal)
+    expect(bodyOf(fetch, 4)).toEqual({ model: DEFAULT_OPENAI_MODEL, prompt: 'wave', output_format: 'gif', frame_count: 4 })
+    expect(official.output).toBe('1:1, auto')
+  })
+
+  it('accepts a GIF request on a channel with a size table whatever ratio and tier the card remembered', async () => {
+    const { ctx, fetch } = setup()
+    const tabled = { ...relay, openaiCompatSizes: { '16:9': { '2K': '2048x1152' } } }
+    await generateFromStudio(ctx, tabled, { ...request, output: { format: 'gif' } }, signal)
+    expect(bodyOf(fetch)).toEqual({ model: 'relay-image', prompt: 'wave', output_format: 'gif' })
+    await expect(generateFromStudio(ctx, tabled, request, signal)).rejects.toThrow('比例')
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('still checks the OpenAI quality of a GIF request, which is sent as is, before spending it', async () => {
+    const { ctx, fetch } = setup()
+    const official = (quality: string) => generateFromStudio(ctx, { saveToWorkspace: false }, { mode: 'generate', provider: 'openai', model: DEFAULT_OPENAI_MODEL, prompt: 'wave', ratio: '1:1', quality, output: { format: 'gif' } }, signal)
+    await expect(official('ultra')).rejects.toThrow('清晰度')
+    expect(fetch).not.toHaveBeenCalled()
+    await official('high')
+    expect(bodyOf(fetch)).toEqual({ model: DEFAULT_OPENAI_MODEL, prompt: 'wave', quality: 'high', output_format: 'gif' })
+  })
+
+  it('sends no frame size when the remembered tier sits below the floor of its ratio, instead of a tier error a GIF card cannot act on', async () => {
+    const { ctx, fetch } = setup()
+    const tabled = { ...relay, openaiCompatSizes: { '1:1': { '2K': '2048x2048' } } }
+    await generateFromStudio(ctx, tabled, { ...request, quality: '1K', output: { format: 'gif' } }, signal)
+    expect(bodyOf(fetch)).toEqual({ model: 'relay-image', prompt: 'wave', output_format: 'gif' })
+    // The still-image path keeps rejecting the same tier: the table never upscales.
+    await expect(generateFromStudio(ctx, tabled, { ...request, quality: '1K' }, signal)).rejects.toThrow('清晰度')
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects out-of-range frame parameters and GIF output on providers without the contract before fetching', async () => {
+    const { ctx, fetch } = setup()
+    await expect(generateFromStudio(ctx, relay, { ...request, output: { format: 'gif', frameCount: 17 } }, signal)).rejects.toThrow('2 到 16')
+    await expect(generateFromStudio(ctx, { saveToWorkspace: false }, { mode: 'generate', provider: 'google', model: DEFAULT_GOOGLE_MODEL, prompt: 'wave', ratio: '1:1', quality: '1K', output: { format: 'gif' } }, signal)).rejects.toThrow('GIF')
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('keeps the raw GIF when the host normalizes it and reports it at the top level and per item', async () => {
+    const bytes = gifBytes(3)
+    const { ctx } = setup({ data: [{ b64_json: Buffer.from(bytes).toString('base64') }] })
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-studio-vault-'))
+    dirs.push(dir)
+    const original = { key: createHash('sha256').update(bytes).digest('hex'), bytes: bytes.byteLength, mediaType: 'image/gif' }
+    const single = await generateFromStudio(ctx, { ...relay, vaultDir: dir }, { ...request, output: { format: 'gif' } }, signal)
+    expect(single.original).toEqual(original)
+    expect(single.items?.map(item => item.original)).toEqual([original])
+    const batch = await generateFromStudio(ctx, { ...relay, vaultDir: dir }, { ...request, output: { format: 'gif' }, count: 2 }, signal)
+    expect(batch.original).toEqual(original)
+    expect(batch.items?.map(item => item.original)).toEqual([original, original])
+    const off = await generateFromStudio(ctx, { ...relay, vaultDir: dir, vaultEnabled: false }, { ...request, output: { format: 'gif' } }, signal)
+    expect(off).not.toHaveProperty('original')
+    expect(off.items?.[0]).not.toHaveProperty('original')
   })
 })

@@ -96,6 +96,19 @@ export const PLUGIN_STYLE = `
 .dsh-ig-tool-btn-danger:hover{background:rgba(239,68,68,0.75)!important;color:#fff!important}
 .dsh-ig-toast{position:absolute;top:100%;left:0;margin-top:5px;padding:3px 8px;border-radius:6px;background:rgba(0,0,0,0.85);color:#fff;font-size:11px;white-space:nowrap;pointer-events:none;z-index:4}
 .dsh-ig-image{display:block;max-width:100%;max-height:520px;border-radius:12px;background:#f2f3f5;cursor:pointer}
+.dsh-ig-gif-block{display:inline-grid;width:fit-content;max-width:100%;justify-self:start;gap:8px}
+.dsh-ig-gif-badge{margin-left:8px;vertical-align:middle}
+.dsh-ig-gif-bar{display:flex;align-items:center;gap:6px;min-width:0;line-height:1;font-size:12px;color:var(--dsw-alias-label-secondary,inherit)}
+.dsh-ig-gif-btn{appearance:none;border:0;background:transparent;color:inherit;width:26px;height:26px;border-radius:6px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex:none;transition:background .15s}
+.dsh-ig-gif-btn:hover{background:var(--dsw-alias-bg-layer-2,rgba(0,0,0,0.06))}
+.dsh-ig-gif-btn:disabled,.dsh-ig-gif-scrub:disabled,.dsh-ig-gif-speed button:disabled{opacity:.45;cursor:default}
+.dsh-ig-gif-btn-file{width:auto;padding:0 7px;gap:4px;font-size:11px;font-weight:600}
+.dsh-ig-gif-block .dsh-ig-toast{white-space:normal;max-width:220px}
+.dsh-ig-gif-scrub{flex:1;min-width:48px;margin:0;accent-color:var(--dsw-alias-brand-primary,#4c78ff);cursor:pointer}
+.dsh-ig-gif-counter{flex:none;min-width:34px;text-align:center;font-variant-numeric:tabular-nums}
+.dsh-ig-gif-speed{display:inline-flex;flex:none;gap:2px;padding:2px;border-radius:6px;background:var(--dsw-alias-bg-layer-2,rgba(0,0,0,0.05))}
+.dsh-ig-gif-speed button{appearance:none;border:0;background:transparent;color:inherit;padding:3px 6px;border-radius:4px;font-size:11px;cursor:pointer;font-variant-numeric:tabular-nums}
+.dsh-ig-gif-speed button[aria-pressed="true"]{background:var(--dsw-alias-bg-layer-3,#fff);color:var(--dsw-alias-brand-primary,#4c78ff);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,0.12)}
 .dsh-ig-version-nav{position:absolute;right:8px;bottom:8px;display:flex;align-items:center;gap:2px;padding:3px;border-radius:999px;background:rgba(15,23,42,.72);color:#fff;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);font-size:11px;line-height:1;z-index:2}
 .dsh-ig-version-nav button{appearance:none;border:0;background:transparent;color:inherit;width:25px;height:25px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;font-size:17px;line-height:1}
 .dsh-ig-version-nav button:hover:not(:disabled){background:rgba(255,255,255,.2)}
@@ -221,6 +234,15 @@ export const PLUGIN_STYLE = `
 .dsh-ig-lightbox-btn:hover{background:rgba(255,255,255,0.22)}
 .dsh-ig-lightbox-btn-danger{border-color:rgba(239,68,68,0.4);color:#fca5a5}
 .dsh-ig-lightbox-btn-danger:hover{background:rgba(239,68,68,0.35)!important;color:#fff!important;border-color:rgba(239,68,68,0.7)!important}
+.dsh-ig-lightbox-gif-bar{width:min(90vw,640px);box-sizing:border-box}
+.dsh-ig-lightbox-gif-bar .dsh-ig-gif-bar{color:#fff}
+.dsh-ig-lightbox-gif-bar .dsh-ig-gif-btn:hover{background:rgba(255,255,255,0.18)}
+.dsh-ig-lightbox-gif-bar .dsh-ig-gif-speed{background:rgba(255,255,255,0.1)}
+.dsh-ig-lightbox-gif-bar .dsh-ig-gif-speed button[aria-pressed="true"]{background:rgba(255,255,255,0.22);color:#fff}
+.dsh-ig-lightbox-gif-bar .dsh-ig-gif-scrub{accent-color:#fff}
+.dsh-ig-lightbox-gif-bar .dsh-ig-lightbox-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dsh-ig-lightbox-gif-bar .dsh-ig-lightbox-btn:disabled{opacity:.45;cursor:default}
+.dsh-ig-lightbox-gif-toast{font-size:12px;color:rgba(255,255,255,0.8)}
 .dsh-ig-gallery-page-toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.85);color:#fff;padding:6px 14px;border-radius:8px;font-size:13px;z-index:99999;animation:dsh-ig-fade .15s}
 
 /* Card selection and checkbox */

@@ -46,11 +46,13 @@ import { evictAttachmentCache, fetchAttachmentBlob } from './image-cache.js'
 import { shouldShowBatchBar } from './gallery-batch-bar.js'
 import { mergeGalleryItems } from './gallery-merge.js'
 import { copyImageBlob, createZipBlob, downloadBlobUrl, type ZipFileInput } from './browser-image-utils.js'
-import { conversationRegenerateRequest } from './conversation-regenerate.js'
+import { conversationRegenerateRequest, gifOutputRequest } from './conversation-regenerate.js'
+import { readGifInfo } from '../gif-info.js'
+import { originalFromMeta } from './image-result-node.js'
 import { STUDIO_ROUTE, type StudioWorkspaceInfo, type StudioGenerateResponse } from '../shared.js'
 
 import { DICT, type DictKey } from './gallery-i18n.js'
-import { canUseServerZip, deleteVaultOriginals, extensionFor, fetchGalleryItemBlob, formatStorageBytes, galleryDownloadName, imageMediaTypeOf, postZipDownload, syncVaultRefs, vaultKeysOf, vaultProfileId, type GalleryStorageStats } from './gallery-media.js'
+import { canUseServerZip, deleteVaultOriginals, extensionFor, fetchGalleryItemBlob, formatStorageBytes, galleryDownloadName, imageMediaTypeOf, persistGalleryRecord, postZipDownload, syncVaultRefs, vaultKeysOf, vaultProfileId, type GalleryStorageStats } from './gallery-media.js'
 import { formatCardMeta, formatRelativeTime, getItemRatio } from './gallery-format.js'
 import { GalleryCard, type GalleryCardActions } from './gallery-card.js'
 
@@ -531,9 +533,10 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
     setPreviewBlob(null)
     // Show a 1600 px variant here; the full-resolution attachment stays for
     // copy/download/drag. The lightbox falls back to the original GET and then
-    // to the blob form when a host cannot derive the variant.
+    // to the blob form when a host cannot derive the variant. An animated
+    // original is shown as itself: the variant would be a still first frame.
     setPreviewLoading(true)
-    setPreviewUrl(previewUrlFor(item.attachment))
+    setPreviewUrl(item.original?.mediaType === 'image/gif' ? vaultUrlFor(item.original.key, item.original.mediaType) : previewUrlFor(item.attachment))
     prefetchPreviewNeighbors(item)
   }
 
@@ -607,6 +610,10 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
       if (activeWorkspace?.path) {
         request.workspaceRoot = activeWorkspace.path
       }
+      // An animated item asks for an animation again, with the frame facts of the file it has.
+      if (previewItem.original?.mediaType === 'image/gif' || previewItem.attachment.mediaType === 'image/gif') {
+        request.output = gifOutputRequest(readGifInfo(new Uint8Array(await (await fetchGalleryItemBlob(previewItem)).arrayBuffer())))
+      }
 
       const response = await fetch(STUDIO_ROUTE, {
         method: 'POST',
@@ -627,6 +634,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
         )
       }
 
+      const original = originalFromMeta(payload.original)
       const newItem: GalleryItem = {
         id: String(payload.attachment.attachmentId),
         attachment: payload.attachment,
@@ -645,9 +653,10 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
         ...(activeWorkspace?.path ? { workspacePath: activeWorkspace.path } : {}),
         ...(activeWorkspace?.workspaceId ? { workspaceId: activeWorkspace.workspaceId } : {}),
         ...(currentSessionId ? { sessionId: currentSessionId } : {}),
+        ...(original === undefined ? {} : { original }),
       }
 
-      const savedOk = await saveGalleryItem(newItem)
+      const savedOk = await persistGalleryRecord(newItem)
 
       if (activeTab !== 'gallery') {
         setActiveTab('gallery')

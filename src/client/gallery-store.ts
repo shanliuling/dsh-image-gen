@@ -49,7 +49,7 @@ export interface GalleryItem {
   sessionId?: string | undefined
   /** Attachment ids of the source images this image was edited from; used by the canvas to rebuild edit chains. Optional so records written by older versions stay readable. */
   sourceAttachmentIds?: string[] | undefined
-  /** Raw pre-normalization bytes, present only when the attachment layer changed the import. */
+  /** Raw pre-normalization bytes: an import the attachment layer changed, or a generated GIF it normalized to a still. */
   original?: { key: string; bytes: number; mediaType: ImageMediaType } | undefined
 }
 
@@ -275,6 +275,15 @@ export async function saveGalleryItem(
     return true
   } catch (err) {
     console.warn('[dsh-image-gen] Failed to save gallery item to IndexedDB:', err)
+    return false
+  }
+}
+
+/** Whether this id was deleted from the gallery, so a re-rendered card must not resurrect what the record referenced either. */
+export async function isGalleryItemTombstoned(id: string): Promise<boolean> {
+  try {
+    return (await loadTombstones(await getDB())).has(id)
+  } catch {
     return false
   }
 }

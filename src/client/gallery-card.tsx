@@ -15,7 +15,7 @@ import { copyImageBlob, createImageThumbnail, downloadBlobUrl } from './browser-
 import { startGalleryImageDrag } from './tl/gallery-image-transfer.js'
 import { GalleryCanvasButton } from './tl/gallery-canvas-button.js'
 import type { DictKey } from './gallery-i18n.js'
-import { fetchGalleryItemBlob, galleryDownloadName, GALLERY_PREFETCH_ORIGINAL_MAX_BYTES } from './gallery-media.js'
+import { fetchGalleryItemBlob, galleryDownloadName, shouldPrefetchOriginal } from './gallery-media.js'
 import { formatCardMeta, formatRelativeTime } from './gallery-format.js'
 
 /** Stable dispatchers shared by every card, so memoized cards never re-render for selection changes. */
@@ -173,8 +173,7 @@ export const GalleryCard = memo(function GalleryCard({
         // Native drag-out needs a decoded blob at dragstart, which cannot
         // await; prefetch on hover, but keep large raw originals out of it.
         if (blob !== undefined) return
-        if (item.original !== undefined && item.original.bytes > GALLERY_PREFETCH_ORIGINAL_MAX_BYTES) void ensureAttachment().catch(() => undefined)
-        else if (item.original !== undefined) void fetchGalleryItemBlob(item).then(setBlob).catch(() => undefined)
+        if (shouldPrefetchOriginal(item.original)) void fetchGalleryItemBlob(item).then(setBlob).catch(() => undefined)
         else void ensureAttachment().catch(() => undefined)
       }}
     >

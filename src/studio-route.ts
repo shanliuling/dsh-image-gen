@@ -9,6 +9,7 @@ import {
   STUDIO_WATERMARK_VALUES,
   SUBSCRIPTION_TIMEOUT_MS,
   isSubscriptionProvider,
+  type GifOutputRequest,
   type StudioConfigResponse,
   type StudioGenerateRequest,
   type StudioGenerateResponse,
@@ -130,6 +131,7 @@ export function parseStudioGenerateRequest(value: unknown): StudioGenerateReques
   const generationQuality = input.generationQuality === undefined ? undefined : requiredText(input.generationQuality, '请选择生成质量', 100)
   const watermark = input.watermark === undefined ? undefined : STUDIO_WATERMARK_VALUES.find(value => value === input.watermark)
   if (input.watermark !== undefined && watermark === undefined) throw new Error('请选择有效的水印选项')
+  const output = input.output === undefined ? undefined : parseOutput(input.output)
   const rawReferences = Array.isArray(input.references)
     ? input.references
     : input.reference !== undefined
@@ -159,9 +161,26 @@ export function parseStudioGenerateRequest(value: unknown): StudioGenerateReques
     ...(resolution === undefined ? {} : { resolution }),
     ...(generationQuality === undefined ? {} : { generationQuality }),
     ...(watermark === undefined ? {} : { watermark }),
+    ...(output === undefined ? {} : { output }),
     ...(count !== undefined ? { count } : {}),
     ...(references.length > 0 ? { references, reference: references[0] } : {}),
     ...(workspaceRoot !== undefined ? { workspaceRoot } : {}),
+  }
+}
+
+/** Shape only; the frame ranges are checked where the request fields are built, like the chat tools. */
+function parseOutput(value: unknown): GifOutputRequest {
+  const output = record(value)
+  if (output === undefined || output.format !== 'gif') throw new Error('输出格式仅支持 gif')
+  for (const field of ['frameCount', 'frameDurationMs'] as const) {
+    if (output[field] !== undefined && typeof output[field] !== 'number') throw new Error('GIF 帧参数须为数字')
+  }
+  const size = output.size === undefined ? undefined : requiredText(output.size, 'GIF 帧尺寸无效', 32)
+  return {
+    format: 'gif',
+    ...(typeof output.frameCount === 'number' ? { frameCount: output.frameCount } : {}),
+    ...(typeof output.frameDurationMs === 'number' ? { frameDurationMs: output.frameDurationMs } : {}),
+    ...(size === undefined ? {} : { size }),
   }
 }
 
