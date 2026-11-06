@@ -339,6 +339,7 @@ Bring private image generation on your local GPU directly into Agent conversatio
 > Studio and multi-model comparison currently support cloud Providers only (subscription channels included). Multi-model comparison uses the model configured for each Provider in Settings.
 > Zhipu GLM-Image does not support image-to-image upstream. xAI image editing goes through the OpenAI-compatible protocol (multipart); some gateways may need further adaptation.
 > Subscription channels work through account sign-in (no API key). Edits ride each channel's edit endpoint (up to 5 reference images), with aspect ratio and quality selectable directly in Studio.
+> Chat generation on OpenAI and compatible channels can produce an animated GIF directly (the model and relay must support it); frame count and timing options are in the [Provider configuration reference](docs/providers.en.md).
 
 📖 **For default models and endpoints, per-Provider aspect ratios and quality tiers, size tables, watermarks, relay edit formats, and other advanced settings, see the [Provider configuration reference](docs/providers.en.md).**
 
