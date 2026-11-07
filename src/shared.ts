@@ -348,6 +348,14 @@ export const DEFAULT_CLOUD_TIMEOUT_MS = 150_000
  * studio route so neither drifts from the other. */
 export const SUBSCRIPTION_TIMEOUT_MS = 300_000
 
+/** OpenAI Images GIF output contract: frame count, per-frame delay, and the
+ * longest edge of the sheet all frames are tiled into. */
+export const GIF_FRAME_COUNT_MIN = 2
+export const GIF_FRAME_COUNT_MAX = 16
+export const GIF_FRAME_DURATION_MS_MIN = 20
+export const GIF_FRAME_DURATION_MS_MAX = 2000
+export const GIF_SHEET_MAX_EDGE = 3840
+
 /**
  * Credential references resolved through the DSH Credentials service (BYOK).
  * These are POSIX-style reference names, not environment variables: the host

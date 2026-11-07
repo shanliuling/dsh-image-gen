@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { compatQualityOptions, compatRequestQuality, compatWatermarkField, officialQualityOptions, officialSizeTable, PROVIDER_DEFAULT_QUALITY, validateOfficialSize } from '../src/openai-output.js'
+import { compatQualityOptions, compatRequestQuality, compatWatermarkField, gifRequestFields, officialQualityOptions, officialSizeTable, PROVIDER_DEFAULT_QUALITY, validateGifFrameSize, validateOfficialSize } from '../src/openai-output.js'
 import { parseExtraFields, parseSizeTable } from '../src/client/output-settings.js'
 import { buildComparisonTargets, comparisonOutputOptions } from '../src/client/multi-model-compare.js'
 import { studioProfile } from '../src/studio.js'
@@ -67,5 +67,34 @@ describe('compatible watermark contracts', () => {
     expect(compatWatermarkField({ openaiCompatExtraBody: { watermark_enabled: true } })).toBe('watermark_enabled')
     expect(compatWatermarkField({ openaiCompatExtraBody: { parameters: { watermark: false } } })).toBe('parameters.watermark')
     expect(compatWatermarkField({ openaiCompatExtraBody: { watermark: 'false' } })).toBeUndefined()
+  })
+})
+
+describe('GIF output parameters', () => {
+  it('folds per-call GIF parameters into request fields and sends nothing otherwise', () => {
+    expect(gifRequestFields({})).toEqual({})
+    expect(gifRequestFields({ outputFormat: 'gif' })).toEqual({ output_format: 'gif' })
+    expect(gifRequestFields({ outputFormat: 'gif', frameCount: 8 })).toEqual({ output_format: 'gif', frame_count: 8 })
+    expect(gifRequestFields({ outputFormat: 'gif', frameCount: 2, frameDurationMs: 120 })).toEqual({ output_format: 'gif', frame_count: 2, frame_duration_ms: 120 })
+  })
+  it('rejects frame parameters that are not paired with GIF output', () => {
+    expect(() => gifRequestFields({ frameCount: 8 })).toThrow('output_format=gif')
+    expect(() => gifRequestFields({ frameDurationMs: 120 })).toThrow('output_format=gif')
+  })
+  it.each([1, 17, 2.5, Number.NaN])('rejects frame_count %s and names the accepted range', value => {
+    expect(() => gifRequestFields({ outputFormat: 'gif', frameCount: value })).toThrow('2 到 16')
+  })
+  it.each([10, 2001, 100.5])('rejects frame_duration_ms %s and names the accepted range', value => {
+    expect(() => gifRequestFields({ outputFormat: 'gif', frameDurationMs: value })).toThrow('20 到 2000')
+  })
+  it('validates a GIF frame size by the per-frame contract rather than the still-image pixel floor', () => {
+    expect(() => validateOfficialSize('gpt-image-2', '768x768')).toThrow('尺寸')
+    expect(() => validateGifFrameSize('768x768')).not.toThrow()
+    expect(() => validateGifFrameSize('auto')).not.toThrow()
+    // The sheet budget is the provider's call: a 3840 edge is legal for one frame.
+    expect(() => validateGifFrameSize('3840x3840')).not.toThrow()
+    expect(() => validateGifFrameSize('1000x1000')).toThrow('16 的倍数')
+    expect(() => validateGifFrameSize('3856x16')).toThrow('3840')
+    for (const size of ['0x0', '16x0', '0x16', 'bad']) expect(() => validateGifFrameSize(size)).toThrow('无效')
   })
 })
