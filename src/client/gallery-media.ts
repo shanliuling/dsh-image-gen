@@ -1,9 +1,16 @@
-import type { GalleryItem } from './gallery-store.js'
+import { isGalleryItemTombstoned, saveGalleryItem, type GalleryItem } from './gallery-store.js'
 import { VAULT_DELETE_ROUTE, VAULT_REFS_ROUTE, ZIP_ROUTE, vaultUrlFor } from '../shared.js'
 import { fetchAttachmentBlob } from './image-cache.js'
 
 /** Hover prefetch stops pulling raw originals above this size; drag-out then uses the attachment. */
-export const GALLERY_PREFETCH_ORIGINAL_MAX_BYTES = 4 * 1024 * 1024
+const GALLERY_PREFETCH_ORIGINAL_MAX_BYTES = 4 * 1024 * 1024
+/** A GIF original is the only copy that animates, so it is worth prefetching further than a still. */
+const GALLERY_PREFETCH_GIF_MAX_BYTES = 16 * 1024 * 1024
+
+export function shouldPrefetchOriginal(original: GalleryItem['original']): boolean {
+  if (original === undefined) return false
+  return original.bytes <= (original.mediaType === 'image/gif' ? GALLERY_PREFETCH_GIF_MAX_BYTES : GALLERY_PREFETCH_ORIGINAL_MAX_BYTES)
+}
 
 /** Drop vault files the gallery no longer references; failures are non-fatal. */
 const VAULT_PROFILE_KEY = 'dsh-ig-vault-profile-v1'
@@ -35,7 +42,7 @@ export function syncVaultRefs(keys: string[]): Promise<void> {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ profileId, keys }),
   }).then(response => {
-    if (!response.ok) throw new Error('Original reference sync failed (HTTP ' + String(response.status) + ')')
+    if (!response.ok) throw Object.assign(new Error('Original reference sync failed (HTTP ' + String(response.status) + ')'), { status: response.status })
   })
 }
 
@@ -55,6 +62,30 @@ export function deleteVaultOriginals(deleteKeys: string[], remainingKeys: string
       confirm: true,
     }),
   }).catch(() => undefined)
+}
+
+export type GalleryRecord = Parameters<typeof saveGalleryItem>[0]
+
+/**
+ * Persist a gallery record and, when it carries an animated original, claim
+ * that original for this browser profile at once. Every profile that renders
+ * the card writes the record; without an immediate claim another profile
+ * could delete the file first and leave this one syncing a dangling key (410)
+ * until the record is removed. A deleted (tombstoned) record is neither
+ * written nor claimed, or re-opening the conversation would keep the file
+ * alive after every gallery dropped it. Only a vault that says the file is
+ * gone (410) drops the reference from the record; a registry it cannot write
+ * (409) or a transient failure keeps it, and the next mount claims again.
+ */
+export async function persistGalleryRecord(record: GalleryRecord): Promise<boolean> {
+  const saved = await saveGalleryItem(record)
+  if (!saved || record.original === undefined || await isGalleryItemTombstoned(record.id)) return saved
+  try {
+    await syncVaultRefs([record.original.key])
+  } catch (error) {
+    if ((error as { status?: unknown }).status === 410) await saveGalleryItem({ ...record, original: undefined })
+  }
+  return saved
 }
 
 export function vaultKeysOf(items: readonly GalleryItem[]): string[] {

@@ -10,6 +10,9 @@ export async function serveVault(req: IncomingMessage, res: ServerResponse, conf
   const key = params.get('key') ?? ''
   if (!isValidVaultKey(key)) return jsonError(res, 400, 'invalid-key')
   const mediaType = params.get('mediaType') ?? undefined
+  // A switched-off vault is not a missing file: a card drops its reference to
+  // an original only on a 404, which therefore means "enabled and not on disk".
+  if (!config.enabled) return jsonError(res, 503, 'vault-disabled')
   const original = await readOriginal(config, key, mediaType)
   if (original === undefined) return jsonError(res, 404, 'not-found')
 
@@ -31,7 +34,7 @@ export async function serveVault(req: IncomingMessage, res: ServerResponse, conf
   res.end(original.data)
 }
 
-/** Sync one browser profile's references; never deletes originals. */
+/** Sync one browser profile's references; never deletes originals. 410 names a key that is not on disk, 409 a registry no profile can write. */
 export async function serveVaultRefs(req: IncomingMessage, res: ServerResponse, config: VaultConfig): Promise<void> {
   if (req.method !== 'POST') return jsonError(res, 405, 'method-not-allowed')
   if (!sameOrigin(req)) return jsonError(res, 403, 'origin-rejected')
@@ -47,6 +50,7 @@ export async function serveVaultRefs(req: IncomingMessage, res: ServerResponse, 
   }
   if (!validKeys(keys) || profileId === 'legacy-vault') return jsonError(res, 400, 'invalid-request')
   const registry = await updateVaultRegistry(config.dir, profileId, keys)
+  if (registry === 'missing-original') return jsonError(res, 410, 'original-missing')
   if (registry === undefined) return jsonError(res, 409, 'registry-unavailable')
   jsonOk(res, { removed: 0, bytes: 0, profiles: Object.keys(registry.profiles).length })
 }

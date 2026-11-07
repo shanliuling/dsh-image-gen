@@ -59,6 +59,7 @@ import { GeneratedImageCard, GeneratedImagesCard, PromotedImageResultNode, type 
 export { GeneratedImageCard, GeneratedImagesCard, PromotedImageResultNode } from './image-result-view.js'
 import { DICT, type DictKey } from './plugin-i18n.js'
 import { PLUGIN_STYLE } from './plugin-style.js'
+import { GIF_STYLE } from './gif-style.js'
 import { createCanvasSessionSelection, startConversationLandings, type CanvasSessions, type CanvasSessionSelection } from './tl/conversation-landings.js'
 import { STUDIO_STYLE } from './studio-style.js'
 import { TL_CSS } from './tl/tl-css.js'
@@ -260,7 +261,7 @@ export function apply(ctx: Context): void {
   ctx.effect(() => {
     const style = document.createElement('style')
     style.dataset.plugin = 'dsh-image-gen'
-    style.textContent = `${PLUGIN_STYLE}\n${STUDIO_STYLE}\n${INSPIRATION_STYLE}\n${PROVIDER_PILL_STYLE}\n${TL_CSS}\n${TL_THEME_CSS}`
+    style.textContent = `${PLUGIN_STYLE}\n${GIF_STYLE}\n${STUDIO_STYLE}\n${INSPIRATION_STYLE}\n${PROVIDER_PILL_STYLE}\n${TL_CSS}\n${TL_THEME_CSS}`
     document.head.appendChild(style)
     return () => {
       style.remove()

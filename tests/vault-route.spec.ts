@@ -4,8 +4,10 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { serveVault, serveVaultDelete, serveVaultRefs } from '../src/vault-route.js'
+import { keepGifOriginal } from '../src/vault-registry.js'
 import { readOriginal, saveOriginal, type VaultConfig } from '../src/vault-store.js'
 import { apply } from '../src/index.js'
+import { gifBytes } from './gif-fixture.js'
 import type { Context } from '@deepseek-ai/cordis'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 
@@ -140,6 +142,12 @@ describe('raw vault routes', () => {
     const missing = new FakeResponse()
     await serveVault(request('GET', '/plugins/dsh-image-gen/vault?key=' + 'a'.repeat(64)), missing as unknown as ServerResponse, config)
     expect(missing.status).toBe(404)
+    // A vault that is switched off says so; a client must not read it as a file that is gone.
+    const stored = await saveOriginal(config, { data: new Uint8Array([7]), mediaType: 'image/png' })
+    const disabled = new FakeResponse()
+    await serveVault(request('GET', '/plugins/dsh-image-gen/vault?key=' + stored!.key), disabled as unknown as ServerResponse, { ...config, enabled: false })
+    expect(disabled.status).toBe(503)
+    expect(JSON.parse(disabled.body().toString())).toEqual({ error: 'vault-disabled' })
   })
 
   it('syncs references without deleting originals', async () => {
@@ -236,6 +244,50 @@ describe('raw vault routes', () => {
     expect(await readOriginal(config, old!.key)).toBeDefined()
   })
 
+  it('keeps generated originals deletable when the first browser claim arrives after several were stored', async () => {
+    const config = await makeConfig()
+    // A file from before any registry existed stays protected as legacy.
+    const old = await saveOriginal(config, { data: new Uint8Array([7]), mediaType: 'image/png' })
+    const webp = { attachmentId: 'sha256:webp' as never, mediaType: 'image/webp' as const, bytes: 48 }
+    const warn = vi.fn()
+    const keys: string[] = []
+    for (const frames of [2, 3, 4]) {
+      const saved = await keepGifOriginal(config, { data: gifBytes(frames), mediaType: 'image/gif' }, webp, warn)
+      keys.push(saved!.key)
+    }
+    expect(warn).not.toHaveBeenCalled()
+    // Cards claim one key at a time; the first claim is the first sync this vault sees.
+    for (const key of keys) {
+      const res = new FakeResponse()
+      await serveVaultRefs(request('POST', '/', JSON.stringify({ profileId: 'profile-a-1234', keys: [key] })), res as unknown as ServerResponse, config)
+      expect(res.status).toBe(200)
+    }
+    const registry = JSON.parse(await readFile(join(config.dir, '.refs.json'), 'utf8')) as { profiles: Record<string, { keys: string[] }> }
+    expect(registry.profiles['legacy-vault']?.keys).toEqual([old!.key])
+    expect(registry.profiles['profile-a-1234']?.keys).toEqual(keys)
+
+    const res = new FakeResponse()
+    await serveVaultDelete(request('POST', '/', JSON.stringify({ profileId: 'profile-a-1234', keys: [keys[0], keys[2]], deleteKeys: [keys[1]], confirm: true })), res as unknown as ServerResponse, config)
+    expect(JSON.parse(res.body().toString())).toMatchObject({ removed: 1 })
+    expect(await readOriginal(config, keys[1]!)).toBeUndefined()
+    expect(await readOriginal(config, keys[0]!)).toBeDefined()
+    expect(await readOriginal(config, old!.key)).toBeDefined()
+  })
+
+  it('does not rewrite the registry when a sync adds nothing new', async () => {
+    const config = await makeConfig()
+    const kept = await saveOriginal(config, { data: new Uint8Array([1]), mediaType: 'image/png' })
+    const sync = (key: string) => serveVaultRefs(request('POST', '/', JSON.stringify({ profileId: 'profile-a-1234', keys: [key] })), new FakeResponse() as unknown as ServerResponse, config)
+    await sync(kept!.key)
+    let registryWrites = 0
+    io.beforeRename = target => { if (target.endsWith('.refs.json')) registryWrites += 1 }
+    await sync(kept!.key)
+    expect(registryWrites).toBe(0)
+    const more = await saveOriginal(config, { data: new Uint8Array([2]), mediaType: 'image/png' })
+    await sync(more!.key)
+    expect(registryWrites).toBe(1)
+  })
+
   it('does not delete when the registry is corrupt', async () => {
     const config = await makeConfig()
     const original = await saveOriginal(config, { data: new Uint8Array([1]), mediaType: 'image/png' })
@@ -311,7 +363,7 @@ describe('raw vault routes', () => {
     await Promise.all([deleting, syncing])
     const retained = await readOriginal(config, original!.key)
     if (synced.status === 200) expect(retained).toBeDefined()
-    else expect(synced.status).toBe(409)
+    else expect(synced.status).toBe(410)
     expect(deleted.status).toBe(200)
   })
 
@@ -345,7 +397,26 @@ describe('raw vault routes', () => {
     await serveVaultRefs(request('POST', '/plugins/dsh-image-gen/vault-refs', JSON.stringify({
       profileId: 'profile-b-5678', keys: ['f'.repeat(64)],
     })), res as unknown as ServerResponse, config)
-    expect(res.status).toBe(409)
+    expect(res.status).toBe(410)
+    expect(JSON.parse(res.body().toString())).toEqual({ error: 'original-missing' })
     expect(await readFile(join(config.dir, '.refs.json'), 'utf8')).toBe(previous)
+  })
+
+  it('tells a claim for an original that is not on disk apart from a registry no profile can write', async () => {
+    const config = await makeConfig()
+    const original = await saveOriginal(config, { data: new Uint8Array([6]), mediaType: 'image/png' })
+    const claim = (keys: string[]) => {
+      const res = new FakeResponse()
+      return serveVaultRefs(request('POST', '/plugins/dsh-image-gen/vault-refs', JSON.stringify({ profileId: 'profile-a-1234', keys })), res as unknown as ServerResponse, config).then(() => res)
+    }
+    // A corrupt registry cannot vouch for any key, present or not: 409 either way, never a verdict on the file.
+    await writeFile(join(config.dir, '.refs.json'), '{not-json')
+    expect((await claim([original!.key])).status).toBe(409)
+    expect((await claim(['f'.repeat(64)])).status).toBe(409)
+    expect(JSON.parse((await claim(['f'.repeat(64)])).body().toString())).toEqual({ error: 'registry-unavailable' })
+    // A missing registry is rebuilt, so the verdict is about the file again.
+    await rm(join(config.dir, '.refs.json'))
+    expect((await claim(['f'.repeat(64)])).status).toBe(410)
+    expect((await claim([original!.key])).status).toBe(200)
   })
 });

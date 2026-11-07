@@ -33,7 +33,8 @@ import {
   ZoomOut,
 } from 'lucide-react'
 import { DELETE_ROUTE, SAVE_WORKSPACE_ROUTE, STUDIO_ROUTE, thumbUrlFor, isSubscriptionProvider, studioWatermarkCapability, studioModelForMode, studioModelOptionsForMode, studioTargetKey, type CloudImageProvider, type StudioConfigResponse, type StudioGenerateResponse, type StudioGeneratedItem, type StudioProvider, type StudioProviderProfile, type StudioReference, type StudioWatermark } from '../shared.js'
-import { deleteGalleryItem, getGalleryItems, saveGalleryItem, subscribeGallery, toggleFavoriteGalleryItem, type GalleryItem, saveFavoritePrompt, getFavoritePrompts, deleteFavoritePrompt, subscribeFavorites, addFavoriteFolder, getFavoriteFolders, deleteFavoriteFolder, moveFavoritePrompt, updateFavoritePrompt, type FavoritePrompt, type FavoriteFolder } from './gallery-store.js'
+import { deleteGalleryItem, getGalleryItems, subscribeGallery, toggleFavoriteGalleryItem, type GalleryItem, saveFavoritePrompt, getFavoritePrompts, deleteFavoritePrompt, subscribeFavorites, addFavoriteFolder, getFavoriteFolders, deleteFavoriteFolder, moveFavoritePrompt, updateFavoritePrompt, type FavoritePrompt, type FavoriteFolder } from './gallery-store.js'
+import { persistGalleryRecord } from './gallery-media.js'
 import { copyImageBlob, downloadBlobUrl, formatRelativeTime } from './browser-image-utils.js'
 import { buildComparisonTargets, comparisonOptionUnion, comparisonOutputOptions, initialComparisonProviders } from './multi-model-compare.js'
 import { WatermarkControl } from './watermark-control.js'
@@ -954,6 +955,7 @@ export const StudioView: FC<{
           watermark: studioWatermarkCapability(value.target.profile, mode).status === 'supported' ? watermark : undefined,
           output: value.payload.output,
           ...(value.payload.savedTo ? { savedTo: value.payload.savedTo } : {}),
+          ...(value.payload.original === undefined ? {} : { original: value.payload.original }),
           ...(workspace?.path ? { workspacePath: workspace.path } : {}),
           ...(workspace?.workspaceId ? { workspaceId: workspace.workspaceId } : {}),
         }))
@@ -1022,6 +1024,7 @@ export const StudioView: FC<{
         watermark: watermarkCapability.status === 'supported' ? watermark : undefined,
         output: gen.output,
         ...(gen.savedTo ? { savedTo: gen.savedTo } : {}),
+        ...(gen.original === undefined ? {} : { original: gen.original }),
         ...(workspace?.path ? { workspacePath: workspace.path } : {}),
         ...(workspace?.workspaceId ? { workspaceId: workspace.workspaceId } : {}),
       }))
@@ -1126,7 +1129,7 @@ export const StudioView: FC<{
       ...(targetRoot ? { workspacePath: targetRoot } : {}),
       ...(workspace?.workspaceId ? { workspaceId: workspace.workspaceId } : {}),
     }
-    if (!(await saveGalleryItem(updatedItem))) {
+    if (!(await persistGalleryRecord(updatedItem))) {
       throw new Error(t('gallerySaveFailed'))
     }
     return updatedItem

@@ -4,11 +4,12 @@ import type { ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import { parseImageAttachmentRef } from './reference-image.js'
 import { UPSTREAM_TIMEOUT_HINT } from './generation-timeout.js'
 import {
-  DEFAULT_CLOUD_TIMEOUT_MS,
   STUDIO_PROVIDERS,
+  cloudTimeoutFor,
   STUDIO_WATERMARK_VALUES,
   SUBSCRIPTION_TIMEOUT_MS,
   isSubscriptionProvider,
+  type GifOutputRequest,
   type StudioConfigResponse,
   type StudioGenerateRequest,
   type StudioGenerateResponse,
@@ -67,9 +68,10 @@ export async function serveStudio(req: IncomingMessage, res: ServerResponse, dep
       return jsonError(res, 400, errorMessage(error, 'invalid-request'))
     }
     // Watchdog arms per channel: subscriptions get the longer subscription
-    // budget; API-key providers use the configured cloud timeout.
+    // budget; API-key providers use the configured cloud timeout (a GIF the
+    // longer GIF default while that timeout is left at its default).
     const subscriptionChannel = isSubscriptionProvider(input.provider)
-    const timeoutMs = subscriptionChannel ? SUBSCRIPTION_TIMEOUT_MS : (deps.timeoutMs ?? DEFAULT_CLOUD_TIMEOUT_MS)
+    const timeoutMs = subscriptionChannel ? SUBSCRIPTION_TIMEOUT_MS : cloudTimeoutFor(deps.timeoutMs, input.output?.format === 'gif')
     const timeout = setTimeout(() => { watchdog.abort() }, timeoutMs)
     timeout.unref?.()
     // Respond with headers immediately and heartbeat newlines while the
@@ -130,6 +132,7 @@ export function parseStudioGenerateRequest(value: unknown): StudioGenerateReques
   const generationQuality = input.generationQuality === undefined ? undefined : requiredText(input.generationQuality, '请选择生成质量', 100)
   const watermark = input.watermark === undefined ? undefined : STUDIO_WATERMARK_VALUES.find(value => value === input.watermark)
   if (input.watermark !== undefined && watermark === undefined) throw new Error('请选择有效的水印选项')
+  const output = input.output === undefined ? undefined : parseOutput(input.output)
   const rawReferences = Array.isArray(input.references)
     ? input.references
     : input.reference !== undefined
@@ -159,9 +162,26 @@ export function parseStudioGenerateRequest(value: unknown): StudioGenerateReques
     ...(resolution === undefined ? {} : { resolution }),
     ...(generationQuality === undefined ? {} : { generationQuality }),
     ...(watermark === undefined ? {} : { watermark }),
+    ...(output === undefined ? {} : { output }),
     ...(count !== undefined ? { count } : {}),
     ...(references.length > 0 ? { references, reference: references[0] } : {}),
     ...(workspaceRoot !== undefined ? { workspaceRoot } : {}),
+  }
+}
+
+/** Shape only; the frame ranges are checked where the request fields are built, like the chat tools. */
+function parseOutput(value: unknown): GifOutputRequest {
+  const output = record(value)
+  if (output === undefined || output.format !== 'gif') throw new Error('输出格式仅支持 gif')
+  for (const field of ['frameCount', 'frameDurationMs'] as const) {
+    if (output[field] !== undefined && typeof output[field] !== 'number') throw new Error('GIF 帧参数须为数字')
+  }
+  const size = output.size === undefined ? undefined : requiredText(output.size, 'GIF 帧尺寸无效', 32)
+  return {
+    format: 'gif',
+    ...(typeof output.frameCount === 'number' ? { frameCount: output.frameCount } : {}),
+    ...(typeof output.frameDurationMs === 'number' ? { frameDurationMs: output.frameDurationMs } : {}),
+    ...(size === undefined ? {} : { size }),
   }
 }
 
