@@ -22,6 +22,8 @@ export interface StudioRouteDeps {
   generate(input: StudioGenerateRequest, signal: AbortSignal): Promise<StudioGenerateResponse>
   maxBodyBytes: number
   timeoutMs?: number
+  /** Whether the selected channel asks for a GIF by itself, so a request without `output` still gets the GIF timeout. */
+  channelSelectsGif?(input: StudioGenerateRequest): boolean
   /** Heartbeat cadence for the streaming generation response; tests shrink it. */
   heartbeatMs?: number
 }
@@ -68,10 +70,12 @@ export async function serveStudio(req: IncomingMessage, res: ServerResponse, dep
       return jsonError(res, 400, errorMessage(error, 'invalid-request'))
     }
     // Watchdog arms per channel: subscriptions get the longer subscription
-    // budget; API-key providers use the configured cloud timeout (a GIF the
-    // longer GIF default while that timeout is left at its default).
+    // budget; API-key providers use the configured cloud timeout (a GIF, asked
+    // for by the request or by the channel, the longer GIF default while that
+    // timeout is left at its default).
     const subscriptionChannel = isSubscriptionProvider(input.provider)
-    const timeoutMs = subscriptionChannel ? SUBSCRIPTION_TIMEOUT_MS : cloudTimeoutFor(deps.timeoutMs, input.output?.format === 'gif')
+    const gif = input.output?.format === 'gif' || deps.channelSelectsGif?.(input) === true
+    const timeoutMs = subscriptionChannel ? SUBSCRIPTION_TIMEOUT_MS : cloudTimeoutFor(deps.timeoutMs, gif)
     const timeout = setTimeout(() => { watchdog.abort() }, timeoutMs)
     timeout.unref?.()
     // Respond with headers immediately and heartbeat newlines while the

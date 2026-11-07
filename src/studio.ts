@@ -228,6 +228,12 @@ const SUBSCRIPTION_DISPLAY_LABELS: Record<SubscriptionProvider, string> = {
   'google-sub': 'Google 订阅',
 }
 
+/** A generation on an OpenAI-compatible channel whose extras select GIF is a GIF request even when it carries no `output`. */
+export function channelSelectsGif(config: Config, input: Pick<StudioGenerateRequest, 'provider' | 'mode' | 'channel'>): boolean {
+  return input.provider === 'openai-compat' && input.mode === 'generate'
+    && withOpenAICompatChannel(config, input.channel).openaiCompatExtraBody?.output_format === 'gif'
+}
+
 /** Execute one validated browser workbench request using the existing provider adapters. */
 export async function generateFromStudio(
   ctx: Context,
@@ -288,7 +294,7 @@ export async function generateFromStudio(
       // request (a card regenerating keeps its own) or from a relay size table
       // the user configured and picked from; never from the implicit still-image
       // table, whose 1024 px sizes overflow the frame sheet.
-      const channelGif = p === 'openai-compat' && input.mode === 'generate' && requestConfig.openaiCompatExtraBody?.output_format === 'gif'
+      const channelGif = p === 'openai-compat' && channelSelectsGif(config, input)
       const gifFields: ReturnType<typeof gifRequestFields> = p === 'openai' || p === 'openai-compat'
         ? gifRequestFields({ outputFormat: input.output?.format ?? (channelGif ? 'gif' : undefined), frameCount: input.output?.frameCount, frameDurationMs: input.output?.frameDurationMs })
         : {}

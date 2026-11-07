@@ -8,7 +8,7 @@ import { EventEmitter } from 'node:events'
 import { Readable } from 'node:stream'
 import type { AddressInfo } from 'node:net'
 import { DEFAULT_GOOGLE_MODEL, DEFAULT_OPENAI_MODEL, DEFAULT_SEEDREAM_MODEL, DEFAULT_DASHSCOPE_MODEL, DEFAULT_XAI_MODEL, DEFAULT_ZHIPU_MODEL } from '../src/config.js'
-import { generateFromStudio, runPool, studioProfile, describeStudio, openAIRequestSize } from '../src/studio.js'
+import { channelSelectsGif, generateFromStudio, runPool, studioProfile, describeStudio, openAIRequestSize } from '../src/studio.js'
 import { parseStudioGenerateRequest, serveStudio } from '../src/studio-route.js'
 import { SUBSCRIPTION_PROVIDERS, DEFAULT_SUBSCRIPTION_MODELS, SUBSCRIPTION_TIMEOUT_MS, STUDIO_PROVIDERS, CLOUD_IMAGE_PROVIDERS, studioModelOptionsForMode, type StudioProvider, type SubscriptionProvider } from '../src/shared.js'
 import { SUBSCRIPTION_CAPABILITIES } from '../src/capabilities.js'
@@ -1472,6 +1472,20 @@ describe('workbench watermark request mapping', () => {
   })
 })
 
+describe('channel-selected GIF', () => {
+  it('counts a generation on an OpenAI-compatible channel whose extras select GIF, and nothing else', () => {
+    const gifChannel = { id: 'gif-relay', label: 'GIF relay', keyRef: '', baseURL: 'https://gif.example/v1', model: 'gif-model', extraBody: { output_format: 'gif' } }
+    const config = { openaiCompatExtraBody: { output_format: 'gif' }, openaiCompatChannels: [gifChannel, { ...gifChannel, id: 'still-relay', extraBody: {} }] }
+    expect(channelSelectsGif(config, { provider: 'openai-compat', mode: 'generate' })).toBe(true)
+    expect(channelSelectsGif(config, { provider: 'openai-compat', mode: 'generate', channel: 'gif-relay' })).toBe(true)
+    expect(channelSelectsGif(config, { provider: 'openai-compat', mode: 'generate', channel: 'still-relay' })).toBe(false)
+    // The channel's text-to-image extras never reach an edit, as in the request itself.
+    expect(channelSelectsGif(config, { provider: 'openai-compat', mode: 'edit', channel: 'gif-relay' })).toBe(false)
+    expect(channelSelectsGif(config, { provider: 'openai', mode: 'generate' })).toBe(false)
+    expect(channelSelectsGif({}, { provider: 'openai-compat', mode: 'generate' })).toBe(false)
+  })
+})
+
 describe('streaming generation heartbeat', () => {
   it.each([
     ...CLOUD_IMAGE_PROVIDERS.map(provider => ({ provider, timeoutMs: 240_000, expectedMs: 240_000 })),
@@ -1481,7 +1495,10 @@ describe('streaming generation heartbeat', () => {
     // A GIF waits longer while the cloud timeout is left at its default; a configured one is kept.
     { provider: 'openai-compat' as const, timeoutMs: undefined, gif: true, expectedMs: 300_000 },
     { provider: 'openai-compat' as const, timeoutMs: 240_000, gif: true, expectedMs: 240_000 },
-  ])('uses the generation timeout budget for $provider ($timeoutMs, gif: $gif)', async ({ provider, timeoutMs, gif, expectedMs }) => {
+    // A channel whose extras select GIF counts as a GIF request without `output`.
+    { provider: 'openai-compat' as const, timeoutMs: undefined, channelGif: true, expectedMs: 300_000 },
+    { provider: 'openai-compat' as const, timeoutMs: 240_000, channelGif: true, expectedMs: 240_000 },
+  ])('uses the generation timeout budget for $provider ($timeoutMs, gif: $gif, channel GIF: $channelGif)', async ({ provider, timeoutMs, gif, channelGif, expectedMs }) => {
     vi.useFakeTimers()
     try {
       const req = Object.assign(Readable.from([JSON.stringify({
@@ -1506,6 +1523,7 @@ describe('streaming generation heartbeat', () => {
         },
         maxBodyBytes: 1024,
         ...(timeoutMs === undefined ? {} : { timeoutMs }),
+        ...(channelGif === true ? { channelSelectsGif: () => true } : {}),
       })
       await generating
       await vi.advanceTimersByTimeAsync(expectedMs - 1)
