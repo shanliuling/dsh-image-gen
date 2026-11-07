@@ -47,6 +47,7 @@ export function useGalleryGifPreview(item: GalleryItem | null, lang: 'zh' | 'en'
   itemRef.current = item
   const gifUrl = item === null ? undefined : galleryGifUrl(item)
 
+  // Keyed by the item as well as the URL: two items can share one GIF (the same file imported twice).
   useEffect(() => {
     const current = itemRef.current
     if (current === null || gifUrl === undefined) return
@@ -58,7 +59,7 @@ export function useGalleryGifPreview(item: GalleryItem | null, lang: 'zh' | 'en'
       canceled = true
       setLoaded(undefined)
     }
-  }, [gifUrl])
+  }, [gifUrl, item?.id])
 
   const player = useGifPlayer(loaded?.blob)
   // Until the effect drops it, the previous item's player outlives a page turn by one render.
