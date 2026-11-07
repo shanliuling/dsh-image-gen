@@ -1014,4 +1014,96 @@ describe('GIF output through the conversation tools', () => {
     const notes = content.filter(block => block.type === 'text' && block.text.includes(stillNote))
     expect(notes).toHaveLength(2)
   })
+
+  describe('edit_image', () => {
+    const editExec = () => execWithUserImages('source')
+    const formOf = (fetchMock: { mock: { calls: unknown[][] } }, index: number) => (fetchMock.mock.calls[index]?.[1] as RequestInit).body as FormData
+    const sourceImage = (ctx: Context) => vi.mocked(ctx.attachments.readImage).mockResolvedValue({ data: new Uint8Array([137, 80, 78, 71]), ref: attachment('source') } as never)
+
+    it('animates the reference images: each GIF field reaches the multipart form once, and a GIF without a size sends none', async () => {
+      const { ctx, tools } = harnessContext()
+      const fetchMock = vi.fn(async () => gifResponse())
+      vi.stubGlobal('fetch', fetchMock)
+      apply(ctx, { ...compatConfig, openaiCompatExtraBody: { watermark: false } })
+      sourceImage(ctx)
+      const value = await toolByName(tools, 'edit_image').execute({ prompt: 'make the cat wave', output_format: 'gif', frame_count: 4, frame_duration_ms: 120 }, editExec()) as { output: string; animation?: unknown }
+      const form = formOf(fetchMock, 0)
+      expect(form.getAll('output_format')).toEqual(['gif'])
+      expect(form.getAll('frame_count')).toEqual(['4'])
+      expect(form.getAll('frame_duration_ms')).toEqual(['120'])
+      expect(form.has('size')).toBe(false)
+      expect(form.get('image')).toBeInstanceOf(Blob)
+      // Channel extras stay generation-only, as for still edits.
+      expect(form.has('watermark')).toBe(false)
+      expect(value.output).toBe('auto')
+      expect(value.animation).toEqual({ frames: 2, frameDurationMs: 100, durationMs: 200 })
+
+      await toolByName(tools, 'edit_image').execute({ prompt: 'make the cat wave', output_format: 'gif', size: '768x768' }, editExec())
+      expect(formOf(fetchMock, 1).get('size')).toBe('768x768')
+      expect(formOf(fetchMock, 1).getAll('output_format')).toEqual(['gif'])
+    })
+
+    it('leaves a still edit request exactly as before', async () => {
+      const { ctx, tools } = harnessContext()
+      const fetchMock = vi.fn(async () => pngResponse())
+      vi.stubGlobal('fetch', fetchMock)
+      apply(ctx, compatConfig)
+      sourceImage(ctx)
+      const value = await toolByName(tools, 'edit_image').execute({ prompt: 'make the cat wave' }, editExec()) as { output: string; animation?: unknown }
+      const form = formOf(fetchMock, 0)
+      expect([...form.keys()]).toEqual(['image', 'prompt', 'model', 'size', 'response_format'])
+      expect(form.get('size')).toBe('1024x1024')
+      expect(value.output).toBe('1024x1024')
+      expect(value).not.toHaveProperty('animation')
+    })
+
+    it('rejects GIF parameters on providers without an OpenAI images contract before any request', async () => {
+      const { ctx, tools } = harnessContext()
+      const fetchMock = vi.fn()
+      vi.stubGlobal('fetch', fetchMock)
+      apply(ctx, { provider: 'google', saveToWorkspace: false })
+      sourceImage(ctx)
+      for (const args of [{ output_format: 'gif' }, { frame_count: 4 }, { frame_duration_ms: 100 }]) {
+        await expect(toolByName(tools, 'edit_image').execute({ prompt: 'wave', ...args }, editExec())).rejects.toThrow('only supported with provider=openai or openai-compat')
+      }
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('checks an official GIF frame size by the per-frame contract', async () => {
+      const { ctx, tools } = harnessContext()
+      const fetchMock = vi.fn(async () => gifResponse())
+      vi.stubGlobal('fetch', fetchMock)
+      apply(ctx, { provider: 'openai', openaiModel: 'gpt-image-2', saveToWorkspace: false })
+      sourceImage(ctx)
+      await toolByName(tools, 'edit_image').execute({ prompt: 'wave', output_format: 'gif', frame_count: 2, size: '768x768' }, editExec())
+      expect(formOf(fetchMock, 0).get('size')).toBe('768x768')
+      expect(formOf(fetchMock, 0).getAll('frame_count')).toEqual(['2'])
+      await expect(toolByName(tools, 'edit_image').execute({ prompt: 'wave', output_format: 'gif', size: '1000x1000' }, editExec())).rejects.toThrow('16 的倍数')
+      await expect(toolByName(tools, 'edit_image').execute({ prompt: 'wave', frame_count: 4 }, editExec())).rejects.toThrow('output_format=gif')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('reports the animation of an edited GIF like a generated one', () => {
+      const { ctx, tools } = harnessContext()
+      apply(ctx, compatConfig)
+      const text = renderText(tools, 'edit_image', { prompt: 'wave', output_format: 'gif', frame_count: 8 }, gifValue({ savedTo: '/ws/images/image-1.gif' }))
+      expect(text).toMatch(/^Edited one image with openai-compat\/relay \(auto\)\./)
+      expect(text).toContain('animated GIF: 8 frames')
+      expect(text).toContain('![animated GIF](</ws/images/image-1.gif>)')
+    })
+
+    it('points the agent at edit_image for animating a referenced subject', () => {
+      const { ctx, tools } = harnessContext()
+      apply(ctx, compatConfig)
+      const properties = (toolByName(tools, 'edit_image').parameters as { properties: Record<string, { enum?: string[]; description?: string }> }).properties
+      expect(properties.output_format?.enum).toEqual(['gif'])
+      expect(properties).toHaveProperty('frame_count')
+      expect(properties).toHaveProperty('frame_duration_ms')
+      expect(properties.output_format?.description).toContain('reference image')
+      // The inline-attachment shortcut must not read as a ban on output options.
+      expect(toolByName(tools, 'edit_image').description).toContain('output_format=gif when the user wants an animation')
+      const generate = (toolByName(tools, 'generate_image').parameters as { properties: Record<string, { description?: string }> }).properties
+      expect(generate.output_format?.description).toContain('edit_image with output_format=gif')
+    })
+  })
 })

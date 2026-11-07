@@ -107,9 +107,15 @@ function cleanImageToolArgs<T extends SingleGenerationArgs>(args: T): T {
 
 /** GIF output parameters shared by generate_image and generate_images (OpenAI images contract). */
 const gifToolParameters = {
-  output_format: { type: 'string', enum: ['gif'], description: 'Optional. Only for provider=openai or openai-compat; gif produces a looping animation. For GIF, omit size unless the user asks for exact dimensions: all frames are tiled into one sheet whose longest edge must stay at or below 3840 px.' },
+  output_format: { type: 'string', enum: ['gif'], description: 'Optional. Only for provider=openai or openai-compat; gif produces a looping animation. For GIF, omit size unless the user asks for exact dimensions: all frames are tiled into one sheet whose longest edge must stay at or below 3840 px. To animate a subject from reference images, use edit_image with output_format=gif instead.' },
   frame_count: { type: 'integer', description: 'Optional, GIF only: number of frames, 2-16. Omit to use the provider default.' },
   frame_duration_ms: { type: 'integer', description: 'Optional, GIF only: milliseconds per frame, 20-2000; the provider rounds to 10 ms. Omit to use the provider default.' },
+} as const
+
+/** The same GIF parameters on edit_image, which animates the reference images. */
+const editGifToolParameters = {
+  ...gifToolParameters,
+  output_format: { type: 'string', enum: ['gif'], description: 'Optional. Only for provider=openai or openai-compat; gif animates the reference images into a looping animation, for example a sticker of the same character in motion. Omit size unless the user asks for exact dimensions: all frames are tiled into one sheet whose longest edge must stay at or below 3840 px. Many OpenAI-compatible relays do not implement image edits; if the relay rejects the edit or returns a still image, tell the user instead of retrying or assembling frames yourself.' },
 } as const
 
 /** Output schema node for GeneratedValue.animation; every object node must state additionalProperties. */
@@ -119,6 +125,13 @@ const animationSchema = { type: 'object', additionalProperties: false, propertie
 interface BatchGeneratedValue {
   images: (GeneratedValue & { prompt: string })[]
   failures: { index: number; prompt: string; error: string }[]
+}
+
+/** GIF fields follow the OpenAI images contract; other providers would drop them silently. */
+function assertGifProvider(args: Pick<SingleGenerationArgs, 'output_format' | 'frame_count' | 'frame_duration_ms'>, provider: ImageProvider): void {
+  if ((args.output_format !== undefined || args.frame_count !== undefined || args.frame_duration_ms !== undefined) && provider !== 'openai' && provider !== 'openai-compat') {
+    throw new Error('output_format, frame_count and frame_duration_ms are only supported with provider=openai or openai-compat.')
+  }
 }
 
 /** Validate the untrusted per-call provider override from tool arguments. */
@@ -430,9 +443,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     const args = cleanImageToolArgs(rawArgs)
     const requestConfig = configForToolCall(current(), providerOverrideOf(args.provider), args.channel)
     const active = resolveProvider(withProviderOverrides(requestConfig, providerOverrideOf(args.provider), args.model))
-    if ((args.output_format !== undefined || args.frame_count !== undefined || args.frame_duration_ms !== undefined) && active.provider !== 'openai' && active.provider !== 'openai-compat') {
-      throw new Error('output_format, frame_count and frame_duration_ms are only supported with provider=openai or openai-compat.')
-    }
+    assertGifProvider(args, active.provider)
     if (active.provider === 'comfyui') {
       const workflow = selectComfyUIWorkflow(active, args.workflow)
       const generated = await generateComfyUIImage({
@@ -605,7 +616,7 @@ export function apply(ctx: Context, config: Config = {}): void {
 
   ctx.tools.register(defineTool({
     name: 'edit_image',
-    description: 'Edit, combine, or restyle existing images with the configured provider. Images attached inline to the latest human message are already readable DSH attachments even when no workspace file exists. In that case, call edit_image immediately with prompt only; NEVER call read_image, glob, or shell to locate them, and NEVER invent @ paths. All inline images will be used in upload order. For specific older conversation images use source_attachment_id or source_attachment_ids; both canonical sha256: IDs and full bare SHA-256 digests are accepted. For files the user explicitly names in the workspace use source_path or source_paths. For what the user selected or drew on the image-gen workbench canvas (for example a hand-drawn sketch) use source=canvas_selection; canvas_state can verify a selection exists first. Provide exactly one selector field. Without a selector, images from the latest human message take priority; only when that message has no images does editing fall back to the newest conversation image. When the user wants a person, character, or object from the reference images kept as the same identity, write short hard identity-preservation instructions (use the same subject from the references; do not redesign it or synthesize a similar-looking replacement; change only scene, clothing, pose, lighting, style, or composition) instead of long generic appearance descriptions, which make the model replace the subject with a synthesized lookalike.',
+    description: 'Edit, combine, or restyle existing images with the configured provider. Images attached inline to the latest human message are already readable DSH attachments even when no workspace file exists. In that case, call edit_image immediately with prompt only (plus output options such as output_format=gif when the user wants an animation); NEVER call read_image, glob, or shell to locate them, and NEVER invent @ paths. All inline images will be used in upload order. For specific older conversation images use source_attachment_id or source_attachment_ids; both canonical sha256: IDs and full bare SHA-256 digests are accepted. For files the user explicitly names in the workspace use source_path or source_paths. For what the user selected or drew on the image-gen workbench canvas (for example a hand-drawn sketch) use source=canvas_selection; canvas_state can verify a selection exists first. Provide exactly one selector field. Without a selector, images from the latest human message take priority; only when that message has no images does editing fall back to the newest conversation image. When the user wants a person, character, or object from the reference images kept as the same identity, write short hard identity-preservation instructions (use the same subject from the references; do not redesign it or synthesize a similar-looking replacement; change only scene, clothing, pose, lighting, style, or composition) instead of long generic appearance descriptions, which make the model replace the subject with a synthesized lookalike.',
     parameters: {
       prompt: { type: 'string', required: true, description: 'Describe the changes to make while preserving everything else that should remain.' },
       provider: { type: 'string', enum: ['google', 'openai', 'openai-compat', 'seedream', 'dashscope', 'xai', 'zhipu', 'comfyui', 'chatgpt-sub', 'grok-sub', 'google-sub'], description: 'OMIT unless the user explicitly requests a specific image provider. Omission uses the saved default; never guess a channel or fill this with an empty string. Subscription providers edit through their logged-in accounts.' },
@@ -621,12 +632,14 @@ export function apply(ctx: Context, config: Config = {}): void {
       size: { type: 'string', description: 'Optional output size for OpenAI, Seedream, or DashScope; WIDTHxHEIGHT maps to aspect_ratio for xAI Grok.' },
       quality: { type: 'string', description: 'Optional generation quality for OpenAI or compatible edits, independent of size.' },
       workflow: { type: 'string', description: 'Optional name of the ComfyUI workflow to run; omit to use the active workflow from settings. Only meaningful when the ComfyUI provider is selected.' },
+      ...editGifToolParameters,
     },
     output: imageOutput('Edited'),
     async execute(rawArgs, exec): Promise<GeneratedValue> {
       const args = cleanImageToolArgs(rawArgs)
       const requestConfig = configForToolCall(current(), providerOverrideOf(args.provider), args.channel)
       const active = resolveProvider(withProviderOverrides(requestConfig, providerOverrideOf(args.provider), args.model, 'edit'))
+      assertGifProvider(args, active.provider)
       const canvasSelection = args.source === 'canvas_selection'
       if (canvasSelection && (
         args.source_attachment_id !== undefined
@@ -699,12 +712,22 @@ export function apply(ctx: Context, config: Config = {}): void {
 
       const size = args.size ?? active.imageSize
       if (active.provider === 'openai' || active.provider === 'openai-compat' || active.provider === 'xai' || active.provider === 'zhipu') {
-        if (active.provider === 'openai') validateOfficialSize(active.model, size)
+        // Only the per-call parameters select a GIF edit: channel extras are
+        // generation-only. As for generation, a GIF without an explicit size
+        // leaves the frame size to the provider.
+        const gifFields = gifRequestFields({ outputFormat: args.output_format, frameCount: args.frame_count, frameDurationMs: args.frame_duration_ms })
+        const gifRequested = gifFields.output_format === 'gif'
+        const editSize = gifRequested && args.size === undefined ? undefined : size
+        if (active.provider === 'openai' && editSize !== undefined) {
+          if (gifRequested) validateGifFrameSize(editSize)
+          else validateOfficialSize(active.model, editSize)
+        }
         const quality = active.provider === 'openai-compat' ? compatRequestQuality(requestConfig, args.quality) : active.provider === 'openai' ? args.quality : undefined
         if (active.provider === 'openai' && quality !== undefined && !officialQualityOptions(active.model).some(option => option.value === quality)) throw new Error('该 OpenAI 模型不支持所选生成质量')
         const xaiExtraBody = active.provider === 'xai' ? xaiToolParameters({ ...(args.aspect_ratio !== undefined ? { aspectRatio: args.aspect_ratio } : {}), ...(args.image_size !== undefined ? { imageSize: args.image_size } : {}), ...(args.size !== undefined ? { size: args.size } : {}) }) : undefined
-        const generated = await editOpenAICompatibleImage({ apiKey: credential, baseURL: active.baseURL, model: active.model, prompt: args.prompt, sourceImages, ...(active.provider === 'xai' ? {} : { size }), ...(quality === undefined ? {} : { quality }), maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal: exec.signal, ...(active.provider === 'openai-compat' ? { editFormat: active.editFormat, editExtra: active.editExtra, editSizeMode: requestConfig.openaiCompatEditSizeMode ?? 'auto', editResponseFormat: 'auto' as const, onResponseFormatRetry: status => { ctx.logger.warn('dsh-image-gen: openai-compatible relay rejected response_format=b64_json (' + String(status) + '); retrying without it') } } : active.provider === 'xai' ? { editFormat: 'xaiJson' as const, ...(xaiExtraBody === undefined ? {} : { extraBody: xaiExtraBody }) } : {}) })
-        const value = await saveGenerated(ctx, generated, active.provider, active.model, active.provider === 'xai' ? (xaiExtraBody?.aspect_ratio ?? 'auto') : quality === undefined ? size : `${size}, quality=${quality}`, current(), exec, knownWorkspaceRoots)
+        const generated = await editOpenAICompatibleImage({ apiKey: credential, baseURL: active.baseURL, model: active.model, prompt: args.prompt, sourceImages, ...(active.provider === 'xai' || editSize === undefined ? {} : { size: editSize }), ...(quality === undefined ? {} : { quality }), maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal: exec.signal, ...(gifRequested ? { extraBody: gifFields } : {}), ...(active.provider === 'openai-compat' ? { editFormat: active.editFormat, editExtra: active.editExtra, editSizeMode: requestConfig.openaiCompatEditSizeMode ?? 'auto', editResponseFormat: 'auto' as const, onResponseFormatRetry: status => { ctx.logger.warn('dsh-image-gen: openai-compatible relay rejected response_format=b64_json (' + String(status) + '); retrying without it') } } : active.provider === 'xai' ? { editFormat: 'xaiJson' as const, ...(xaiExtraBody === undefined ? {} : { extraBody: xaiExtraBody }) } : {}) })
+        const output = editSize ?? 'auto'
+        const value = await saveGenerated(ctx, generated, active.provider, active.model, active.provider === 'xai' ? (xaiExtraBody?.aspect_ratio ?? 'auto') : quality === undefined ? output : `${output}, quality=${quality}`, current(), exec, knownWorkspaceRoots)
         return active.provider === 'openai-compat' ? { ...value, channel: resolveOpenAICompatChannel(requestConfig, args.channel).id } : value
       }
       if (active.provider === 'seedream') {
