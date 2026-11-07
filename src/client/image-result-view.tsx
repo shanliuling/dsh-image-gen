@@ -16,7 +16,8 @@ import { fetchAttachmentBlob } from './image-cache.js'
 import { DICT, usePluginLanguage, type DictKey } from './plugin-i18n.js'
 import { CLOUD_IMAGE_PROVIDERS, STUDIO_ROUTE, type ImageProvider, type StudioGenerateResponse } from '../shared.js'
 import { conversationRegenerateRequest, gifOutputRequest } from './conversation-regenerate.js'
-import { GifCardOverlay, GifLightbox, GifToolbarDownload, useGifCard } from './gif-card.js'
+import { GifCardOverlay, GifToolbarDownload, useGifCard } from './gif-card.js'
+import { GifCardEditChip, GifEditLightbox, GifEditNotice, useGifEdit } from './gif-edit.js'
 import { GifStage } from './gif-player.js'
 import { startGalleryImageDrag } from './tl/gallery-image-transfer.js'
 
@@ -116,6 +117,8 @@ function ImageResultCard({
   const [regenerateOpen, setRegenerateOpen] = useState(false)
   const [regeneratePrompt, setRegeneratePrompt] = useState('')
   const [regenerateError, setRegenerateError] = useState<string>()
+  // Set when the dialog regenerates from frame notes instead of the plain prompt.
+  const [regenerateHint, setRegenerateHint] = useState<string>()
   const [isRegenerating, setIsRegenerating] = useState(false)
   const regenerateControllerRef = useRef<AbortController>()
   const regenerateTextareaRef = useRef<HTMLTextAreaElement>(null)
@@ -178,6 +181,29 @@ function ImageResultCard({
     onOriginalGone: () => {
       const record = currentGalleryRecord()
       if (record !== undefined) void saveGalleryItem({ ...record, original: undefined })
+    },
+  })
+  const edit = useGifEdit({
+    gif,
+    image: originId ? activeResult : undefined,
+    versionKey: activeAttachment === undefined ? undefined : String(activeAttachment.attachmentId),
+    busy: { running: isRegenerating, setRunning: setIsRegenerating, controller: regenerateControllerRef },
+    addRevision: async revision => {
+      const savedOk = await persistGalleryRecord(revisionGalleryRecord(revision))
+      setRevisionChain(appendConversationImageRevision(String(originId), revision))
+      return savedOk
+    },
+    onSent: message => {
+      setPreviewOpen(false)
+      setToast(message)
+      setTimeout(() => { setToast(undefined) }, 3500)
+    },
+    onFallback: (prompt, hint) => {
+      setPreviewOpen(false)
+      setRegeneratePrompt(prompt)
+      setRegenerateError(undefined)
+      setRegenerateHint(hint)
+      setRegenerateOpen(true)
     },
   })
 
@@ -308,6 +334,7 @@ function ImageResultCard({
     if (activeResult === undefined || isRegenerating) return
     setRegeneratePrompt(activeResult.prompt)
     setRegenerateError(undefined)
+    setRegenerateHint(undefined)
     setRegenerateOpen(true)
   }
 
@@ -398,6 +425,7 @@ function ImageResultCard({
     <div className="dsh-ig-result-title">{t('generatedTitle')}{gif.animated ? <span className="dsh-ig-tag dsh-ig-gif-badge" title={gif.t('gifBadge')}>GIF</span> : null}</div>
     {savedTo !== undefined ? <div className="dsh-ig-savedto">{t('savedToPath')}: {openFile === undefined ? savedTo : <button type="button" className="dsh-ig-savedto-open" title={savedTo} onClick={() => { openFile(savedTo) }}>{savedTo}</button>}</div> : null}
     {error !== undefined ? <div className="dsh-ig-error">{error}</div> : null}
+    <GifEditNotice edit={edit} />
     {url === undefined && error === undefined ? <div className="dsh-ig-loading">{t('loading')}</div> : null}
     {url !== undefined ? <div className={gifPopupOpen ? 'dsh-ig-container is-gif-open' : 'dsh-ig-container'}>
       {gif.player !== undefined
@@ -409,6 +437,7 @@ function ImageResultCard({
         onClick={() => { if (!isRegenerating) setPreviewOpen(true) }}
       />}
       <GifCardOverlay gif={gif} onOpenChange={setGifPopupOpen} />
+      <GifCardEditChip edit={edit} onOpen={() => { if (!isRegenerating) setPreviewOpen(true) }} />
       {isRegenerating ? (
         <div className="dsh-ig-regenerate-overlay">
           <div className="dsh-ig-regenerate-spinner" />
@@ -441,7 +470,7 @@ function ImageResultCard({
     </div> : null}
 
     {previewOpen && url !== undefined && gif.player !== undefined
-      ? <GifLightbox gif={gif} player={gif.player} alt={activeAttachment?.name ?? 'Generated image preview'} poster={url} onClose={() => { setPreviewOpen(false) }} onDragStart={onDragStart} />
+      ? <GifEditLightbox edit={edit} gif={gif} player={gif.player} alt={activeAttachment?.name ?? 'Generated image preview'} poster={url} onClose={() => { setPreviewOpen(false) }} onDragStart={onDragStart} />
       : null}
     {previewOpen && url !== undefined && gif.player === undefined ? <div className="dsh-ig-lightbox-backdrop" onClick={() => { setPreviewOpen(false) }}>
       <div className="dsh-ig-lightbox-img-wrap" onClick={(e) => { e.stopPropagation() }}>
@@ -457,7 +486,7 @@ function ImageResultCard({
     }}>
       <div className="dsh-ig-regenerate-dialog" role="dialog" aria-modal="true" aria-labelledby={`dsh-ig-regenerate-${String(originId)}`}>
         <h3 id={`dsh-ig-regenerate-${String(originId)}`}>{t('regenerateTitle')}</h3>
-        <p>{t('regenerateHint')}</p>
+        <p>{regenerateHint ?? t('regenerateHint')}</p>
         <label>
           <span>{t('prompt')}</span>
           <textarea

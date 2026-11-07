@@ -40,7 +40,7 @@ function paintStrip(canvas: HTMLCanvasElement, frames: readonly ImageBitmap[], w
  * changing play state; a press stops on it, and a drag keeps choosing. Keys
  * are handled here and kept from the page, whose arrows turn gallery pages.
  */
-export function GifFilmstrip({ player, t, hint }: { player: GifPlayer; t: GifT; hint?: string | undefined }) {
+export function GifFilmstrip({ player, t, hint, marks }: { player: GifPlayer; t: GifT; hint?: string | undefined; marks?: ReadonlySet<number> | undefined }) {
   const snapshot = useGifSnapshot(player)
   const stripRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -118,6 +118,7 @@ export function GifFilmstrip({ player, t, hint }: { player: GifPlayer; t: GifT; 
     onKeyDown={onKeyDown}
   >
     <canvas ref={canvasRef} aria-hidden="true" />
+    {total > 0 ? [...marks ?? []].filter(frame => frame < total).map(frame => <span key={frame} className="dsh-ig-gif-strip-mark" aria-hidden="true" style={{ left: `${String((frame + 0.5) / total * 100)}%` }} />) : null}
     {ready && total > 0 ? <span className="dsh-ig-gif-strip-head" aria-hidden="true" style={{ left: `${String((index + 0.5) / total * 100)}%` }} /> : null}
   </div>
 }

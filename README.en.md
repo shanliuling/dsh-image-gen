@@ -218,6 +218,7 @@ Sketch on an infinite canvas, lay out references, circle what should change, the
 - **Identity consistency**: when you ask to keep a person, character, or object the same, the plugin tells the model to reuse the subject from the references and change only the scene, clothing, pose, or style, rather than drawing a similar-looking replacement.
 - Edit the original prompt to regenerate, then switch between revisions on the same image card.
 - When a result is a GIF, the chat card plays it: set the speed (0.2×–2×) from its corner, and the toolbar's download menu saves the GIF at the current or the original speed, or the frame on screen as PNG. The enlarged view adds a play button and a frame timeline (hover to preview a frame, click to stop on it) next to the speed. In the Gallery, GIF tiles carry a badge and play on hover, and the enlarged view plays and downloads them the same way. The GIF file can be dragged straight out, and regenerating keeps it a GIF (the clipboard only takes still images, so copying gives a single frame).
+- A GIF card's **Edit** chip (or **Edit frames** in the enlarged view) takes notes on frames: click a spot on the picture to leave a note, which shows only on its own frame, or switch to **All frames** to see them together; send once to redraw the whole animation from your notes, kept as a new version that plays (OpenAI and compatible channels only, and the relay must support image editing; otherwise one click turns the notes into a plain regeneration).
 
 <br />
 

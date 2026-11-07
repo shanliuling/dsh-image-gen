@@ -1708,4 +1708,60 @@ describe('workbench GIF output and originals', () => {
     expect(off).not.toHaveProperty('original')
     expect(off.items?.[0]).not.toHaveProperty('original')
   })
+
+  it('takes exactly one reference for a GIF edit and leaves still edits their five', () => {
+    const ref = { mediaType: 'image/png' as const, data: TINY_PNG }
+    const edit = { ...request, mode: 'edit' as const }
+    expect(parseStudioGenerateRequest({ ...edit, output: gif, references: [ref] })).toMatchObject({ mode: 'edit', output: gif, references: [ref] })
+    expect(() => parseStudioGenerateRequest({ ...edit, output: gif, references: [ref, ref] })).toThrow('拼图')
+    expect(parseStudioGenerateRequest({ ...edit, references: [ref, ref] }).references).toHaveLength(2)
+    expect(parseStudioGenerateRequest({ ...request, output: gif, references: [ref, ref] }).references).toHaveLength(2)
+  })
+
+  it('sends a GIF edit as the multipart form: the sheet, the regular fields, then each GIF field once', async () => {
+    const { ctx, fetch } = setup()
+    const sheet = { mediaType: 'image/png' as const, data: TINY_PNG, name: 'gif-frames-sheet.png' }
+    const edit = { ...request, mode: 'edit' as const, prompt: 'Re-animate the GIF with these changes.', references: [sheet] }
+    // The channel's generation extras (its own frame_count) never enter an edit; the request's output does.
+    await generateFromStudio(ctx, { ...relay, openaiCompatExtraBody: { output_format: 'gif', frame_count: 4 } }, { ...edit, output: { ...gif, size: '512x512' } }, signal)
+    const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toBe('https://relay.example/v1/images/edits')
+    const form = init.body as FormData
+    expect([...form.keys()]).toEqual(['image', 'prompt', 'model', 'size', 'output_format', 'frame_count', 'frame_duration_ms'])
+    expect(form.get('image')).toBeInstanceOf(Blob)
+    expect(form.get('prompt')).toBe(edit.prompt)
+    expect(form.get('size')).toBe('512x512')
+    expect(form.get('output_format')).toBe('gif')
+    expect(form.get('frame_count')).toBe('8')
+    expect(form.get('frame_duration_ms')).toBe('120')
+    // Without a frame size the edit sends none, never the still-image default.
+    await generateFromStudio(ctx, relay, { ...edit, output: { format: 'gif' } }, signal)
+    const bare = (fetch.mock.calls[1] as unknown as [string, RequestInit])[1].body as FormData
+    expect([...bare.keys()]).toEqual(['image', 'prompt', 'model', 'output_format'])
+    // A still edit on the same channel is untouched.
+    await generateFromStudio(ctx, relay, edit, signal)
+    const still = (fetch.mock.calls[2] as unknown as [string, RequestInit])[1].body as FormData
+    expect([...still.keys()]).toEqual(['image', 'prompt', 'model', 'size'])
+    expect(still.get('size')).toBe('1024x1024')
+  })
+
+  it('checks the frame size of an official GIF edit by the GIF rule, not the still-image table', async () => {
+    const { ctx, fetch } = setup()
+    const official = (size: string) => generateFromStudio(ctx, { saveToWorkspace: false }, { mode: 'edit', provider: 'openai', model: DEFAULT_OPENAI_MODEL, prompt: 'wave', ratio: '1:1', quality: 'auto', output: { format: 'gif', frameCount: 8, size }, reference: { mediaType: 'image/png', data: TINY_PNG } }, signal)
+    await expect(official('1000x1000')).rejects.toThrow('16')
+    expect(fetch).not.toHaveBeenCalled()
+    await official('768x768')
+    const form = (fetch.mock.calls[0] as unknown as [string, RequestInit])[1].body as FormData
+    expect([...form.keys()]).toEqual(['image', 'prompt', 'model', 'size', 'output_format', 'frame_count'])
+    expect(form.get('size')).toBe('768x768')
+  })
+
+  it('keeps the raw GIF an edit returns, so the new version plays on the card', async () => {
+    const bytes = gifBytes(3)
+    const { ctx } = setup({ data: [{ b64_json: Buffer.from(bytes).toString('base64') }] })
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-studio-vault-'))
+    dirs.push(dir)
+    const result = await generateFromStudio(ctx, { ...relay, vaultDir: dir }, { ...request, mode: 'edit', output: { format: 'gif' }, references: [{ mediaType: 'image/png', data: TINY_PNG }] }, signal)
+    expect(result.original).toEqual({ key: createHash('sha256').update(bytes).digest('hex'), bytes: bytes.byteLength, mediaType: 'image/gif' })
+  })
 })

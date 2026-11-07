@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type DragEvent } from 'react'
+import { useEffect, useRef, useState, type DragEvent, type ReactNode } from 'react'
 import { readGifInfo, retimeGif, type GifInfo } from '../gif-info.js'
 import { vaultUrlFor } from '../shared.js'
 import { downloadBlobUrl } from './browser-image-utils.js'
@@ -159,13 +159,35 @@ export interface GifLightboxProps {
   poster: string | undefined
   onClose(): void
   onDragStart(event: DragEvent<HTMLElement>): void
+  /** Drawn over the stage, e.g. comment pins. */
+  stageOverlay?: ReactNode
+  /** Controls after the speed in the player bar. */
+  barTrailing?: ReactNode
+  /** Drawn under the player bar, e.g. the comment editor. */
+  footer?: ReactNode
+  /** Extra class on the picture's frame, e.g. while it is being edited. */
+  wrapClassName?: string | undefined
+  /** Frames the strip marks, e.g. the ones with notes. */
+  frameMarks?: ReadonlySet<number>
 }
 
 /** The GIF lightbox: the stage, the player bar, and copy, download and close at the top right. */
-export function GifLightbox({ gif, player, alt, poster, onClose, onDragStart }: GifLightboxProps) {
+export function GifLightbox({ gif, player, alt, poster, onClose, onDragStart, stageOverlay, barTrailing, footer, wrapClassName, frameMarks }: GifLightboxProps) {
   const t = gif.t
   const ready = useGifStatus(player) === 'ready'
   const [toast, setToast] = useState<string>()
+  const backdropRef = useRef<HTMLDivElement>(null)
+  const dockRef = useRef<HTMLDivElement>(null)
+
+  // The frame makes room for the bars under it, which grow with the edit bar and its messages.
+  useEffect(() => {
+    const dock = dockRef.current
+    const backdrop = backdropRef.current
+    if (dock === null || backdrop === null || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => { backdrop.style.setProperty('--dsh-ig-gif-dock-h', `${String(dock.offsetHeight)}px`) })
+    observer.observe(dock)
+    return () => { observer.disconnect() }
+  }, [])
 
   // Space and the arrows drive the player; a focused control keeps the keys it
   // handles itself, and the frame strip stops the ones it takes.
@@ -191,18 +213,20 @@ export function GifLightbox({ gif, player, alt, poster, onClose, onDragStart }: 
     return () => { clearTimeout(timer) }
   }, [toast])
 
-  return <div className="dsh-ig-lightbox-backdrop" onClick={onClose}>
+  return <div ref={backdropRef} className="dsh-ig-lightbox-backdrop" onClick={onClose}>
     <div className="dsh-ig-gif-actions" onClick={event => { event.stopPropagation() }}>
       <button type="button" className="dsh-ig-gif-action" title={ready ? t('gifCopyFrame') : t('gifCopyFirstFrame')} aria-label={ready ? t('gifCopyFrame') : t('gifCopyFirstFrame')} onClick={() => { void gif.copyFrame().then(setToast) }}>{COPY_ICON}</button>
       <GifDownloadMenu player={player} t={t} variant="lightbox" onDownload={gif.download} />
       <button type="button" className="dsh-ig-gif-action" title={t('gifClose')} aria-label={t('gifClose')} onClick={onClose}>{CLOSE_ICON}</button>
     </div>
     {toast !== undefined ? <div className="dsh-ig-gif-toast" role="status">{toast}</div> : null}
-    <div className="dsh-ig-lightbox-img-wrap dsh-ig-gif-wrap" onClick={event => { event.stopPropagation() }}>
+    <div className={wrapClassName === undefined ? 'dsh-ig-lightbox-img-wrap dsh-ig-gif-wrap' : `dsh-ig-lightbox-img-wrap dsh-ig-gif-wrap ${wrapClassName}`} onClick={event => { event.stopPropagation() }}>
       <GifStage player={player} stage="lightbox" className="dsh-ig-lightbox-img" alt={alt} poster={poster} onDragStart={onDragStart} />
+      {stageOverlay}
     </div>
-    <div className="dsh-ig-gif-dock" onClick={event => { event.stopPropagation() }}>
-      <GifPlayerBar player={player} t={t} />
+    <div ref={dockRef} className="dsh-ig-gif-dock" onClick={event => { event.stopPropagation() }}>
+      <GifPlayerBar player={player} t={t} trailing={barTrailing} marks={frameMarks} />
+      {footer}
     </div>
   </div>
 }
