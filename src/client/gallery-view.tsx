@@ -46,13 +46,16 @@ import { evictAttachmentCache, fetchAttachmentBlob } from './image-cache.js'
 import { shouldShowBatchBar } from './gallery-batch-bar.js'
 import { mergeGalleryItems } from './gallery-merge.js'
 import { copyImageBlob, createZipBlob, downloadBlobUrl, type ZipFileInput } from './browser-image-utils.js'
-import { conversationRegenerateRequest } from './conversation-regenerate.js'
+import { conversationRegenerateRequest, gifOutputRequest } from './conversation-regenerate.js'
+import { readGifInfo } from '../gif-info.js'
+import { originalFromMeta } from './image-result-node.js'
 import { STUDIO_ROUTE, type StudioWorkspaceInfo, type StudioGenerateResponse } from '../shared.js'
 
 import { DICT, type DictKey } from './gallery-i18n.js'
-import { canUseServerZip, deleteVaultOriginals, extensionFor, fetchGalleryItemBlob, formatStorageBytes, galleryDownloadName, imageMediaTypeOf, postZipDownload, syncVaultRefs, vaultKeysOf, vaultProfileId, type GalleryStorageStats } from './gallery-media.js'
+import { canUseServerZip, deleteVaultOriginals, extensionFor, fetchGalleryItemBlob, formatStorageBytes, galleryDownloadName, imageMediaTypeOf, persistGalleryRecord, postZipDownload, syncVaultRefs, vaultKeysOf, vaultProfileId, type GalleryStorageStats } from './gallery-media.js'
 import { formatCardMeta, formatRelativeTime, getItemRatio } from './gallery-format.js'
 import { GalleryCard, type GalleryCardActions } from './gallery-card.js'
+import { GalleryGifBar, GalleryGifDownload, GalleryGifStage, useGalleryGifPreview } from './gif-gallery.js'
 
 const GALLERY_RENDER_BATCH = 120
 /** Host-provided locale service; `active` may be missing before the locale loads. */
@@ -238,6 +241,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   }, [locale])
 
   const dict = lang === 'en' ? DICT.en : DICT.zh
+  const gifPreview = useGalleryGifPreview(previewItem, lang)
   // Stable identity: memoized cards only re-render when their own state changes.
   const t = useMemo(() => {
     return (key: DictKey, params?: Record<string, string>): string => {
@@ -607,6 +611,10 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
       if (activeWorkspace?.path) {
         request.workspaceRoot = activeWorkspace.path
       }
+      // An animated item asks for an animation again, with the frame facts of the file it has.
+      if (previewItem.original?.mediaType === 'image/gif' || previewItem.attachment.mediaType === 'image/gif') {
+        request.output = gifOutputRequest(readGifInfo(new Uint8Array(await (await fetchGalleryItemBlob(previewItem)).arrayBuffer())))
+      }
 
       const response = await fetch(STUDIO_ROUTE, {
         method: 'POST',
@@ -627,6 +635,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
         )
       }
 
+      const original = originalFromMeta(payload.original)
       const newItem: GalleryItem = {
         id: String(payload.attachment.attachmentId),
         attachment: payload.attachment,
@@ -645,9 +654,10 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
         ...(activeWorkspace?.path ? { workspacePath: activeWorkspace.path } : {}),
         ...(activeWorkspace?.workspaceId ? { workspaceId: activeWorkspace.workspaceId } : {}),
         ...(currentSessionId ? { sessionId: currentSessionId } : {}),
+        ...(original === undefined ? {} : { original }),
       }
 
-      const savedOk = await saveGalleryItem(newItem)
+      const savedOk = await persistGalleryRecord(newItem)
 
       if (activeTab !== 'gallery') {
         setActiveTab('gallery')
@@ -1794,7 +1804,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
             {/* Render the image first: the GET route paints progressively, and
                 gating it on previewLoading left the spinner on screen forever
                 because the <img> never mounted to fire onLoad. */}
-            {previewUrl ? (
+            {gifPreview !== undefined ? <GalleryGifStage preview={gifPreview} poster={previewUrl ?? undefined} /> : previewUrl ? (
               <img
                 className="dsh-ig-lightbox-img"
                 src={previewUrl}
@@ -1836,6 +1846,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
             ) : null}
           </div>
 
+          {gifPreview !== undefined ? <GalleryGifBar preview={gifPreview} /> : null}
           {/* Bottom Floating Pill Bar: Prompt & Actions */}
           <div
             className="dsh-ig-lightbox-bottombar"
@@ -1878,7 +1889,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
                 <span>{t('copyImg')}</span>
               </button>
 
-              <button
+              {gifPreview !== undefined ? <GalleryGifDownload preview={gifPreview} /> : <button
                 type="button"
                 className="dsh-ig-lightbox-btn"
                 title={t('download')}
@@ -1900,7 +1911,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
               >
                 <Download size={14} />
                 <span>{t('download')}</span>
-              </button>
+              </button>}
 
               <button
                 type="button"

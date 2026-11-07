@@ -192,7 +192,7 @@ export interface Config {
   requestCacheMaxBytes?: number
   /** Override the request-image cache root (empty keeps the DSH_HOME default). */
   requestCacheDir?: string
-  /** Keep the pre-normalization bytes when the attachment layer changes an import. */
+  /** Keep the pre-normalization bytes when the attachment layer changes an import or normalizes a generated GIF to a still. */
   vaultEnabled?: boolean
   /** Override the raw-image vault root (empty keeps the DSH_HOME default). */
   vaultDir?: string

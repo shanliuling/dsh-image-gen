@@ -22,25 +22,26 @@ import { serveZip } from './zip-route.js'
 import { serveZipCancel, serveZipProgress } from './zip-progress.js'
 import { serveStorageStats } from './storage-stats.js'
 import { serveVault, serveVaultDelete, serveVaultRefs } from './vault-route.js'
-import { readOriginal, resolveVaultPath } from './vault-store.js'
-import { saveImportedOriginal } from './vault-registry.js'
+import { readOriginal, vaultConfigOf, type SavedOriginal } from './vault-store.js'
+import { keepGifOriginal, saveImportedOriginal } from './vault-registry.js'
 import { servePreview, serveThumb } from './thumb-route.js'
 import { durableAttachmentsRoot, pruneRequestImageCache, resolveRequestImageCacheDir } from './request-cache.js'
 import { editOpenAICompatibleImage, generateOpenAICompatibleImage } from './openai-compatible.js'
 import { type ResolvedReferenceImage, resolveReferenceImages } from './reference-image.js'
 import { editSeedreamImage } from './seedream.js'
 import { generateSubscriptionImage, registerSubscriptionRoutes, subscriptionToolParameters, SubscriptionManager } from './subscription.js'
-import { CANVAS_STATE_ROUTE, DEFAULT_CLOUD_TIMEOUT_MS, IMAGE_GENERATION_NAMESPACE, IMAGE_PROVIDERS, IMPORT_ROUTE, INSPIRATION_ROUTE, PREVIEW_ROUTE, STORAGE_STATS_ROUTE, STUDIO_ROUTE, TEST_CONNECTION_ROUTE, THUMB_ROUTE, VAULT_DELETE_ROUTE, VAULT_REFS_ROUTE, VAULT_ROUTE, ZIP_CANCEL_ROUTE, ZIP_PROGRESS_ROUTE, ZIP_ROUTE, mergeComfyUIPrompt, resolveOpenAICompatChannel, type ImageProvider } from './shared.js'
+import { CANVAS_STATE_ROUTE, DEFAULT_CLOUD_TIMEOUT_MS, IMAGE_GENERATION_NAMESPACE, cloudTimeoutFor, IMAGE_PROVIDERS, IMPORT_ROUTE, INSPIRATION_ROUTE, PREVIEW_ROUTE, STORAGE_STATS_ROUTE, STUDIO_ROUTE, TEST_CONNECTION_ROUTE, THUMB_ROUTE, VAULT_DELETE_ROUTE, VAULT_REFS_ROUTE, VAULT_ROUTE, ZIP_CANCEL_ROUTE, ZIP_PROGRESS_ROUTE, ZIP_ROUTE, mergeComfyUIPrompt, resolveOpenAICompatChannel, type ImageProvider } from './shared.js'
 import { createInspirationRoute } from './inspiration-route.js'
 import { BUNDLED_INSPIRATION_CATALOG, searchInspirationCases } from './inspiration.js'
-import { generateFromStudio, describeStudio } from './studio.js'
+import { channelSelectsGif, generateFromStudio, describeStudio } from './studio.js'
 import { serveStudio } from './studio-route.js'
 import { serveTestConnection } from './test-route.js'
 import { describeSettingsHealth, serveSettingsHealth } from './settings-health.js'
 import { SETTINGS_HEALTH_ROUTE, type SettingsHealth } from './shared.js'
 import { deleteImageFromWorkspace, getDshWorkspaceRoots, getDshWorkspacesFull, saveImageToWorkspace } from './workspace-save.js'
 import { xaiToolParameters } from './xai-params.js'
-import { compatRequestQuality, officialQualityOptions, validateOfficialSize } from './openai-output.js'
+import { compatRequestQuality, gifRequestFields, officialQualityOptions, validateGifFrameSize, validateOfficialSize } from './openai-output.js'
+import { gifFrameDurationMs, readGifInfo } from './gif-info.js'
 import { imageToolContext } from './image-tool-context.js'
 import { withWebAdmission, type WebAdmission } from './web-route.js'
 
@@ -65,6 +66,10 @@ interface GeneratedValue {
   saveError?: string
   /** Concrete workflow seed, exposed by the ComfyUI provider for provenance. */
   seed?: number
+  /** Frame facts read from an animated GIF result; absent for still images. */
+  animation?: { frames: number; frameDurationMs: number; durationMs: number }
+  /** Raw GIF bytes kept in the vault when the attachment layer normalized the animation away. */
+  original?: SavedOriginal
 }
 
 /** Capped prompt hits for the find_inspiration tool; `total` counts all matches. */
@@ -84,13 +89,16 @@ interface SingleGenerationArgs {
   size?: string
   quality?: string
   workflow?: string
+  output_format?: string
+  frame_count?: number
+  frame_duration_ms?: number
 }
 
 /** Optional strings from tool callers may contain empty placeholders (#86). */
 function cleanImageToolArgs<T extends SingleGenerationArgs>(args: T): T {
   const clean = { ...args }
   const fields = clean as Record<string, unknown>
-  for (const key of ['model', 'channel', 'size', 'aspect_ratio', 'image_size', 'quality', 'workflow']) {
+  for (const key of ['model', 'channel', 'size', 'aspect_ratio', 'image_size', 'quality', 'workflow', 'output_format']) {
     const value = fields[key]
     if (typeof value !== 'string') continue
     if (value.trim().length === 0) delete fields[key]
@@ -99,10 +107,35 @@ function cleanImageToolArgs<T extends SingleGenerationArgs>(args: T): T {
   return clean
 }
 
+/** GIF output parameters shared by generate_image and generate_images (OpenAI images contract). */
+const gifToolParameters = {
+  output_format: { type: 'string', enum: ['gif'], description: 'Optional. Only for provider=openai or openai-compat; gif produces a looping animation. For GIF, omit size unless the user asks for exact dimensions: all frames are tiled into one sheet whose longest edge must stay at or below 3840 px. To animate a subject from reference images, use edit_image with output_format=gif instead.' },
+  frame_count: { type: 'integer', description: 'Optional, GIF only: number of frames, 2-16. Omit to use the provider default.' },
+  frame_duration_ms: { type: 'integer', description: 'Optional, GIF only: milliseconds per frame, 20-2000; the provider rounds to 10 ms. Omit to use the provider default.' },
+} as const
+
+/** The same GIF parameters on edit_image, which animates the reference images. */
+const editGifToolParameters = {
+  ...gifToolParameters,
+  output_format: { type: 'string', enum: ['gif'], description: 'Optional. Only for provider=openai or openai-compat; gif animates the reference images into a looping animation, for example a sticker of the same character in motion. Omit size unless the user asks for exact dimensions: all frames are tiled into one sheet whose longest edge must stay at or below 3840 px. Many OpenAI-compatible relays do not implement image edits; if the relay rejects the edit or returns a still image, tell the user instead of retrying or assembling frames yourself.' },
+} as const
+
+/** Output schema node for GeneratedValue.animation; every object node must state additionalProperties. */
+const animationSchema = { type: 'object', additionalProperties: false, properties: { frames: { type: 'integer', required: true }, frameDurationMs: { type: 'integer', required: true }, durationMs: { type: 'integer', required: true } } } as const
+/** Output schema node for GeneratedValue.original, the same shape the gallery stores for imports. */
+const originalSchema = { type: 'object', additionalProperties: false, properties: { key: { type: 'string', required: true }, bytes: { type: 'integer', required: true }, mediaType: { type: 'string', required: true } } } as const
+
 /** Ordered per-item outcomes for the generate_images batch tool. */
 interface BatchGeneratedValue {
   images: (GeneratedValue & { prompt: string })[]
   failures: { index: number; prompt: string; error: string }[]
+}
+
+/** GIF fields follow the OpenAI images contract; other providers would drop them silently. */
+function assertGifProvider(args: Pick<SingleGenerationArgs, 'output_format' | 'frame_count' | 'frame_duration_ms'>, provider: ImageProvider): void {
+  if ((args.output_format !== undefined || args.frame_count !== undefined || args.frame_duration_ms !== undefined) && provider !== 'openai' && provider !== 'openai-compat') {
+    throw new Error('output_format, frame_count and frame_duration_ms are only supported with provider=openai or openai-compat.')
+  }
 }
 
 /** Validate the untrusted per-call provider override from tool arguments. */
@@ -161,16 +194,8 @@ export function apply(ctx: Context, config: Config = {}): void {
     } catch { /* Keep the last credential-free snapshot when status reads fail. */ }
   }
 
-  // Raw-image vault: off by default only when explicitly disabled; paths and
-  // caps are re-read on every call so settings changes apply without a restart.
-  const vaultConfig = () => {
-    const config = current()
-    return {
-      enabled: config.vaultEnabled !== false,
-      // Relative overrides stay below the DSH home instead of the process cwd.
-      dir: resolveVaultPath(config.vaultDir ?? ''),
-    }
-  }
+  // Raw-image vault: re-read on every call so settings changes apply without a restart.
+  const vaultConfig = () => vaultConfigOf(current())
 
   const settingsHealth = installImageSettings(ctx, current(), {
     setSource: source => { current = () => migrateOpenAICompatConfig(plainConfig(source())) },
@@ -396,6 +421,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         },
         maxBodyBytes: Math.ceil(ctx.attachments.imageLimits.maxImageBytes * 1.4 * 5) + 256 * 1024,
         timeoutMs: current().cloudTimeoutMs ?? DEFAULT_CLOUD_TIMEOUT_MS,
+        channelSelectsGif: input => channelSelectsGif(current(), input),
       }),
     }), 'dsh-image-gen: studio route')
     const serveInspiration = createInspirationRoute()
@@ -414,6 +440,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     const args = cleanImageToolArgs(rawArgs)
     const requestConfig = configForToolCall(current(), providerOverrideOf(args.provider), args.channel)
     const active = resolveProvider(withProviderOverrides(requestConfig, providerOverrideOf(args.provider), args.model))
+    assertGifProvider(args, active.provider)
     if (active.provider === 'comfyui') {
       const workflow = selectComfyUIWorkflow(active, args.workflow)
       const generated = await generateComfyUIImage({
@@ -438,8 +465,8 @@ export function apply(ctx: Context, config: Config = {}): void {
       })
       return saveGenerated(ctx, generated, active.provider, active.model, 'subscription', current(), exec, knownWorkspaceRoots)
     }
-    const runCloud = <T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> =>
-      withGenerationTimeout(current().cloudTimeoutMs ?? DEFAULT_CLOUD_TIMEOUT_MS, exec.signal, operation)
+    const runCloud = <T>(operation: (signal: AbortSignal) => Promise<T>, gif = false): Promise<T> =>
+      withGenerationTimeout(cloudTimeoutFor(current().cloudTimeoutMs, gif), exec.signal, operation)
     const credential = await requireApiKey(ctx, active.provider, 'generate_image', active.provider === 'openai-compat' ? resolveOpenAICompatChannel(requestConfig, args.channel).keyRef : undefined)
     if (active.provider === 'google') {
       const aspectRatio = (args.aspect_ratio ?? active.aspectRatio) as AspectRatio
@@ -457,15 +484,29 @@ export function apply(ctx: Context, config: Config = {}): void {
       const generated = await runCloud(signal => generateOpenAICompatibleImage({ provider: 'xai', apiKey: credential, baseURL: active.baseURL, model: active.model, prompt: args.prompt, extraBody, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal }))
       return saveGenerated(ctx, generated, active.provider, active.model, extraBody.aspect_ratio ?? 'auto', current(), exec, knownWorkspaceRoots)
     }
-    const size = args.size ?? active.imageSize
+    // GIF fields ride the same extraBody channel as the relay extras, merged
+    // after them so a per-call parameter wins over the channel default. A
+    // channel whose extras already select GIF counts as a GIF request, so a
+    // call may tune the frames alone.
+    const channelExtraBody = active.provider === 'openai-compat' ? requestConfig.openaiCompatExtraBody ?? {} : undefined
+    const gifFields = gifRequestFields({ outputFormat: args.output_format ?? (channelExtraBody?.output_format === 'gif' ? 'gif' : undefined), frameCount: args.frame_count, frameDurationMs: args.frame_duration_ms })
+    const gifRequested = gifFields.output_format === 'gif'
+    // A GIF without an explicit size leaves the frame size to the provider:
+    // the still-image default of 1024x1024 overflows the frame sheet.
+    const size = gifRequested && args.size === undefined ? undefined : args.size ?? active.imageSize
     // Ark output controls exist only on the Seedream profile; every other
     // provider in this branch ignores them.
     const arkOptions = active.provider === 'seedream' ? active.arkOptions : undefined
-    if (active.provider === 'openai') validateOfficialSize(active.model, size)
+    if (active.provider === 'openai' && size !== undefined) {
+      if (gifRequested) validateGifFrameSize(size)
+      else validateOfficialSize(active.model, size)
+    }
     const quality = active.provider === 'openai-compat' ? compatRequestQuality(requestConfig, args.quality) : active.provider === 'openai' ? args.quality : undefined
     if (active.provider === 'openai' && quality !== undefined && !officialQualityOptions(active.model).some(option => option.value === quality)) throw new Error('该 OpenAI 模型不支持所选生成质量')
-    const generated = await runCloud(signal => generateOpenAICompatibleImage({ provider: active.provider, apiKey: credential, baseURL: active.baseURL, model: active.model, prompt: args.prompt, size, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal, ...(quality === undefined ? {} : { quality }), ...(active.provider === 'openai-compat' ? { extraBody: requestConfig.openaiCompatExtraBody ?? {} } : {}), ...(arkOptions === undefined ? {} : { arkOptions }) }))
-    const value = await saveGenerated(ctx, generated, active.provider, active.model, quality === undefined ? size : `${size}, quality=${quality}`, current(), exec, knownWorkspaceRoots)
+    const extraBody = channelExtraBody !== undefined ? { ...channelExtraBody, ...gifFields } : Object.keys(gifFields).length === 0 ? undefined : gifFields
+    const generated = await runCloud(signal => generateOpenAICompatibleImage({ provider: active.provider, apiKey: credential, baseURL: active.baseURL, model: active.model, prompt: args.prompt, ...(size === undefined ? {} : { size }), maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal, ...(quality === undefined ? {} : { quality }), ...(extraBody === undefined ? {} : { extraBody }), ...(arkOptions === undefined ? {} : { arkOptions }) }), gifRequested)
+    const output = size ?? 'auto'
+    const value = await saveGenerated(ctx, generated, active.provider, active.model, quality === undefined ? output : `${output}, quality=${quality}`, current(), exec, knownWorkspaceRoots)
     return active.provider === 'openai-compat' ? { ...value, channel: resolveOpenAICompatChannel(requestConfig, args.channel).id } : value
   }
 
@@ -482,6 +523,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       size: { type: 'string', description: 'Optional dimensions or size tier for OpenAI, Seedream, or DashScope; WIDTHxHEIGHT maps to aspect_ratio for xAI Grok. Do not combine with aspect_ratio; omit instead of using an empty string.' },
       quality: { type: 'string', description: 'Optional generation quality for OpenAI or compatible APIs, independent of pixel size (e.g. auto, low, medium, high). Omit to use the configured default.' },
       workflow: { type: 'string', description: 'Optional name of the ComfyUI workflow to run; omit to use the active workflow from settings. Only meaningful when the ComfyUI provider is selected.' },
+      ...gifToolParameters,
     },
     output: imageOutput('Generated'),
     async execute(args, exec): Promise<GeneratedValue> {
@@ -503,6 +545,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       size: { type: 'string', description: 'Optional dimensions or size tier for OpenAI, Seedream, or DashScope; WIDTHxHEIGHT maps to aspect_ratio for xAI Grok.' },
       quality: { type: 'string', description: 'Optional OpenAI or compatible generation quality, applied to every item independently of size.' },
       workflow: { type: 'string', description: 'Optional name of the ComfyUI workflow to run; omit to use the active workflow from settings.' },
+      ...gifToolParameters,
     },
     output: {
       schema: {
@@ -511,19 +554,21 @@ export function apply(ctx: Context, config: Config = {}): void {
             attachment: { type: 'object', required: true, additionalProperties: false, properties: {
               attachmentId: { type: 'string', required: true }, mediaType: { type: 'string', required: true }, bytes: { type: 'integer', required: true }, width: { type: 'integer', required: true }, height: { type: 'integer', required: true }, name: { type: 'string' }, originalDimensions: { type: 'object', additionalProperties: false, properties: { width: { type: 'integer', required: true }, height: { type: 'integer', required: true } } },
             } },
-            provider: { type: 'string', required: true }, channel: { type: 'string' }, model: { type: 'string', required: true }, output: { type: 'string', required: true }, savedTo: { type: 'string' }, saveError: { type: 'string' }, seed: { type: 'integer' }, prompt: { type: 'string', required: true },
+            provider: { type: 'string', required: true }, channel: { type: 'string' }, model: { type: 'string', required: true }, output: { type: 'string', required: true }, savedTo: { type: 'string' }, saveError: { type: 'string' }, seed: { type: 'integer' }, animation: animationSchema, original: originalSchema, prompt: { type: 'string', required: true },
           } } },
           failures: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
             index: { type: 'integer', required: true }, prompt: { type: 'string', required: true }, error: { type: 'string', required: true },
           } } },
         },
       },
-      render: (_args: unknown, value: BatchGeneratedValue) => [
+      render: (args: unknown, value: BatchGeneratedValue) => [
         {
           type: 'text' as const,
           text: `Generated ${String(value.images.length)} of ${String(value.images.length + value.failures.length)} images.\n${value.failures.map(failure => `${failure.prompt.slice(0, 80)} — failed: ${failure.error}`).join('\n')}`,
         },
-        ...value.images.flatMap(image => imageOutput('Generated').render({}, image).map(block =>
+        // Batch arguments apply to every item, so each item's summary can
+        // compare the GIF it asked for with what came back.
+        ...value.images.flatMap(image => imageOutput('Generated').render(args, image).map(block =>
           block.type === 'text' ? { ...block, text: `${block.text}\nImage prompt: ${image.prompt}` } : block)),
       ],
       presentationMeta: (_args: unknown, value: BatchGeneratedValue) => ({
@@ -552,6 +597,9 @@ export function apply(ctx: Context, config: Config = {}): void {
             ...(args.size !== undefined ? { size: args.size } : {}),
             ...(args.quality !== undefined ? { quality: args.quality } : {}),
             ...(args.workflow !== undefined ? { workflow: args.workflow } : {}),
+            ...(args.output_format !== undefined ? { output_format: args.output_format } : {}),
+            ...(args.frame_count !== undefined ? { frame_count: args.frame_count } : {}),
+            ...(args.frame_duration_ms !== undefined ? { frame_duration_ms: args.frame_duration_ms } : {}),
           }, exec)
           images.push({ ...value, prompt })
         } catch (error) {
@@ -565,7 +613,7 @@ export function apply(ctx: Context, config: Config = {}): void {
 
   ctx.tools.register(defineTool({
     name: 'edit_image',
-    description: 'Edit, combine, or restyle existing images with the configured provider. Images attached inline to the latest human message are already readable DSH attachments even when no workspace file exists. In that case, call edit_image immediately with prompt only; NEVER call read_image, glob, or shell to locate them, and NEVER invent @ paths. All inline images will be used in upload order. For specific older conversation images use source_attachment_id or source_attachment_ids; both canonical sha256: IDs and full bare SHA-256 digests are accepted. For files the user explicitly names in the workspace use source_path or source_paths. For what the user selected or drew on the image-gen workbench canvas (for example a hand-drawn sketch) use source=canvas_selection; canvas_state can verify a selection exists first. Provide exactly one selector field. Without a selector, images from the latest human message take priority; only when that message has no images does editing fall back to the newest conversation image. When the user wants a person, character, or object from the reference images kept as the same identity, write short hard identity-preservation instructions (use the same subject from the references; do not redesign it or synthesize a similar-looking replacement; change only scene, clothing, pose, lighting, style, or composition) instead of long generic appearance descriptions, which make the model replace the subject with a synthesized lookalike.',
+    description: 'Edit, combine, or restyle existing images with the configured provider. Images attached inline to the latest human message are already readable DSH attachments even when no workspace file exists. In that case, call edit_image immediately with prompt only (plus output options such as output_format=gif when the user wants an animation); NEVER call read_image, glob, or shell to locate them, and NEVER invent @ paths. All inline images will be used in upload order. For specific older conversation images use source_attachment_id or source_attachment_ids; both canonical sha256: IDs and full bare SHA-256 digests are accepted. For files the user explicitly names in the workspace use source_path or source_paths. For what the user selected or drew on the image-gen workbench canvas (for example a hand-drawn sketch) use source=canvas_selection; canvas_state can verify a selection exists first. Provide exactly one selector field. Without a selector, images from the latest human message take priority; only when that message has no images does editing fall back to the newest conversation image. When the user wants a person, character, or object from the reference images kept as the same identity, write short hard identity-preservation instructions (use the same subject from the references; do not redesign it or synthesize a similar-looking replacement; change only scene, clothing, pose, lighting, style, or composition) instead of long generic appearance descriptions, which make the model replace the subject with a synthesized lookalike.',
     parameters: {
       prompt: { type: 'string', required: true, description: 'Describe the changes to make while preserving everything else that should remain.' },
       provider: { type: 'string', enum: ['google', 'openai', 'openai-compat', 'seedream', 'dashscope', 'xai', 'zhipu', 'comfyui', 'chatgpt-sub', 'grok-sub', 'google-sub'], description: 'OMIT unless the user explicitly requests a specific image provider. Omission uses the saved default; never guess a channel or fill this with an empty string. Subscription providers edit through their logged-in accounts.' },
@@ -581,12 +629,14 @@ export function apply(ctx: Context, config: Config = {}): void {
       size: { type: 'string', description: 'Optional output size for OpenAI, Seedream, or DashScope; WIDTHxHEIGHT maps to aspect_ratio for xAI Grok.' },
       quality: { type: 'string', description: 'Optional generation quality for OpenAI or compatible edits, independent of size.' },
       workflow: { type: 'string', description: 'Optional name of the ComfyUI workflow to run; omit to use the active workflow from settings. Only meaningful when the ComfyUI provider is selected.' },
+      ...editGifToolParameters,
     },
     output: imageOutput('Edited'),
     async execute(rawArgs, exec): Promise<GeneratedValue> {
       const args = cleanImageToolArgs(rawArgs)
       const requestConfig = configForToolCall(current(), providerOverrideOf(args.provider), args.channel)
       const active = resolveProvider(withProviderOverrides(requestConfig, providerOverrideOf(args.provider), args.model, 'edit'))
+      assertGifProvider(args, active.provider)
       const canvasSelection = args.source === 'canvas_selection'
       if (canvasSelection && (
         args.source_attachment_id !== undefined
@@ -659,12 +709,22 @@ export function apply(ctx: Context, config: Config = {}): void {
 
       const size = args.size ?? active.imageSize
       if (active.provider === 'openai' || active.provider === 'openai-compat' || active.provider === 'xai' || active.provider === 'zhipu') {
-        if (active.provider === 'openai') validateOfficialSize(active.model, size)
+        // Only the per-call parameters select a GIF edit: channel extras are
+        // generation-only. As for generation, a GIF without an explicit size
+        // leaves the frame size to the provider.
+        const gifFields = gifRequestFields({ outputFormat: args.output_format, frameCount: args.frame_count, frameDurationMs: args.frame_duration_ms })
+        const gifRequested = gifFields.output_format === 'gif'
+        const editSize = gifRequested && args.size === undefined ? undefined : size
+        if (active.provider === 'openai' && editSize !== undefined) {
+          if (gifRequested) validateGifFrameSize(editSize)
+          else validateOfficialSize(active.model, editSize)
+        }
         const quality = active.provider === 'openai-compat' ? compatRequestQuality(requestConfig, args.quality) : active.provider === 'openai' ? args.quality : undefined
         if (active.provider === 'openai' && quality !== undefined && !officialQualityOptions(active.model).some(option => option.value === quality)) throw new Error('该 OpenAI 模型不支持所选生成质量')
         const xaiExtraBody = active.provider === 'xai' ? xaiToolParameters({ ...(args.aspect_ratio !== undefined ? { aspectRatio: args.aspect_ratio } : {}), ...(args.image_size !== undefined ? { imageSize: args.image_size } : {}), ...(args.size !== undefined ? { size: args.size } : {}) }) : undefined
-        const generated = await editOpenAICompatibleImage({ apiKey: credential, baseURL: active.baseURL, model: active.model, prompt: args.prompt, sourceImages, ...(active.provider === 'xai' ? {} : { size }), ...(quality === undefined ? {} : { quality }), maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal: exec.signal, ...(active.provider === 'openai-compat' ? { editFormat: active.editFormat, editExtra: active.editExtra, editSizeMode: requestConfig.openaiCompatEditSizeMode ?? 'auto', editResponseFormat: 'auto' as const, onResponseFormatRetry: status => { ctx.logger.warn('dsh-image-gen: openai-compatible relay rejected response_format=b64_json (' + String(status) + '); retrying without it') } } : active.provider === 'xai' ? { editFormat: 'xaiJson' as const, ...(xaiExtraBody === undefined ? {} : { extraBody: xaiExtraBody }) } : {}) })
-        const value = await saveGenerated(ctx, generated, active.provider, active.model, active.provider === 'xai' ? (xaiExtraBody?.aspect_ratio ?? 'auto') : quality === undefined ? size : `${size}, quality=${quality}`, current(), exec, knownWorkspaceRoots)
+        const generated = await editOpenAICompatibleImage({ apiKey: credential, baseURL: active.baseURL, model: active.model, prompt: args.prompt, sourceImages, ...(active.provider === 'xai' || editSize === undefined ? {} : { size: editSize }), ...(quality === undefined ? {} : { quality }), maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal: exec.signal, ...(gifRequested ? { extraBody: gifFields } : {}), ...(active.provider === 'openai-compat' ? { editFormat: active.editFormat, editExtra: active.editExtra, editSizeMode: requestConfig.openaiCompatEditSizeMode ?? 'auto', editResponseFormat: 'auto' as const, onResponseFormatRetry: status => { ctx.logger.warn('dsh-image-gen: openai-compatible relay rejected response_format=b64_json (' + String(status) + '); retrying without it') } } : active.provider === 'xai' ? { editFormat: 'xaiJson' as const, ...(xaiExtraBody === undefined ? {} : { extraBody: xaiExtraBody }) } : {}) })
+        const output = editSize ?? 'auto'
+        const value = await saveGenerated(ctx, generated, active.provider, active.model, active.provider === 'xai' ? (xaiExtraBody?.aspect_ratio ?? 'auto') : quality === undefined ? output : `${output}, quality=${quality}`, current(), exec, knownWorkspaceRoots)
         return active.provider === 'openai-compat' ? { ...value, channel: resolveOpenAICompatChannel(requestConfig, args.channel).id } : value
       }
       if (active.provider === 'seedream') {
@@ -723,14 +783,16 @@ function imageOutput(verb: 'Generated' | 'Edited') {
         attachment: { type: 'object', required: true, additionalProperties: false, properties: {
           attachmentId: { type: 'string', required: true }, mediaType: { type: 'string', required: true }, bytes: { type: 'integer', required: true }, width: { type: 'integer', required: true }, height: { type: 'integer', required: true }, name: { type: 'string' }, originalDimensions: { type: 'object', additionalProperties: false, properties: { width: { type: 'integer', required: true }, height: { type: 'integer', required: true } } },
         } },
-        provider: { type: 'string', required: true }, channel: { type: 'string' }, model: { type: 'string', required: true }, output: { type: 'string', required: true }, savedTo: { type: 'string' }, saveError: { type: 'string' }, seed: { type: 'integer' },
+        provider: { type: 'string', required: true }, channel: { type: 'string' }, model: { type: 'string', required: true }, output: { type: 'string', required: true }, savedTo: { type: 'string' }, saveError: { type: 'string' }, seed: { type: 'integer' }, animation: animationSchema, original: originalSchema,
       },
     },
-    render: (_args: unknown, value: GeneratedValue) => {
+    render: (args: unknown, value: GeneratedValue) => {
       const saved = typeof value.savedTo === 'string' ? ` It was also saved to the workspace as ${value.savedTo}.` : typeof value.saveError === 'string' ? ` Saving it to the workspace failed: ${value.saveError}.` : ' It has no local file path.'
       const action = verb === 'Generated' ? 'It is already attached to the conversation.' : 'The edited image is attached to the conversation.'
+      // The fixed sentence is a parsing contract for PTC dispatch cards
+      // (image-result-node.ts); GIF facts are appended after it, never inside.
       return [
-        { type: 'text' as const, text: `${verb} one image with ${value.provider}/${value.model} (${value.output}). Attachment ID: ${String(value.attachment.attachmentId)}. ${action}${saved} Respond to the user without reading or searching for the image.` },
+        { type: 'text' as const, text: `${verb} one image with ${value.provider}/${value.model} (${value.output}). Attachment ID: ${String(value.attachment.attachmentId)}. ${action}${saved} Respond to the user without reading or searching for the image.${animationNotes(args, value)}${cardNote(value)}` },
         { type: 'image' as const, attachment: value.attachment },
       ]
     },
@@ -740,9 +802,59 @@ function imageOutput(verb: 'Generated' | 'Edited') {
       ...(verb === 'Edited' ? { operation: 'edit' } : {}),
       ...(typeof value.savedTo === 'string' ? { savedTo: value.savedTo } : {}),
       ...(typeof value.seed === 'number' ? { seed: value.seed } : {}),
+      ...(value.original === undefined ? {} : { original: { key: value.original.key, bytes: value.original.bytes, mediaType: value.original.mediaType } }),
       prompt: (args as { prompt: string }).prompt,
     }),
   } as const
+}
+
+/**
+ * What the model needs to know about an animated result: that it is complete
+ * (the attached preview may be a still first frame), and whether the provider
+ * honoured the GIF parameters it was asked for.
+ */
+function animationNotes(args: unknown, value: GeneratedValue): string {
+  const requested = (args ?? {}) as { output_format?: unknown; frame_count?: unknown; frame_duration_ms?: unknown }
+  const animation = value.animation
+  if (animation === undefined) {
+    // The attachment type is the host's normalised copy, not what the provider sent, so it is not quoted here.
+    return requested.output_format === 'gif' ? ' Requested a GIF, but the provider returned a still image (no animation frames); the model or relay may not support GIF output.' : ''
+  }
+  let notes = ` The image is an animated GIF: ${String(animation.frames)} frames × ${String(animation.frameDurationMs)} ms (${String(animation.durationMs / 1000)}s loop). It is complete; do not regenerate or redraw individual frames unless the user asks.`
+  if (value.attachment.mediaType !== 'image/gif') notes += ' The attached preview shows only its first frame.'
+  const mismatches: string[] = []
+  if (typeof requested.frame_count === 'number' && requested.frame_count !== animation.frames) mismatches.push(`Requested ${String(requested.frame_count)} frames but received ${String(animation.frames)}`)
+  // GIF delays are stored in 10 ms ticks and the provider rounds to them, so
+  // only a full tick of difference means the parameter was not honoured.
+  if (typeof requested.frame_duration_ms === 'number' && Math.abs(requested.frame_duration_ms - animation.frameDurationMs) >= 10) mismatches.push(`Requested ${String(requested.frame_duration_ms)} ms per frame but received ${String(animation.frameDurationMs)} ms`)
+  if (mismatches.length > 0) notes += ` ${mismatches.join('. ')}; the provider may have ignored the GIF parameters.`
+  return notes
+}
+
+/**
+ * The result card already shows the image and links its saved file; an embed
+ * or a link in the reply shows the same result twice, and a ready-made embed
+ * gets copied even when told not to. A GIF the card cannot play (no vault
+ * copy, still attachment) is the exception: only an embed of the saved file
+ * animates. Inside run_code the program receives the structured value, never
+ * this text, so the text only serves direct calls.
+ */
+function cardNote(value: GeneratedValue): string {
+  const animated = value.animation !== undefined
+  if (animated && value.attachment.mediaType !== 'image/gif' && value.original === undefined) {
+    // Forward slashes keep a Windows path intact inside a Markdown link target.
+    return typeof value.savedTo === 'string' ? ` To show the animation, embed the saved file in your reply with Markdown: ![animated GIF](<${value.savedTo.replace(/\\/g, '/')}>)` : ''
+  }
+  const saved = typeof value.savedTo === 'string' ? ' and where it was saved' : ''
+  return ` The result card in the conversation already ${animated ? 'plays the animation' : 'shows the image'}${saved}; do not embed the image or link its file in your reply unless the user asks.`
+}
+
+/** Frame facts for a GIF result; a single-frame GIF is a still image and gets none. */
+function animationOf(generated: { data: Uint8Array; mediaType: ImageAttachmentRef['mediaType'] }): GeneratedValue['animation'] | undefined {
+  if (generated.mediaType !== 'image/gif') return undefined
+  const info = readGifInfo(generated.data)
+  if (info === undefined || info.frames < 2) return undefined
+  return { frames: info.frames, frameDurationMs: gifFrameDurationMs(info.delaysMs), durationMs: info.delaysMs.reduce((sum, delay) => sum + delay, 0) }
 }
 
 function attachmentMeta(ref: ImageAttachmentRef) {
@@ -765,9 +877,15 @@ async function saveGenerated(
 ): Promise<GeneratedValue> {
   if (!ctx.attachments.imageLimits.mediaTypes.includes(generated.mediaType)) throw new Error(`This DSH deployment does not accept ${generated.mediaType} generated images`)
   const attachment = await ctx.attachments.saveImage({ data: generated.data, mediaType: generated.mediaType, name: 'generated-image' })
+  const animation = animationOf(generated)
+  // Kept before the workspace step so a result without a file (or a disabled
+  // workspace) still carries the animation the card plays.
+  const original = await keepGifOriginal(vaultConfigOf(config), generated, attachment, message => { ctx.logger.warn(message) })
   const value: GeneratedValue = {
     attachment, provider, model, output,
     ...(typeof generated.seed === 'number' ? { seed: generated.seed } : {}),
+    ...(animation === undefined ? {} : { animation }),
+    ...(original === undefined ? {} : { original }),
   }
   if (config.saveToWorkspace === false) return value
   const workspaceRoot = exec.agent?.session.header.cwd

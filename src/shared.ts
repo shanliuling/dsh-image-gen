@@ -40,7 +40,10 @@ export function previewUrlFor(ref: ImageAttachmentRef): string {
   return PREVIEW_ROUTE + '?ref=' + encodeImageRef(ref)
 }
 
-/** Content-addressed raw copy, served when the attachment layer normalized the import. */
+/** Content-addressed vault key: the sha256 of the original bytes, validated on both faces. */
+export const VAULT_KEY_PATTERN = /^[a-f0-9]{64}$/
+
+/** Content-addressed raw copy, served when the attachment layer normalized an import or a generated GIF. */
 export function vaultUrlFor(key: string, mediaType?: string): string {
   const base = VAULT_ROUTE + '?key=' + encodeURIComponent(key)
   return mediaType === undefined ? base : base + '&mediaType=' + encodeURIComponent(mediaType)
@@ -348,6 +351,23 @@ export const DEFAULT_CLOUD_TIMEOUT_MS = 150_000
  * studio route so neither drifts from the other. */
 export const SUBSCRIPTION_TIMEOUT_MS = 300_000
 
+/** OpenAI Images GIF output contract: frame count, per-frame delay, and the
+ * longest edge of the sheet all frames are tiled into. */
+export const GIF_FRAME_COUNT_MIN = 2
+export const GIF_FRAME_COUNT_MAX = 16
+export const GIF_FRAME_DURATION_MS_MIN = 20
+export const GIF_FRAME_DURATION_MS_MAX = 2000
+export const GIF_SHEET_MAX_EDGE = 3840
+
+/** A GIF draws every frame in one image call, so it runs longer than a still; the host's HTTP client gives up on response headers after 300 s anyway. */
+export const DEFAULT_GIF_TIMEOUT_MS = 300_000
+
+/** The cloud timeout for a request: a GIF gets the longer GIF default while the cloud timeout is left at its default. */
+export function cloudTimeoutFor(configuredMs: number | undefined, gif: boolean): number {
+  const timeout = configuredMs ?? DEFAULT_CLOUD_TIMEOUT_MS
+  return gif && timeout === DEFAULT_CLOUD_TIMEOUT_MS ? DEFAULT_GIF_TIMEOUT_MS : timeout
+}
+
 /**
  * Credential references resolved through the DSH Credentials service (BYOK).
  * These are POSIX-style reference names, not environment variables: the host
@@ -503,6 +523,15 @@ export interface StudioAttachmentReference {
 
 export type StudioReference = StudioEncodedReference | StudioAttachmentReference
 
+/** Animated output for OpenAI-shaped providers; the frame ranges follow the GIF_FRAME_* constants. */
+export interface GifOutputRequest {
+  format: 'gif'
+  frameCount?: number
+  frameDurationMs?: number
+  /** Single-frame size (`WIDTHxHEIGHT`); absent leaves it to the provider, never to the still-image table. */
+  size?: string
+}
+
 /** One browser workbench generation or editing request. */
 export interface StudioGenerateRequest {
   mode: 'generate' | 'edit'
@@ -516,6 +545,8 @@ export interface StudioGenerateRequest {
   resolution?: string
   generationQuality?: string
   watermark?: StudioWatermark
+  /** Animated output; absent keeps the still-image request unchanged. */
+  output?: GifOutputRequest
   reference?: StudioReference
   references?: StudioReference[]
   count?: number | undefined
@@ -527,6 +558,8 @@ export interface StudioGeneratedItem {
   attachment: ImageAttachmentRef
   output: string
   savedTo?: string | undefined
+  /** Raw bytes kept in the vault when the attachment layer normalized an animated result. */
+  original?: { key: string; bytes: number; mediaType: ImageMediaType } | undefined
 }
 
 /** One completed workbench request. */

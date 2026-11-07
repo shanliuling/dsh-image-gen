@@ -4,8 +4,8 @@ import { mkdir, readFile, readdir, rename, rmdir, stat, unlink, writeFile } from
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
 import type { ImageMediaType } from '@deepseek-ai/dsh-attachment'
-
-export const VAULT_KEY_PATTERN = /^[a-f0-9]{64}$/
+import type { Config } from './config.js'
+import { VAULT_KEY_PATTERN } from './shared.js'
 
 const EXTENSION: Record<string, string> = {
   'image/png': 'png',
@@ -49,6 +49,11 @@ export function resolveVaultPath(configured: string, home?: string): string {
 
 export function isValidVaultKey(key: string): boolean {
   return VAULT_KEY_PATTERN.test(key)
+}
+
+/** Vault settings as configured: off only when explicitly disabled; a relative dir stays below the DSH home. */
+export function vaultConfigOf(config: Config): VaultConfig {
+  return { enabled: config.vaultEnabled !== false, dir: resolveVaultPath(config.vaultDir ?? '') }
 }
 
 /** Persist one original file; the same bytes are shared through content addressing. */
