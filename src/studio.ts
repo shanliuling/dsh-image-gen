@@ -249,13 +249,14 @@ export async function generateFromStudio(
   if (isSubscriptionProvider(input.provider)) {
     if (subscriptions === undefined) throw new Error('订阅生图不可用：订阅管理器未初始化')
     const subProfile = subscriptionStudioProfile(input.provider, true)
-    assertAllowed(subProfile, input)
+    assertAllowed(subProfile, input, input.output?.format === 'gif')
     return generateSubscriptionFromStudio(ctx, subscriptions, input, signal)
   }
   const channel = input.provider === 'openai-compat' ? resolveOpenAICompatChannel(config, input.channel) : undefined
   const requestConfig = input.provider === 'openai-compat' ? withOpenAICompatChannel(config, input.channel) : config
   const profile = studioProfile(requestConfig, input.provider, true, channel?.id)
-  assertAllowed(profile, input)
+  const channelGif = channelSelectsGif(config, input)
+  assertAllowed(profile, input, input.output?.format === 'gif' || channelGif)
   const active = resolveProvider(withProviderOverrides(requestConfig, input.provider, input.model))
   if (active.provider === 'comfyui') throw new Error('ComfyUI 暂未接入工作台')
   if (isSubscriptionProvider(active.provider)) throw new Error('订阅生图应通过订阅渠道执行')
@@ -294,7 +295,6 @@ export async function generateFromStudio(
       // request (a card regenerating keeps its own) or from a relay size table
       // the user configured and picked from; never from the implicit still-image
       // table, whose 1024 px sizes overflow the frame sheet.
-      const channelGif = p === 'openai-compat' && channelSelectsGif(config, input)
       const gifFields: ReturnType<typeof gifRequestFields> = p === 'openai' || p === 'openai-compat'
         ? gifRequestFields({ outputFormat: input.output?.format ?? (channelGif ? 'gif' : undefined), frameCount: input.output?.frameCount, frameDurationMs: input.output?.frameDurationMs })
         : {}
@@ -675,15 +675,16 @@ function option(value: string): StudioOption {
   return { value, label: RATIO_LABELS[value] ?? value }
 }
 
-function assertAllowed(profile: StudioProviderProfile, input: StudioGenerateRequest): void {
+function assertAllowed(profile: StudioProviderProfile, input: StudioGenerateRequest, gif: boolean): void {
   if (!studioModelOptionsForMode(profile, input.mode).some(option => option.value === input.model)) throw new Error('模型配置已变化，请刷新工作台后重试')
   if (input.output !== undefined && input.provider !== 'openai' && input.provider !== 'openai-compat') throw new Error('该 Provider 不支持 GIF 输出参数')
-  // A GIF takes no size from the ratio table, so the ratio and tier a card
-  // remembered need not exist on this channel (a relay with a size table lists
-  // only pixel tiers, never the legacy `standard`). OpenAI's quality is not a
-  // tier but a field sent as is, so a GIF request still has it checked.
+  // A GIF (asked for by the request or by the channel) takes no size from the
+  // ratio table, so the ratio and tier a card remembered need not exist on this
+  // channel (a relay with a size table lists only pixel tiers, never the legacy
+  // `standard`). OpenAI's quality is not a tier but a field sent as is, so a
+  // GIF request still has it checked.
   const selectedQuality = input.provider === 'openai' ? input.generationQuality ?? input.quality : input.resolution ?? input.quality
-  if (input.output?.format !== 'gif') {
+  if (!gif) {
     if (!profile.ratioOptions.some(option => option.value === input.ratio)) throw new Error('该 Provider 不支持所选比例')
     if (!profile.qualityOptions.some(option => option.value === selectedQuality)) throw new Error('该 Provider 不支持所选清晰度')
     if (input.resolution !== undefined && profile.resolutionOptions !== undefined && !profile.resolutionOptions[input.ratio]?.some(option => option.value === input.resolution)) throw new Error('该比例不支持所选分辨率')

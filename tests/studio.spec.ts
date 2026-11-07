@@ -1682,6 +1682,9 @@ describe('workbench GIF output and originals', () => {
     expect(bodyOf(fetch)).toEqual({ model: 'relay-image', prompt: 'wave', output_format: 'gif' })
     await expect(generateFromStudio(ctx, tabled, request, signal)).rejects.toThrow('比例')
     expect(fetch).toHaveBeenCalledTimes(1)
+    // A channel whose extras select GIF makes the same request a GIF, checked as one.
+    await generateFromStudio(ctx, { ...tabled, openaiCompatExtraBody: { output_format: 'gif' } }, request, signal)
+    expect(bodyOf(fetch, 1)).toEqual({ model: 'relay-image', prompt: 'wave', output_format: 'gif' })
   })
 
   it('still checks the OpenAI quality of a GIF request, which is sent as is, before spending it', async () => {
