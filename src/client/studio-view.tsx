@@ -170,6 +170,16 @@ export interface StudioWorkspaceProps {
   sessionIds?: readonly string[] | undefined
 }
 
+/**
+ * The selection after the gallery reloaded: the fresh record of a saved item,
+ * null for a saved item that was deleted, and an unsaved result unchanged.
+ */
+export function keepSelection(current: GalleryItem, next: readonly GalleryItem[], previousIds: ReadonlySet<string> | undefined): GalleryItem | null {
+  const fresh = next.find(item => item.id === current.id)
+  if (fresh !== undefined) return fresh
+  return previousIds?.has(current.id) === true ? null : current
+}
+
 export const StudioView: FC<{
   locale?: LocaleService | undefined
   /** Host credential-change notifier; re-reads provider sign-in state silently. */
@@ -426,10 +436,16 @@ export const StudioView: FC<{
 
   useEffect(() => {
     let mounted = true
+    // Gallery ids seen by the previous load: only an item that was in the
+    // gallery and is gone now was deleted. An unsaved result was never there,
+    // so a gallery refresh (or the first load after a remount, #99) keeps it.
+    let known: ReadonlySet<string> | undefined
     const load = () => void getGalleryItems().then(next => {
       if (!mounted) return
+      const previous = known
+      known = new Set(next.map(item => item.id))
       setItems(next)
-      setSelected(current => current === null ? null : (next.find(item => item.id === current.id) ?? null))
+      setSelected(current => current === null ? null : keepSelection(current, next, previous))
     })
     load()
     const unsubscribe = subscribeGallery(load)

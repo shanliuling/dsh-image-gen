@@ -60,3 +60,18 @@ describe('workbench session (#99)', () => {
     expect(studioSession('preview')).not.toBe(studioSession('infinite'))
   })
 })
+
+describe('workbench selection across gallery reloads (#99)', () => {
+  it('keeps an unsaved result, refreshes a saved one and drops a deleted one', async () => {
+    const { keepSelection } = await import('../src/client/studio-view.js')
+    const saved = item('saved')
+    const unsaved = item('unsaved')
+    // First load after a remount: nothing known yet, the unsaved result stays.
+    expect(keepSelection(unsaved, [saved], undefined)).toBe(unsaved)
+    // A later refresh: still not in the gallery and never was, so it stays.
+    expect(keepSelection(unsaved, [saved], new Set(['saved']))).toBe(unsaved)
+    const refreshed = { ...saved, isFavorite: true }
+    expect(keepSelection(saved, [refreshed], new Set(['saved']))).toBe(refreshed)
+    expect(keepSelection(saved, [], new Set(['saved']))).toBeNull()
+  })
+})
