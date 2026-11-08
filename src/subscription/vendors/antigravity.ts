@@ -66,7 +66,13 @@ export const ANTIGRAVITY_IMAGE_MODEL = DEFAULT_SUBSCRIPTION_MODELS['google-sub']
  * hardcoded fallback keep the header sane when the updater is unreachable
  * (same strategy as the reference implementation's version.js).
  */
-const ANTIGRAVITY_VERSION_FALLBACK = '2.0.6'
+/**
+ * Oldest client version the backend still serves (#123): 2.x now gets HTTP 200
+ * with a "no longer supported" text and no image. Raise it when the backend
+ * asks for a newer client again.
+ */
+export const MIN_ANTIGRAVITY_VERSION = '3.0.0'
+const ANTIGRAVITY_VERSION_FALLBACK = MIN_ANTIGRAVITY_VERSION
 const VERSION_URL = 'https://antigravity-auto-updater-974169037036.us-central1.run.app'
 const CHANGELOG_URL = 'https://antigravity.google/changelog'
 const VERSION_FETCH_TIMEOUT_MS = 5_000
@@ -77,7 +83,21 @@ let antigravityVersion: string | undefined
 
 /** Current client version: the fetched one, or the fallback until fetched. */
 export function getAntigravityVersion(): string {
-  return antigravityVersion ?? ANTIGRAVITY_VERSION_FALLBACK
+  // Never below the floor: the version services can lag behind it (#123).
+  return antigravityVersion !== undefined && compareVersions(antigravityVersion, MIN_ANTIGRAVITY_VERSION) > 0
+    ? antigravityVersion
+    : ANTIGRAVITY_VERSION_FALLBACK
+}
+
+/** Numeric x.y.z comparison: negative, zero or positive like a sort comparator. */
+export function compareVersions(left: string, right: string): number {
+  const a = left.split('.').map(Number)
+  const b = right.split('.').map(Number)
+  for (let index = 0; index < 3; index += 1) {
+    const diff = (a[index] ?? 0) - (b[index] ?? 0)
+    if (diff !== 0) return diff
+  }
+  return 0
 }
 
 /** Test seam: pin the version so unit tests never depend on the network. */
@@ -89,8 +109,11 @@ export function setAntigravityVersionForTest(version: string | undefined): void 
 export async function initAntigravityVersion(signal?: AbortSignal): Promise<void> {
   signal?.throwIfAborted()
   if (antigravityVersion !== undefined) return
-  const parsed = await fetchVersionText(VERSION_URL, undefined, signal)
-    ?? await fetchVersionText(CHANGELOG_URL, CHANGELOG_SCAN_CHARS, signal)
+  // The auto-updater still answers "Fixed Version: 2.0.6"; a version below the
+  // floor is ignored, so the changelog (or the floor itself) decides instead.
+  const usable = (version: string | undefined) => version !== undefined && compareVersions(version, MIN_ANTIGRAVITY_VERSION) >= 0 ? version : undefined
+  const parsed = usable(await fetchVersionText(VERSION_URL, undefined, signal))
+    ?? usable(await fetchVersionText(CHANGELOG_URL, CHANGELOG_SCAN_CHARS, signal))
   signal?.throwIfAborted()
   if (parsed !== undefined) antigravityVersion = parsed
 }
@@ -460,7 +483,9 @@ export async function antigravityGenerateImage(options: {
       if (parsed !== undefined) return parsed
       // Endpoint answered but with no image; remember why and try the next.
       const reason = parseSseError(text)
-      failures.push(`${new URL(base).hostname}: ${diagnosticText(reason ?? 'response contained no image', options.blob)}`)
+      // A text-only answer says why (e.g. "This version of Antigravity is no longer supported").
+      const said = reason === undefined ? parseSseText(text) : undefined
+      failures.push(`${new URL(base).hostname}: ${diagnosticText(reason ?? (said === undefined ? 'response contained no image' : `returned text instead of an image: ${said.slice(0, 200)}`), options.blob)}`)
       continue
     } catch (error) {
       if (options.signal?.aborted === true) throw error
@@ -495,6 +520,26 @@ function parseSseImage(text: string): AntigravityImageResult | undefined {
     }
   }
   return undefined
+}
+
+/** The text parts of an SSE body, for a response that carried no image. */
+function parseSseText(text: string): string | undefined {
+  const pieces: string[] = []
+  for (const line of text.split('\n')) {
+    if (!line.startsWith('data: ')) continue
+    const raw = line.slice('data: '.length).trim()
+    if (raw.length === 0 || raw === '[DONE]') continue
+    try {
+      const data = JSON.parse(raw) as { response?: { candidates?: Array<{ content?: { parts?: Array<{ text?: unknown }> } }> } }
+      for (const candidate of data.response?.candidates ?? []) {
+        for (const part of candidate.content?.parts ?? []) if (typeof part.text === 'string') pieces.push(part.text)
+      }
+    } catch {
+      // skip
+    }
+  }
+  const joined = pieces.join('').replace(/\s+/g, ' ').trim()
+  return joined.length > 0 ? joined : undefined
 }
 
 /** Pull the first error block an SSE body reports, for better messages. */
