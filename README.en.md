@@ -10,7 +10,7 @@
 
 ### Draw by talking, right inside DeepSeek Harness
 
-<p><b>Batch generation from one message · A canvas the AI can actually read · Agent-picked prompts from 500+ examples · Subscription sign-in, no API key</b></p>
+<p><b>Batch generation from one message · Animated GIFs · A canvas the AI can actually read · Agent-picked prompts from 500+ examples · Subscription sign-in, no API key</b></p>
 
 <p>
   <a href="https://www.npmjs.com/package/dsh-image-gen"><img src="https://img.shields.io/npm/v/dsh-image-gen?style=flat-square&color=4f6ef7" alt="npm version" /></a>
@@ -77,6 +77,7 @@ No parameters to learn, no pages to switch. Just say it in a DSH chat:
 | "Turn the sword I circled into an axe, keep everything else" | 🎯 **Edit what you circle**: only the marked area changes |
 | "Keep this character exactly the same, but put them in a snowy scene" | 🎭 **Identity consistency**: edits keep the same person or object instead of a lookalike |
 | "Same prompt, one from GPT and one from Gemini, side by side" | ⚖️ **Multi-model comparison**: runs several models concurrently and lays the results out on one canvas |
+| "Turn this character into a looping GIF of them waving" | 🎞️ **Animated GIFs**: generates a looping animation that plays in the card, with speed control and per-frame edit notes |
 
 <img src="docs/assets/readme/workflow-overview-en.webp" alt="dsh-image-gen complete AI image creation workflow" width="100%" />
 
@@ -217,8 +218,6 @@ Sketch on an infinite canvas, lay out references, circle what should change, the
 - Use natural language for text-to-image, image-to-image, multi-image reference, and style transfer.
 - **Identity consistency**: when you ask to keep a person, character, or object the same, the plugin tells the model to reuse the subject from the references and change only the scene, clothing, pose, or style, rather than drawing a similar-looking replacement.
 - Edit the original prompt to regenerate, then switch between revisions on the same image card.
-- When a result is a GIF, the chat card plays it: set the speed (0.2×–2×) from its corner, and the toolbar's download menu saves the GIF at the current or the original speed, or the frame on screen as PNG. The enlarged view adds a play button and a frame timeline (hover to preview a frame, click to stop on it) next to the speed. In the Gallery, GIF tiles carry a badge and play on hover, and the enlarged view plays and downloads them the same way. The GIF file can be dragged straight out, and regenerating keeps it a GIF (the clipboard only takes still images, so copying gives a single frame).
-- A GIF card's **Edit** chip (or **Edit frames** in the enlarged view) takes notes on frames: click a spot on the picture to leave a note, which shows only on its own frame, or switch to **All frames** to see them together; send once to redraw the whole animation from your notes, kept as a new version that plays (OpenAI and compatible channels only, and the relay must support image editing; otherwise one click turns the notes into a plain regeneration).
 
 <br />
 
@@ -228,6 +227,16 @@ Sketch on an infinite canvas, lay out references, circle what should change, the
   <br />
   <sub>Regenerate in place after editing the prompt, then switch between previous results on the same image card.</sub>
 </div>
+
+<br />
+
+### 🎞️ Animated GIFs: generate, play, edit by frame
+
+With a GIF-capable model such as GPT Image 2.6, just ask for a "GIF" or "animation" in chat to get a looping animation, including animating the character from a reference image. Frame count and timing can be set with `frame_count` (2–16) and `frame_duration_ms` (20–2000 ms).
+
+- When a result is a GIF, the chat card plays it: set the speed (0.2×–2×) from its corner, and the toolbar's download menu saves the GIF at the current or the original speed, or the frame on screen as PNG. The enlarged view adds a play button and a frame timeline (hover to preview a frame, click to stop on it) next to the speed. In the Gallery, GIF tiles carry a badge and play on hover, and the enlarged view plays and downloads them the same way. The GIF file can be dragged straight out, and regenerating keeps it a GIF (the clipboard only takes still images, so copying gives a single frame).
+- A GIF card's **Edit** chip (or **Edit frames** in the enlarged view) takes notes on frames: click a spot on the picture to leave a note, which shows only on its own frame, or switch to **All frames** to see them together; send once to redraw the whole animation from your notes, kept as a new version that plays (OpenAI and compatible channels only, and the relay must support image editing; otherwise one click turns the notes into a plain regeneration).
+- Supported channels: official OpenAI and OpenAI-compatible relays (the model and relay must support GIF). The Codex images endpoint behind the ChatGPT subscription does not offer GIF output upstream yet.
 
 <br />
 
@@ -324,19 +333,19 @@ Bring private image generation on your local GPU directly into Agent conversatio
 
 ## Provider Support
 
-| Provider | Chat generation | Chat batch | Chat editing | Studio | Multi-model comparison |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **Google Gemini** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ |
-| **OpenAI Images** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ |
-| **OpenAI Compatible (relay)** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ |
-| **ByteDance Seedream / Volcengine Ark** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ |
-| **Aliyun DashScope / Qwen Image** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ |
-| **xAI Grok Imagine** | ✅ | ✅ | ⚠️ Limited | ✅ | ✅ |
-| **Zhipu GLM-Image** | ✅ | ✅ | — | ✅ | ✅ |
-| **Local ComfyUI** | ✅ | ✅ | ✅ Single | — | — |
-| **ChatGPT subscription (key-free)** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ |
-| **Grok subscription (key-free)** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ |
-| **Google subscription (key-free)** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ |
+| Provider | Chat generation | Chat batch | Chat editing | Studio | Multi-model comparison | GIF |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Google Gemini** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ | — |
+| **OpenAI Images** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ | ✅ |
+| **OpenAI Compatible (relay)** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ | ✅ |
+| **ByteDance Seedream / Volcengine Ark** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ | — |
+| **Aliyun DashScope / Qwen Image** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ | — |
+| **xAI Grok Imagine** | ✅ | ✅ | ⚠️ Limited | ✅ | ✅ | — |
+| **Zhipu GLM-Image** | ✅ | ✅ | — | ✅ | ✅ | — |
+| **Local ComfyUI** | ✅ | ✅ | ✅ Single | — | — | — |
+| **ChatGPT subscription (key-free)** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ | — |
+| **Grok subscription (key-free)** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ | — |
+| **Google subscription (key-free)** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ | — |
 
 > Studio and multi-model comparison currently support cloud Providers only (subscription channels included). Multi-model comparison uses the model configured for each Provider in Settings.
 > Zhipu GLM-Image does not support image-to-image upstream. xAI image editing goes through the OpenAI-compatible protocol (multipart); some gateways may need further adaptation.
