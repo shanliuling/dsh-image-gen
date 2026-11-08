@@ -13,6 +13,7 @@ import {
   SUBSCRIPTION_STATUS_ROUTE,
   activeComfyUIWorkflow,
   cloudCredentialRef,
+  currentSeedreamModel,
   resolveComfyUIWorkflows,
   isSubscriptionProvider,
   resolveOpenAICompatChannel,
@@ -183,6 +184,8 @@ export function pillModelOf(provider: ImageProvider, value: PillSettings | undef
   }
   const field = PILL_MODEL_FIELDS[provider]
   const stored = field === undefined ? undefined : value?.[field]
+  // A retired Seedream model runs on its replacement, which the row names.
+  if (provider === 'seedream') return currentSeedreamModel(typeof stored === 'string' ? stored : undefined)
   return typeof stored === 'string' && stored.length > 0 ? stored : DEFAULT_MODELS[provider]
 }
 

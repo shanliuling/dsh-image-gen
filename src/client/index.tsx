@@ -21,6 +21,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import type {} from '@deepseek-ai/dsh-client-ui-tool/client'
 import {
+  currentSeedreamModel,
   CLOUD_CREDENTIAL_REFS,
   CLOUD_IMAGE_PROVIDERS,
   DEFAULT_BASE_URLS,
@@ -1878,6 +1879,8 @@ function modelOf(provider: Provider, value: ImageSettings | undefined): string {
     : isSubscriptionProvider(provider)
       ? DEFAULT_MODELS[provider]
       : value?.[CLOUD_MODEL_FIELDS[provider as CloudImageProvider]]
+  // A retired Seedream model runs on its replacement; show that one (saving rewrites it).
+  if (provider === 'seedream') return currentSeedreamModel(typeof stored === 'string' ? stored : undefined)
   return typeof stored === 'string' && stored.length > 0 ? stored : DEFAULT_MODELS[provider]
 }
 

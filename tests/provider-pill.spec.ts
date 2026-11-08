@@ -46,6 +46,8 @@ describe('composer provider pill model resolution', () => {
     expect(pillModelOf('openai', { openaiModel: 'gpt-image-1' })).toBe('gpt-image-1')
     expect(pillModelOf('openai-compat', { openaiCompatModel: 'flux-pro-1.1' })).toBe('flux-pro-1.1')
     expect(pillModelOf('seedream', { seedreamModel: 'doubao-seedream-4-0' })).toBe('doubao-seedream-4-0')
+    // A retired Seedream model is shown as the replacement that actually runs.
+    expect(pillModelOf('seedream', { seedreamModel: 'doubao-seedream-5-0-260128' })).toBe(DEFAULT_MODELS.seedream)
     expect(pillModelOf('dashscope', { dashscopeModel: 'wan2.5-t2i' })).toBe('wan2.5-t2i')
   })
 
