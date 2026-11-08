@@ -139,15 +139,40 @@ type KeyDot = 'checking' | 'configured' | 'missing' | 'unknown'
 /** Menu's design max-height, mirroring the CSS `max-height` rule. */
 const MENU_MAX_HEIGHT = 320
 
+/**
+ * Where `position: fixed` offsets start next to the pill, in viewport
+ * coordinates. The host composer wraps the tool row in a transformed box
+ * (`will-change: transform`), which makes fixed descendants resolve against
+ * that box instead of the viewport (#109): viewport coordinates then land the
+ * menu a sidebar-width off whenever the left sidebar is open. Two zero-size
+ * probes read the real origin, whichever CSS rule creates it.
+ */
+export function fixedOriginNear(host: Element): { left: number; top: number; bottom: number } {
+  const probe = (css: string): DOMRect => {
+    const element = document.createElement('div')
+    element.style.cssText = `position:fixed;width:0;height:0;visibility:hidden;pointer-events:none;${css}`
+    host.appendChild(element)
+    const rect = element.getBoundingClientRect()
+    element.remove()
+    return rect
+  }
+  const topLeft = probe('left:0;top:0')
+  return { left: topLeft.left, top: topLeft.top, bottom: probe('left:0;bottom:0').bottom }
+}
+
 /** Compute the fixed-position anchor from the pill button: open upward when
- * the chat pane leaves room above the composer, drop down otherwise. */
+ * the chat pane leaves room above the composer, drop down otherwise. The
+ * numbers are relative to the box fixed elements resolve against. */
 function anchorOf(button: HTMLButtonElement | null): { left: number; bottom?: number; top?: number } | undefined {
   const rect = button?.getBoundingClientRect()
-  if (rect === undefined) return undefined
+  const host = button?.parentElement
+  if (rect === undefined || host === null || host === undefined) return undefined
+  const origin = fixedOriginNear(host)
+  const left = rect.left - origin.left
   if (rect.top >= MENU_MAX_HEIGHT + 12) {
-    return { left: rect.left, bottom: window.innerHeight - rect.top + 6 }
+    return { left, bottom: origin.bottom - rect.top + 6 }
   }
-  return { left: rect.left, top: rect.bottom + 6 }
+  return { left, top: rect.bottom + 6 - origin.top }
 }
 
 /** Whether the user opted into the composer pill; hidden (not merely inert) when off. */
