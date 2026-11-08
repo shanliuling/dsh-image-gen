@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import { apply } from '../src/index.js'
 import { gifBytes } from './gif-fixture.js'
 import { THUMB_ROUTE, VAULT_DELETE_ROUTE, VAULT_REFS_ROUTE, ZIP_ROUTE } from '../src/shared.js'
-import { createImageResultDefinition } from '../src/client/image-result-node.js'
+import { createImageResultDefinition, imageResultsFromPtcDispatch } from '../src/client/image-result-node.js'
 
 function attachment(id: string): ImageAttachmentRef {
   return {
@@ -1174,6 +1174,23 @@ describe('GIF originals kept for the conversation card', () => {
     expect(schemaOf(toolByName(tools, 'generate_image')).properties.original).toEqual(expected)
     expect(schemaOf(toolByName(tools, 'edit_image')).properties.original).toEqual(expected)
     expect(schemaOf(toolByName(tools, 'generate_images')).properties.images?.items.properties.original).toEqual(expected)
+  })
+
+  it('carries the original through a run_code dispatch, whose card sees only the rendered text', async () => {
+    const { ctx, tools } = harnessContext()
+    vi.mocked(ctx.attachments.saveImage).mockResolvedValue(webp())
+    vi.stubGlobal('fetch', vi.fn(async () => gifResponse()))
+    apply(ctx, compat(await vaultDir()))
+    for (const name of ['generate_image', 'generate_images'] as const) {
+      const tool = toolByName(tools, name)
+      const args = name === 'generate_image' ? { prompt: 'wave', output_format: 'gif' } : { prompts: ['wave'], output_format: 'gif' }
+      const value = await tool.execute(args as never, exec())
+      const content = tool.output.render(args, value as never)
+      const [result] = imageResultsFromPtcDispatch({ type: 'tool/ptc-dispatch', data: { name, arguments: args, isError: false, content } } as never)
+      expect(result?.original).toEqual(original)
+      // The prompt of a batch item is still read from after the summary.
+      expect(result?.prompt).toBe('wave')
+    }
   })
 
   it('keeps no original when the host returns the same GIF bytes, when a still image was normalized, or when the vault is off', async () => {

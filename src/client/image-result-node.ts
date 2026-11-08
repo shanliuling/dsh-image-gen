@@ -191,6 +191,8 @@ const PTC_IMAGE_TOOL_NAMES: ReadonlySet<string> = new Set(['generate_image', 'ge
  * template rather than parsed out of natural language.
  */
 const PTC_SUMMARY_PATTERN = /^(?:Generated|Edited) one image with ([^/\s]+)\/(\S+) \((.+)\)\. Attachment ID: /
+/** The vault reference the tools append for an animated result (index.ts originalNote). */
+const ORIGINAL_NOTE_PATTERN = / Original animation \(for the result card only\): vault ([a-f0-9]{64}), (\d+) bytes, (image\/[a-z]+)\./
 const PTC_SAVED_TO_PATTERN = / It was also saved to the workspace as (.+)\. (?:(?:Saving it to the workspace failed)|(?:It has no local file path)|(?:Respond to the user))/
 
 /**
@@ -228,6 +230,8 @@ export function imageResultsFromPtcDispatch(event: EventLike): readonly ImageRes
     if (attachment === undefined) continue
     const summary = PTC_SUMMARY_PATTERN.exec(summaryText)
     const savedTo = PTC_SAVED_TO_PATTERN.exec(summaryText)?.[1]
+    const originalMatch = ORIGINAL_NOTE_PATTERN.exec(summaryText)
+    const original = originalMatch === null ? undefined : originalFromMeta({ key: originalMatch[1], bytes: Number(originalMatch[2]), mediaType: originalMatch[3] })
     const promptMarker = '\nImage prompt: '
     const promptAt = data.name === 'generate_images' ? summaryText.indexOf(promptMarker) : -1
     results.push({
@@ -238,6 +242,7 @@ export function imageResultsFromPtcDispatch(event: EventLike): readonly ImageRes
       output: summary?.[3] ?? '',
       ...(savedTo !== undefined ? { savedTo } : {}),
       ...(sourceIds !== undefined ? { sourceAttachmentIds: sourceIds } : {}),
+      ...(original === undefined ? {} : { original }),
     })
   }
   return results
@@ -286,6 +291,17 @@ function positiveInteger(value: unknown): value is number {
 
 function stringValue(value: unknown, fallback: string): string {
   return typeof value === 'string' ? value : fallback
+}
+
+/**
+ * The identity of one image version. A still is its attachment; an animated
+ * result is also its vault original, because the host normalizes a GIF to a
+ * still of its first frame and two animations that differ only after that
+ * frame share one attachment. Keying versions, gallery records and frame notes
+ * by the attachment alone would merge such animations into one.
+ */
+export function imageVersionKey(attachmentId: string, original: { readonly key: string } | undefined): string {
+  return original === undefined ? attachmentId : `${attachmentId}#gif:${original.key}`
 }
 
 /** Parse a vault reference; anything malformed drops the reference, never the image that carries it. */

@@ -8,7 +8,7 @@ import { EventEmitter } from 'node:events'
 import { Readable } from 'node:stream'
 import type { AddressInfo } from 'node:net'
 import { DEFAULT_GOOGLE_MODEL, DEFAULT_OPENAI_MODEL, DEFAULT_SEEDREAM_MODEL, DEFAULT_DASHSCOPE_MODEL, DEFAULT_XAI_MODEL, DEFAULT_ZHIPU_MODEL } from '../src/config.js'
-import { channelSelectsGif, generateFromStudio, runPool, studioProfile, describeStudio, openAIRequestSize } from '../src/studio.js'
+import { channelSelectsGif, generateFromStudio, runPool, studioProfile, describeStudio, openAIRequestSize, withGenerationModel } from '../src/studio.js'
 import { parseStudioGenerateRequest, serveStudio } from '../src/studio-route.js'
 import { SUBSCRIPTION_PROVIDERS, DEFAULT_SUBSCRIPTION_MODELS, SUBSCRIPTION_TIMEOUT_MS, STUDIO_PROVIDERS, CLOUD_IMAGE_PROVIDERS, studioModelOptionsForMode, type StudioProvider, type SubscriptionProvider } from '../src/shared.js'
 import { SUBSCRIPTION_CAPABILITIES } from '../src/capabilities.js'
@@ -28,6 +28,7 @@ import {
   loadConversationImageRevisionChain,
   selectConversationImageRevision,
 } from '../src/client/conversation-image-revisions.js'
+import { imageVersionKey } from '../src/client/image-result-node.js'
 import { buildComparisonTargets, comparisonOptionUnion, initialComparisonProviders } from '../src/client/multi-model-compare.js'
 
 describe('multi-model comparison planning', () => {
@@ -664,6 +665,29 @@ describe('conversation and gallery image regeneration', () => {
     expect(loaded.revisions[0]).not.toHaveProperty('original')
     vi.unstubAllGlobals()
   })
+
+  it('keeps two animations that share a first-frame still as separate versions', () => {
+    const values = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => { values.set(key, value) },
+    })
+    const originId = 'sha256:gif-origin-shared'
+    // The host normalized both GIFs to the same first-frame still.
+    const still = { attachmentId: 'sha256:same-first-frame' as any, mediaType: 'image/webp' as const, bytes: 8, width: 32, height: 32 }
+    const base = { attachment: still, prompt: 'a gif', provider: 'openai-compat' as const, model: 'relay', output: 'auto', createdAt: 1, ratio: '1:1', quality: 'standard' }
+    const first = { ...base, original: { key: 'a'.repeat(64), bytes: 10, mediaType: 'image/gif' as const } }
+    const second = { ...base, createdAt: 2, original: { key: 'b'.repeat(64), bytes: 12, mediaType: 'image/gif' as const } }
+    appendConversationImageRevision(originId, first)
+    const chain = appendConversationImageRevision(originId, second)
+    expect(chain.revisions.map(revision => revision.original?.key)).toEqual(['a'.repeat(64), 'b'.repeat(64)])
+    // The same animation appended again is still one version.
+    expect(appendConversationImageRevision(originId, { ...first, createdAt: 3 }).revisions).toHaveLength(2)
+    // A still keeps its attachment as its identity.
+    expect(imageVersionKey('sha256:x', undefined)).toBe('sha256:x')
+    expect(imageVersionKey('sha256:x', first.original)).not.toBe(imageVersionKey('sha256:x', second.original))
+    vi.unstubAllGlobals()
+  })
 })
 
 describe('real HTTP server cancellation with Fetch Abort', () => {
@@ -1244,6 +1268,16 @@ describe('openai-compat model choices', () => {
     const editing = studioProfile({ ...config, openaiCompatEditModel: 'image-edit' }, 'openai-compat', true)
     expect(studioModelOptionsForMode(editing, 'edit').map(option => option.value)).toEqual(['image-edit'])
     expect(studioModelOptionsForMode(editing, 'generate').map(option => option.value)).toEqual(['image-2.5', 'image-2'])
+  })
+
+  it('regenerates an edit result with the generation model instead of rejecting the editing model', () => {
+    const editing = studioProfile({ ...config, openaiCompatEditModel: 'image-edit' }, 'openai-compat', true)
+    const request = { mode: 'generate' as const, provider: 'openai-compat' as const, model: 'image-edit', prompt: 'again', ratio: '1:1', quality: 'standard' }
+    expect(withGenerationModel(editing, request).model).toBe('image-2')
+    // An edit keeps its editing model, and an unknown model is left for the stale-workbench check.
+    expect(withGenerationModel(editing, { ...request, mode: 'edit' }).model).toBe('image-edit')
+    expect(withGenerationModel(editing, { ...request, model: 'gone' }).model).toBe('gone')
+    expect(withGenerationModel(studioProfile(config, 'openai-compat', true), request).model).toBe('image-edit')
   })
 })
 

@@ -35,6 +35,7 @@ import {
 import { DELETE_ROUTE, SAVE_WORKSPACE_ROUTE, STUDIO_ROUTE, thumbUrlFor, isSubscriptionProvider, studioWatermarkCapability, studioModelForMode, studioModelOptionsForMode, studioTargetKey, type CloudImageProvider, type StudioConfigResponse, type StudioGenerateResponse, type StudioGeneratedItem, type StudioProvider, type StudioProviderProfile, type StudioReference, type StudioWatermark } from '../shared.js'
 import { deleteGalleryItem, getGalleryItems, subscribeGallery, toggleFavoriteGalleryItem, type GalleryItem, saveFavoritePrompt, getFavoritePrompts, deleteFavoritePrompt, subscribeFavorites, addFavoriteFolder, getFavoriteFolders, deleteFavoriteFolder, moveFavoritePrompt, updateFavoritePrompt, type FavoritePrompt, type FavoriteFolder } from './gallery-store.js'
 import { persistGalleryRecord } from './gallery-media.js'
+import { imageVersionKey } from './image-result-node.js'
 import { copyImageBlob, downloadBlobUrl, formatRelativeTime } from './browser-image-utils.js'
 import { buildComparisonTargets, comparisonOptionUnion, comparisonOutputOptions, initialComparisonProviders } from './multi-model-compare.js'
 import { WatermarkControl } from './watermark-control.js'
@@ -941,7 +942,7 @@ export const StudioView: FC<{
         }
 
         const galleryEntries = successes.map(({ value }, idx): GalleryItem => ({
-          id: String(value.payload.attachment.attachmentId || `${value.payload.createdAt}-${idx}`),
+          id: value.payload.attachment.attachmentId ? imageVersionKey(String(value.payload.attachment.attachmentId), value.payload.original) : `${value.payload.createdAt}-${idx}`,
           attachment: value.payload.attachment,
           prompt: value.payload.prompt,
           provider: value.payload.provider,
@@ -1007,10 +1008,11 @@ export const StudioView: FC<{
             attachment: payload.attachment,
             output: payload.output,
             ...(payload.savedTo ? { savedTo: payload.savedTo } : {}),
+            ...(payload.original === undefined ? {} : { original: payload.original }),
           }]
 
       const galleryEntries: GalleryItem[] = generatedList.map((gen, idx) => ({
-        id: String(gen.attachment.attachmentId || `${payload.createdAt}-${idx}`),
+        id: gen.attachment.attachmentId ? imageVersionKey(String(gen.attachment.attachmentId), gen.original) : `${payload.createdAt}-${idx}`,
         attachment: gen.attachment,
         prompt: payload.prompt,
         provider: payload.provider,

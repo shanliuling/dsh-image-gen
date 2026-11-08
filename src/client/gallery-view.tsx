@@ -48,7 +48,7 @@ import { mergeGalleryItems } from './gallery-merge.js'
 import { copyImageBlob, createZipBlob, downloadBlobUrl, type ZipFileInput } from './browser-image-utils.js'
 import { conversationRegenerateRequest, gifOutputRequest } from './conversation-regenerate.js'
 import { readGifInfo } from '../gif-info.js'
-import { originalFromMeta } from './image-result-node.js'
+import { imageVersionKey, originalFromMeta } from './image-result-node.js'
 import { STUDIO_ROUTE, type StudioWorkspaceInfo, type StudioGenerateResponse } from '../shared.js'
 
 import { DICT, type DictKey } from './gallery-i18n.js'
@@ -637,7 +637,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
 
       const original = originalFromMeta(payload.original)
       const newItem: GalleryItem = {
-        id: String(payload.attachment.attachmentId),
+        id: imageVersionKey(String(payload.attachment.attachmentId), original),
         attachment: payload.attachment,
         prompt: payload.prompt,
         provider: payload.provider,

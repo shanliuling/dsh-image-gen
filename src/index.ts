@@ -792,7 +792,7 @@ function imageOutput(verb: 'Generated' | 'Edited') {
       // The fixed sentence is a parsing contract for PTC dispatch cards
       // (image-result-node.ts); GIF facts are appended after it, never inside.
       return [
-        { type: 'text' as const, text: `${verb} one image with ${value.provider}/${value.model} (${value.output}). Attachment ID: ${String(value.attachment.attachmentId)}. ${action}${saved} Respond to the user without reading or searching for the image.${animationNotes(args, value)}${cardNote(value)}` },
+        { type: 'text' as const, text: `${verb} one image with ${value.provider}/${value.model} (${value.output}). Attachment ID: ${String(value.attachment.attachmentId)}. ${action}${saved} Respond to the user without reading or searching for the image.${animationNotes(args, value)}${cardNote(value)}${originalNote(value)}` },
         { type: 'image' as const, attachment: value.attachment },
       ]
     },
@@ -847,6 +847,17 @@ function cardNote(value: GeneratedValue): string {
   }
   const saved = typeof value.savedTo === 'string' ? ' and where it was saved' : ''
   return ` The result card in the conversation already ${animated ? 'plays the animation' : 'shows the image'}${saved}; do not embed the image or link its file in your reply unless the user asks.`
+}
+
+/**
+ * A run_code sub-call reaches the client only as this rendered text (no
+ * presentationMeta), so the vault reference rides here in a fixed sentence the
+ * PTC card parser reads (image-result-node.ts ORIGINAL_NOTE_PATTERN). Without
+ * it a GIF made through run_code shows its still first frame only.
+ */
+function originalNote(value: GeneratedValue): string {
+  const original = value.original
+  return original === undefined ? '' : ` Original animation (for the result card only): vault ${original.key}, ${String(original.bytes)} bytes, ${original.mediaType}.`
 }
 
 /** Frame facts for a GIF result; a single-frame GIF is a still image and gets none. */

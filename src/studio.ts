@@ -26,6 +26,7 @@ import {
   resolveOpenAICompatChannels,
   resolveOpenAICompatModels,
   studioWatermarkCapability,
+  studioModelForMode,
   studioModelOptionsForMode,
   type CloudImageProvider,
   type StudioConfigResponse,
@@ -255,9 +256,10 @@ export async function generateFromStudio(
   const channel = input.provider === 'openai-compat' ? resolveOpenAICompatChannel(config, input.channel) : undefined
   const requestConfig = input.provider === 'openai-compat' ? withOpenAICompatChannel(config, input.channel) : config
   const profile = studioProfile(requestConfig, input.provider, true, channel?.id)
+  const model = withGenerationModel(profile, input).model
   const channelGif = channelSelectsGif(config, input)
-  assertAllowed(profile, input, input.output?.format === 'gif' || channelGif)
-  const active = resolveProvider(withProviderOverrides(requestConfig, input.provider, input.model))
+  assertAllowed(profile, { ...input, model }, input.output?.format === 'gif' || channelGif)
+  const active = resolveProvider(withProviderOverrides(requestConfig, input.provider, model))
   if (active.provider === 'comfyui') throw new Error('ComfyUI 暂未接入工作台')
   if (isSubscriptionProvider(active.provider)) throw new Error('订阅生图应通过订阅渠道执行')
   // ComfyUI is rejected above; subscription channels were routed earlier; narrow for the closures below.
@@ -373,7 +375,7 @@ export async function generateFromStudio(
       output: single.output,
       provider: input.provider,
       ...(channel === undefined ? {} : { channel: channel.id }),
-      model: input.model,
+      model,
       prompt: input.prompt,
       createdAt: Date.now(),
       elapsedMs: Date.now() - startedAt,
@@ -413,7 +415,7 @@ export async function generateFromStudio(
     output: first.output,
     provider: input.provider,
     ...(channel === undefined ? {} : { channel: channel.id }),
-    model: input.model,
+    model,
     prompt: input.prompt,
     createdAt: Date.now(),
     elapsedMs: Date.now() - startedAt,
@@ -673,6 +675,18 @@ const CLOUD_DISPLAY_LABELS: Record<CloudImageProvider, string> = {
 
 function option(value: string): StudioOption {
   return { value, label: RATIO_LABELS[value] ?? value }
+}
+
+/**
+ * Regenerating an edit result is a generation, but the card remembers the
+ * channel's separate editing model that drew it, which the generation list
+ * may not offer. That model is swapped for the channel's generation model;
+ * any other unknown model still fails as a stale workbench below.
+ */
+export function withGenerationModel<T extends StudioGenerateRequest>(profile: StudioProviderProfile, input: T): T {
+  if (input.mode !== 'generate' || profile.editModel === undefined || input.model !== profile.editModel) return input
+  if (studioModelOptionsForMode(profile, 'generate').some(option => option.value === input.model)) return input
+  return { ...input, model: studioModelForMode(profile, 'generate') }
 }
 
 function assertAllowed(profile: StudioProviderProfile, input: StudioGenerateRequest, gif: boolean): void {

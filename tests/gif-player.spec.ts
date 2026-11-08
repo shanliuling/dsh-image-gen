@@ -302,6 +302,32 @@ describe('GIF player store', () => {
     for (const h of [...players, waiting, scrolledAway]) h.player.dispose()
   })
 
+  it('keeps a scrolled-away decode on the budget until it settles, so no other card overruns the cap meanwhile', async () => {
+    const perPlayer = 16 * 1024 * 1024 * 4
+    const count = DECODE_TOTAL_BUDGET_BYTES / perPlayer
+    const players = Array.from({ length: count - 1 }, () => harness({ frames: 16, width: 1024, height: 1024 }))
+    for (const h of players) {
+      h.player.setVisible('card', true)
+      await ready(h.player)
+    }
+    let settle: () => void = () => {}
+    const slowFrames = Array.from({ length: 16 }, () => fakeFrame(1024, 1024))
+    const slow = harness({ frames: 16, width: 1024, height: 1024, decode: vi.fn(() => new Promise(resolve => { settle = () => { resolve({ frames: slowFrames, delaysMs: slowFrames.map(() => 100) }) } })) })
+    slow.player.setVisible('card', true)
+    await vi.waitFor(() => { expect(slow.player.getSnapshot().status).toBe('decoding') })
+    const waiting = harness({ frames: 16, width: 1024, height: 1024 })
+    waiting.player.setVisible('card', true)
+    await vi.waitFor(() => { expect(waiting.player.getSnapshot().info).toBeDefined() })
+    // Scrolling away mid-decode does not hand out a share the decoder is still filling.
+    slow.player.setVisible('card', false)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(waiting.deps.decode).not.toHaveBeenCalled()
+    settle()
+    await ready(waiting.player)
+    expect(closedCount(slowFrames)).toBe(16)
+    for (const h of [...players, slow, waiting]) h.player.dispose()
+  })
+
   it('clears the canvas before painting a frame, so transparent pixels do not show the previous frame', () => {
     const context = { clearRect: vi.fn(), drawImage: vi.fn() }
     const canvas = { width: 16, height: 8, getContext: vi.fn(() => context) } as unknown as HTMLCanvasElement

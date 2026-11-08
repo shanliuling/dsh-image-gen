@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type DragEvent } from 'react'
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { imageRef, type ToolCallBlock } from './image-ref.js'
-import { imageResultsFromMeta, originalFromMeta, type ImageResultPresentation } from './image-result-node.js'
+import { imageResultsFromMeta, imageVersionKey, originalFromMeta, type ImageResultPresentation } from './image-result-node.js'
 import {
   appendConversationImageRevision,
   loadConversationImageRevisionChain,
@@ -136,7 +136,7 @@ function ImageResultCard({
   }
 
   const baseGalleryRecord = (presentation: ImageResultPresentation): GalleryRecord => ({
-    id: presentation.attachment.attachmentId,
+    id: imageVersionKey(String(presentation.attachment.attachmentId), presentation.original),
     attachment: presentation.attachment,
     prompt: presentation.prompt,
     provider: presentation.provider as ImageProvider,
@@ -152,7 +152,7 @@ function ImageResultCard({
     ...(presentation.original === undefined ? {} : { original: presentation.original }),
   })
   const revisionGalleryRecord = (revision: ConversationImageRevision): GalleryRecord => ({
-    id: String(revision.attachment.attachmentId),
+    id: imageVersionKey(String(revision.attachment.attachmentId), revision.original),
     attachment: revision.attachment,
     prompt: revision.prompt,
     provider: revision.provider,
@@ -186,7 +186,7 @@ function ImageResultCard({
   const edit = useGifEdit({
     gif,
     image: originId ? activeResult : undefined,
-    versionKey: activeAttachment === undefined ? undefined : String(activeAttachment.attachmentId),
+    versionKey: activeAttachment === undefined ? undefined : imageVersionKey(String(activeAttachment.attachmentId), activeOriginal),
     busy: { running: isRegenerating, setRunning: setIsRegenerating, controller: regenerateControllerRef },
     addRevision: async revision => {
       const savedOk = await persistGalleryRecord(revisionGalleryRecord(revision))

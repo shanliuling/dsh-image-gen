@@ -189,11 +189,16 @@ export function createGifPlayer(blob: Blob, overrides: Partial<GifPlayerDeps> = 
       schedule()
     }, scheduledDelayMs(snapshot.delaysMs[snapshot.index] ?? 100, snapshot.speed))
   }
-  const returnBudget = () => {
-    if (heldBytes === 0) return
-    decodedBytesInUse -= heldBytes
-    heldBytes = 0
+  const giveBack = (bytes: number) => {
+    if (bytes === 0) return
+    decodedBytesInUse -= bytes
     for (const retry of [...waitingForBudget]) retry()
+  }
+  /** Return the share of the frames this player holds; a decode in flight returns its own share when it settles. */
+  const returnBudget = () => {
+    const bytes = heldBytes
+    heldBytes = 0
+    giveBack(bytes)
   }
   /** Drop the frames (and any decode in flight) but keep index, speed and playing for the next decode. */
   const release = () => {
@@ -213,24 +218,29 @@ export function createGifPlayer(blob: Blob, overrides: Partial<GifPlayerDeps> = 
     if (!withinDecodeBudget(info, 0)) { set({ status: 'fallback' }); return }
     if (!withinDecodeBudget(info, decodedBytesInUse)) { waitingForBudget.add(maybeDecode); return }
     const token = ++decodeToken
-    heldBytes = decodedBytesOf(info)
-    decodedBytesInUse += heldBytes
+    // The share stays reserved until the decode settles, even when the card
+    // scrolls away first: the decoder keeps allocating frames until then, so
+    // handing the share out earlier would let other cards overrun the budget.
+    const reserved = decodedBytesOf(info)
+    decodedBytesInUse += reserved
     set({ status: 'decoding' })
     deps.decode(blob, info).then(decoded => {
       if (token !== decodeToken) {
         for (const frame of decoded?.frames ?? []) frame.close()
+        giveBack(reserved)
         return
       }
       if (decoded === undefined || decoded.frames.length === 0) {
-        returnBudget()
+        giveBack(reserved)
         set({ status: 'fallback' })
         return
       }
+      heldBytes = reserved
       set({ status: 'ready', frames: decoded.frames, delaysMs: decoded.delaysMs, index: Math.min(snapshot.index, decoded.frames.length - 1) })
       schedule()
     }, () => {
+      giveBack(reserved)
       if (token !== decodeToken) return
-      returnBudget()
       set({ status: 'fallback' })
     })
   }
