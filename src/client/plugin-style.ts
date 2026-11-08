@@ -27,6 +27,7 @@ export const PLUGIN_STYLE = `
 .dsh-ig-btn-reset{appearance:none;border:0.5px solid var(--dsw-alias-border-l4,#d7dbe0);border-radius:var(--dsw-radius-md,6px);padding:5px 12px;background:var(--dsw-alias-bg-layer-3,#f9fafb);color:var(--dsw-alias-label-secondary,inherit);font:inherit;font-size:13px;cursor:pointer;white-space:nowrap;transition:background .15s,border-color .15s}
 .dsh-ig-btn-reset:hover{background:var(--dsw-alias-bg-layer-2,#edf0f3);border-color:var(--dsw-alias-label-dimmed,#9ca3af)}
 .dsh-ig-hint,.dsh-ig-status{margin:0;color:var(--dsw-alias-label-tertiary,#7b818b);font-size:12px;line-height:1.4}
+.dsh-ig-link{color:var(--dsw-alias-label-link,#2563eb);text-decoration:none;white-space:nowrap}.dsh-ig-link:hover{text-decoration:underline}
 .dsh-ig-hint-error{color:var(--dsw-alias-label-error,#d33)}
 .dsh-ig-status-error{color:var(--dsw-alias-label-error,#d33);font-weight:500}
 .dsh-ig-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:16px;padding-top:12px;border-top:1px solid var(--dsw-alias-border-l2,#eee)}

@@ -24,6 +24,7 @@ import {
   currentSeedreamModel,
   CLOUD_CREDENTIAL_REFS,
   CLOUD_IMAGE_PROVIDERS,
+  API_KEY_CONSOLE_URLS,
   DEFAULT_BASE_URLS,
   DEFAULT_CLOUD_TIMEOUT_MS,
   DEFAULT_COMFYUI_TIMEOUT_MS,
@@ -1394,6 +1395,12 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
               {keyUnavailable ? t('credentialsUnavailable')
                 : keyReadOnly ? t('keyReadOnly', { source: row.keyInfo?.source ?? '' })
                 : t('apiKeyHint', { key: keyRef })}
+              {channel === undefined && API_KEY_CONSOLE_URLS[provider] !== undefined ? (
+                <>
+                  {' '}
+                  <a className="dsh-ig-link" href={API_KEY_CONSOLE_URLS[provider]} target="_blank" rel="noopener noreferrer">{t('getApiKey')}</a>
+                </>
+              ) : null}
             </span>
           </label>
           <label className="dsh-ig-field">

@@ -756,6 +756,20 @@ export const DEFAULT_MODELS: Record<ImageProvider, string> = {
   'google-sub': DEFAULT_SUBSCRIPTION_MODELS['google-sub'],
 }
 
+/**
+ * Official consoles where each API-key provider issues keys, linked next to
+ * the key field (#109). Relays (openai-compat), ComfyUI and the subscription
+ * channels have no single place to get one.
+ */
+export const API_KEY_CONSOLE_URLS: Partial<Record<ImageProvider, string>> = {
+  google: 'https://aistudio.google.com/apikey',
+  openai: 'https://platform.openai.com/api-keys',
+  seedream: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey',
+  dashscope: 'https://bailian.console.aliyun.com/',
+  xai: 'https://console.x.ai/team/default/api-keys',
+  zhipu: 'https://bigmodel.cn/usercenter/proj-mgmt/apikeys',
+}
+
 export const DEFAULT_BASE_URLS: Record<ImageProvider, string> = {
   google: DEFAULT_GOOGLE_ENDPOINT,
   openai: DEFAULT_OPENAI_BASE_URL,
