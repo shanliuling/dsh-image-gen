@@ -13,6 +13,7 @@ import {
   SUBSCRIPTION_STATUS_ROUTE,
   activeComfyUIWorkflow,
   cloudCredentialRef,
+  resolveComfyUIWorkflows,
   isSubscriptionProvider,
   resolveOpenAICompatChannel,
   resolveOpenAICompatChannels,
@@ -187,6 +188,8 @@ export function pillModelOf(provider: ImageProvider, value: PillSettings | undef
 
 /** Optional model choices exposed by a provider; single-model providers return an empty list. */
 export function pillModelOptionsOf(provider: ImageProvider, value: PillSettings | undefined, channelId?: string): string[] {
+  // ComfyUI lists its imported workflows the way a relay lists models (#115).
+  if (provider === 'comfyui') return resolveComfyUIWorkflows(value ?? {}).map(workflow => workflow.name)
   if (provider === 'openai-compat') {
     const channel = resolveOpenAICompatChannel(value ?? {}, channelId)
     return resolveOpenAICompatModels({ openaiCompatModel: pillModelOf(provider, value, channel.id), openaiCompatModels: channel.models ?? [] })
@@ -204,6 +207,28 @@ export function pillModelOptionsOf(provider: ImageProvider, value: PillSettings 
 
 function pillTargetKey(provider: CloudImageProvider, channelId?: string): string {
   return provider === 'openai-compat' ? `openai-compat:${channelId ?? 'default'}` : provider
+}
+
+/**
+ * The settings writes that make a ComfyUI workflow the active one: the same
+ * three fields the settings card saves for its active workflow (the name plus
+ * the legacy single-workflow mirror), so the two views never disagree.
+ * Undefined for a name that is not imported.
+ */
+export function comfyUIWorkflowWrites(value: PillSettings | undefined, name: string): Array<[keyof PillSettings, string]> | undefined {
+  const workflow = resolveComfyUIWorkflows(value ?? {}).find(entry => entry.name === name)
+  if (workflow === undefined) return undefined
+  return [['comfyuiActiveWorkflow', workflow.name], ['comfyuiWorkflowJson', workflow.json], ['comfyuiWorkflowName', workflow.name]]
+}
+
+/** The pill button text: the channel label, or the provider with its active workflow for ComfyUI. */
+export function pillButtonLabel(provider: ImageProvider, providerLabel: string, value: PillSettings | undefined, channelLabel?: string): string {
+  if (channelLabel !== undefined) return channelLabel
+  if (provider === 'comfyui') {
+    const workflow = pillModelOf(provider, value)
+    if (workflow.length > 0) return `${providerLabel} · ${workflow}`
+  }
+  return providerLabel
 }
 
 /** One fixed-position provider menu anchored to the pill button. */
@@ -354,7 +379,11 @@ export function ImageProviderPill(props: ProviderPillFace) {
     setError('')
     setPending(provider)
     void (async () => {
-      if (model !== undefined && provider === 'openai-compat' && channelId !== undefined && channelId !== 'default') {
+      if (model !== undefined && provider === 'comfyui') {
+        const writes = comfyUIWorkflowWrites(snapshot.value, model)
+        if (writes === undefined) throw new Error(t('writeRejected'))
+        for (const [field, value] of writes) await writeSetting(props.scope, field, value, t('writeRejected'))
+      } else if (model !== undefined && provider === 'openai-compat' && channelId !== undefined && channelId !== 'default') {
         const channels = (snapshot.value?.openaiCompatChannels ?? []).map(channel => channel.id === channelId ? { ...channel, model } : channel)
         await writeSetting(props.scope, 'openaiCompatChannels', channels, t('writeRejected'))
       } else if (model !== undefined && modelField !== undefined) {
@@ -385,8 +414,10 @@ export function ImageProviderPill(props: ProviderPillFace) {
 
   const subtitleOf = (provider: ImageProvider, includeModel = true, channelId?: string): string => {
     if (provider === 'comfyui') {
+      // With workflows the submenu lists them; the subtitle names the empty state only.
       const workflow = pillModelOf(provider, snapshot.value)
-      return workflow.length > 0 ? `${t('noKeyNeeded')} · ${workflow}` : `${t('noKeyNeeded')} · ${t('noWorkflow')}`
+      if (workflow.length === 0) return `${t('noKeyNeeded')} · ${t('noWorkflow')}`
+      return includeModel ? `${t('noKeyNeeded')} · ${workflow}` : t('noKeyNeeded')
     }
     if (isSubscriptionProvider(provider)) {
       const state = subDots[provider]
@@ -422,7 +453,7 @@ export function ImageProviderPill(props: ProviderPillFace) {
         <svg className="dsh-ig-pill-icon" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <rect x="1.5" y="2.5" width="13" height="11" rx="2" /><circle cx="5.5" cy="6.5" r="1.3" /><path d="M14.5 10.5l-3.2-3.2-6.3 6.2" />
         </svg>
-        <span className="dsh-ig-pill-provider">{currentChannel?.label ?? PILL_PROVIDER_LABELS[lang][current]}</span>
+        <span className="dsh-ig-pill-provider">{pillButtonLabel(current, PILL_PROVIDER_LABELS[lang][current], snapshot.value, currentChannel?.label)}</span>
         <span className={`dsh-ig-pill-caret${open ? ' dsh-ig-pill-caret-open' : ''}`} aria-hidden="true">
           <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 10l4-4 4 4" /></svg>
         </span>
@@ -435,6 +466,8 @@ export function ImageProviderPill(props: ProviderPillFace) {
             const modelOptions = pillModelOptionsOf(provider, snapshot.value, channelId)
             const active = provider === current && (provider !== 'openai-compat' || currentChannel?.id === channelId)
             const currentModel = active ? pillModelOf(provider, snapshot.value, channelId) : ''
+            // ComfyUI without an imported workflow cannot generate: show the empty state, not a switch.
+            const unavailable = provider === 'comfyui' && modelOptions.length === 0 && !active
             return (
               <Fragment key={channelId === undefined ? provider : pillTargetKey('openai-compat', channelId)}>
                 <button
@@ -442,7 +475,7 @@ export function ImageProviderPill(props: ProviderPillFace) {
                   role={modelOptions.length > 0 ? 'menuitem' : 'menuitemradio'}
                   aria-checked={modelOptions.length > 0 ? undefined : active}
                   className={`dsh-ig-pill-option${active ? ' dsh-ig-pill-option-active' : ''}`}
-                  disabled={pending !== undefined}
+                  disabled={pending !== undefined || unavailable}
                   onClick={() => { select(provider, undefined, channelId) }}
                 >
                   <span className={`dsh-ig-pill-dot ${dotClassOf(provider, channelId)}`} aria-hidden="true" />

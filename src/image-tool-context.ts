@@ -1,5 +1,21 @@
 /** Live, credential-free instructions for the conversation model's image tools. */
-import { resolveComfyUIWorkflows, resolveProvider, withProviderOverrides, type Config } from './config.js'
+import { activeComfyUIWorkflow, resolveComfyUIWorkflows, resolveProvider, withProviderOverrides, type Config } from './config.js'
+
+/** Workflow names listed for the model; a long list is cut so the system prompt stays small. */
+const MAX_LISTED_WORKFLOWS = 20
+
+/**
+ * The ComfyUI workflows the `workflow` argument accepts (#98). Names are user
+ * text, so each is JSON-quoted; the list stays absent without workflows.
+ */
+function comfyUIWorkflowLine(config: Config): string[] {
+  const workflows = resolveComfyUIWorkflows(config)
+  if (workflows.length === 0) return []
+  const listed = workflows.slice(0, MAX_LISTED_WORKFLOWS).map(workflow => JSON.stringify(workflow.name)).join(', ')
+  const more = workflows.length > MAX_LISTED_WORKFLOWS ? ` (+${String(workflows.length - MAX_LISTED_WORKFLOWS)} more)` : ''
+  const active = activeComfyUIWorkflow(config)
+  return [`ComfyUI workflows available for the workflow argument (provider=comfyui): ${listed}${more}; active: ${JSON.stringify(active?.name ?? '')}. Pass workflow only when the user asks for a specific one; the local ComfyUI server may not be running.`]
+}
 
 export function imageToolContext(config: Config, configuredProviders?: readonly string[]): string {
   const provider = config.provider ?? 'google'
@@ -16,6 +32,7 @@ export function imageToolContext(config: Config, configuredProviders?: readonly 
   return [
     `Image tools current default provider: ${provider}; generation model: ${JSON.stringify(model)}; editing model: ${JSON.stringify(editModel)}.`,
     ...(configured === undefined ? [] : [`Configured image providers (credential saved, subscription logged in, or ComfyUI workflow present): ${configured.length > 0 ? configured.join(', ') : 'none'}. Do not select unlisted providers; configuration presence does not guarantee service reachability.`]),
+    ...comfyUIWorkflowLine(config),
     'Unless the user explicitly requests a different image provider or model, OMIT provider and model from generate_image, generate_images and edit_image. Do not guess a channel or switch channels after an error.',
     'Omit unused optional arguments entirely; never fill them with empty strings. size and aspect_ratio are alternatives: provide at most one.',
     'Subscription parameters: chatgpt-sub accepts size OR aspect_ratio, but NOT image_size. grok-sub image_size: 1K or 2K. google-sub image_size: 1K or 4K. Do not copy parameters from another provider.',

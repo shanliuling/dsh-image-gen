@@ -122,7 +122,7 @@ After restarting DSH, click the **Plugins** icon in the left sidebar, then click
 
 > DSH 0.1.5 and earlier have no Plugins panel; the entry there is **Settings → Plugins → Plugin Configuration → Image Generation**. The same plugin build supports both.
 
-Choose a Provider, enter your API key, and adjust the model, Endpoint / Base URL, and workspace-save options as needed. Once the key is stored, click **Test connection** to verify it, or **Fetch models** to pull every image-capable model the provider offers—no manual lookups needed. For ComfyUI, enter an address reachable by the DSH Host and import an **API Format Workflow JSON** file.
+Choose a Provider, enter your API key, and adjust the model, Endpoint / Base URL, and workspace-save options as needed. Once the key is stored, click **Test connection** to verify it, or **Fetch models** to pull every image-capable model the provider offers—no manual lookups needed. For ComfyUI, enter an address reachable by the DSH Host and import an **API Format Workflow JSON** file. With several workflows imported, switch between them from the image button next to the chat input.
 
 Already paying for ChatGPT, Grok, or Google? No API key needed: expand the matching subscription Provider row, click **Sign in** and complete the authorization in your browser, then start generating (and editing) right away.
 
