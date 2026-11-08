@@ -14,6 +14,7 @@ import { serveCanvasAsset } from './canvas-asset-route.js'
 import { CANVAS_ASSET_ROUTE } from './shared.js'
 import { registerCanvasTools, resolveCanvasSelectionReferences } from './canvas-tools.js'
 import { editComfyUIImage, generateComfyUIImage } from './comfyui.js'
+import { assertImageCount, comfyUIRequestedSize, comfyUIWorkflowSlots, COMFYUI_DEFAULT_SIZE, type ComfyUISize } from './comfyui-workflow.js'
 import { editDashScopeImage, generateDashScopeImage } from './dashscope.js'
 import { editGoogleImage, generateGoogleImage } from './google.js'
 import { IMAGE_ROUTE, DELETE_ROUTE, SAVE_WORKSPACE_ROUTE, imageAttachmentFromMeta, serveImage, serveDelete, serveSaveWorkspace } from './image-route.js'
@@ -70,6 +71,24 @@ interface GeneratedValue {
   animation?: { frames: number; frameDurationMs: number; durationMs: number }
   /** Raw GIF bytes kept in the vault when the attachment layer normalized the animation away. */
   original?: SavedOriginal
+  /** Something the model should tell the user, such as a size the workflow could not apply. */
+  notice?: string
+}
+
+/**
+ * The frame size a ComfyUI call gets, and a notice when the call asked for a
+ * size the workflow cannot take (#97): only {{width}} / {{height}}
+ * placeholders let the plugin set it, otherwise the workflow's own latent
+ * size wins.
+ */
+function comfyUIFrame(workflowName: string, slots: { size: boolean }, args: { size?: string; aspect_ratio?: string }): { size?: ComfyUISize; notice?: string } {
+  const asked = args.size !== undefined || args.aspect_ratio !== undefined
+  if (!slots.size) {
+    return asked
+      ? { notice: `Note for the user: ComfyUI workflow "${workflowName}" sets its own frame size (it has no {{width}}/{{height}} placeholders), so the requested ${args.size ?? args.aspect_ratio ?? ''} was not applied.` }
+      : {}
+  }
+  return { size: comfyUIRequestedSize(args.size, args.aspect_ratio) ?? { ...COMFYUI_DEFAULT_SIZE } }
 }
 
 /** Capped prompt hits for the find_inspiration tool; `total` counts all matches. */
@@ -443,6 +462,9 @@ export function apply(ctx: Context, config: Config = {}): void {
     assertGifProvider(args, active.provider)
     if (active.provider === 'comfyui') {
       const workflow = selectComfyUIWorkflow(active, args.workflow)
+      const slots = comfyUIWorkflowSlots(workflow.json)
+      assertImageCount(slots.images, 0)
+      const frame = comfyUIFrame(workflow.name, slots, args)
       const generated = await generateComfyUIImage({
         baseURL: active.baseURL,
         workflowJson: workflow.json,
@@ -450,8 +472,10 @@ export function apply(ctx: Context, config: Config = {}): void {
         timeoutMs: active.timeoutMs,
         maxBytes: ctx.attachments.imageLimits.maxImageBytes,
         signal: exec.signal,
+        ...(frame.size === undefined ? {} : { size: frame.size }),
       })
-      return saveGenerated(ctx, generated, active.provider, workflow.name, 'API workflow', current(), exec, knownWorkspaceRoots)
+      const value = await saveGenerated(ctx, generated, active.provider, workflow.name, 'API workflow', current(), exec, knownWorkspaceRoots)
+      return frame.notice === undefined ? value : { ...value, notice: frame.notice }
     }
     if (active.provider === 'chatgpt-sub' || active.provider === 'grok-sub' || active.provider === 'google-sub') {
       const subscriptionParams = subscriptionToolParameters(active.provider, { ...(args.size !== undefined ? { size: args.size } : {}), ...(args.aspect_ratio !== undefined ? { aspectRatio: args.aspect_ratio } : {}), ...(args.image_size !== undefined ? { imageSize: args.image_size } : {}) })
@@ -518,9 +542,9 @@ export function apply(ctx: Context, config: Config = {}): void {
       provider: { type: 'string', enum: ['google', 'openai', 'openai-compat', 'seedream', 'dashscope', 'xai', 'zhipu', 'comfyui', 'chatgpt-sub', 'grok-sub', 'google-sub'], description: 'OMIT unless the user explicitly requests a specific image provider. Omission uses the saved default; never guess a channel or fill this with an empty string. chatgpt-sub, grok-sub, and google-sub use logged-in subscription accounts instead of API keys.' },
       model: { type: 'string', description: 'OMIT unless the user explicitly requests a specific model; omission uses the configured model. Optional override for this call only. Not used by ComfyUI (use workflow instead) nor by the subscription providers (model fixed by the subscription).' },
       channel: { type: 'string', description: 'Optional configured OpenAI-compatible channel id for this call only. Only meaningful with provider=openai-compat; omit to use the active channel.' },
-      aspect_ratio: { type: 'string', enum: ['1:1', '3:2', '2:3', '4:3', '3:4', '4:5', '5:4', '16:9', '9:16', '21:9'], description: 'Optional output aspect ratio for Google Gemini, xAI Grok, and subscription channels.' },
+      aspect_ratio: { type: 'string', enum: ['1:1', '3:2', '2:3', '4:3', '3:4', '4:5', '5:4', '16:9', '9:16', '21:9'], description: 'Optional output aspect ratio for Google Gemini, xAI Grok, subscription channels, and ComfyUI workflows with {{width}}/{{height}} placeholders (about one megapixel).' },
       image_size: { type: 'string', enum: ['1K', '2K', '4K'], description: 'Optional output resolution for Google Gemini, xAI Grok, Grok subscription (1K/2K), or Google subscription (1K/4K). NEVER send this for chatgpt-sub; omit unused fields entirely.' },
-      size: { type: 'string', description: 'Optional dimensions or size tier for OpenAI, Seedream, or DashScope; WIDTHxHEIGHT maps to aspect_ratio for xAI Grok. Do not combine with aspect_ratio; omit instead of using an empty string.' },
+      size: { type: 'string', description: 'Optional dimensions or size tier for OpenAI, Seedream, or DashScope; WIDTHxHEIGHT maps to aspect_ratio for xAI Grok and sets the frame of ComfyUI workflows with {{width}}/{{height}} placeholders. Do not combine with aspect_ratio; omit instead of using an empty string.' },
       quality: { type: 'string', description: 'Optional generation quality for OpenAI or compatible APIs, independent of pixel size (e.g. auto, low, medium, high). Omit to use the configured default.' },
       workflow: { type: 'string', description: 'Optional name of the ComfyUI workflow to run; omit to use the active workflow from settings. Only meaningful when the ComfyUI provider is selected.' },
       ...gifToolParameters,
@@ -540,9 +564,9 @@ export function apply(ctx: Context, config: Config = {}): void {
       provider: { type: 'string', enum: ['google', 'openai', 'openai-compat', 'seedream', 'dashscope', 'xai', 'zhipu', 'comfyui', 'chatgpt-sub', 'grok-sub', 'google-sub'], description: 'OMIT unless the user explicitly requests a specific image provider. Uses the saved default for all items; never guess a channel or fill unused fields with empty strings.' },
       model: { type: 'string', description: 'OMIT unless the user explicitly requests a specific model for every item; omission uses the configured model.' },
       channel: { type: 'string', description: 'Optional configured OpenAI-compatible channel id applied to every item; omit to use the active channel.' },
-      aspect_ratio: { type: 'string', enum: ['1:1', '3:2', '2:3', '4:3', '3:4', '4:5', '5:4', '16:9', '9:16', '21:9'], description: 'Optional output aspect ratio for Google Gemini, xAI Grok, and subscription channels.' },
+      aspect_ratio: { type: 'string', enum: ['1:1', '3:2', '2:3', '4:3', '3:4', '4:5', '5:4', '16:9', '9:16', '21:9'], description: 'Optional output aspect ratio for Google Gemini, xAI Grok, subscription channels, and ComfyUI workflows with {{width}}/{{height}} placeholders (about one megapixel).' },
       image_size: { type: 'string', enum: ['1K', '2K', '4K'], description: 'Optional output resolution for Google Gemini, xAI Grok, Grok subscription (1K/2K), or Google subscription (1K/4K). NEVER send this for chatgpt-sub; omit unused fields entirely.' },
-      size: { type: 'string', description: 'Optional dimensions or size tier for OpenAI, Seedream, or DashScope; WIDTHxHEIGHT maps to aspect_ratio for xAI Grok.' },
+      size: { type: 'string', description: 'Optional dimensions or size tier for OpenAI, Seedream, or DashScope; WIDTHxHEIGHT maps to aspect_ratio for xAI Grok and sets the frame of ComfyUI workflows with {{width}}/{{height}} placeholders.' },
       quality: { type: 'string', description: 'Optional OpenAI or compatible generation quality, applied to every item independently of size.' },
       workflow: { type: 'string', description: 'Optional name of the ComfyUI workflow to run; omit to use the active workflow from settings.' },
       ...gifToolParameters,
@@ -554,7 +578,7 @@ export function apply(ctx: Context, config: Config = {}): void {
             attachment: { type: 'object', required: true, additionalProperties: false, properties: {
               attachmentId: { type: 'string', required: true }, mediaType: { type: 'string', required: true }, bytes: { type: 'integer', required: true }, width: { type: 'integer', required: true }, height: { type: 'integer', required: true }, name: { type: 'string' }, originalDimensions: { type: 'object', additionalProperties: false, properties: { width: { type: 'integer', required: true }, height: { type: 'integer', required: true } } },
             } },
-            provider: { type: 'string', required: true }, channel: { type: 'string' }, model: { type: 'string', required: true }, output: { type: 'string', required: true }, savedTo: { type: 'string' }, saveError: { type: 'string' }, seed: { type: 'integer' }, animation: animationSchema, original: originalSchema, prompt: { type: 'string', required: true },
+            provider: { type: 'string', required: true }, channel: { type: 'string' }, model: { type: 'string', required: true }, output: { type: 'string', required: true }, savedTo: { type: 'string' }, saveError: { type: 'string' }, seed: { type: 'integer' }, animation: animationSchema, original: originalSchema, notice: { type: 'string' }, prompt: { type: 'string', required: true },
           } } },
           failures: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
             index: { type: 'integer', required: true }, prompt: { type: 'string', required: true }, error: { type: 'string', required: true },
@@ -624,11 +648,11 @@ export function apply(ctx: Context, config: Config = {}): void {
       source_attachment_ids: { type: 'array', items: { type: 'string' }, description: 'Optional ordered attachment ids of multiple images already present in the current conversation. Prompt references such as image 1 and image 2 follow this order.' },
       source_path: { type: 'string', description: 'Optional absolute or workspace-relative path of a specific image file inside the active session workspace. Prefer this when the user names a saved file.' },
       source_paths: { type: 'array', items: { type: 'string' }, description: 'Optional ordered absolute or workspace-relative paths of multiple image files inside the active session workspace.' },
-      aspect_ratio: { type: 'string', enum: ['1:1', '3:2', '2:3', '4:3', '3:4', '4:5', '5:4', '16:9', '9:16', '21:9'], description: 'Optional output aspect ratio for Google Gemini, xAI Grok, and subscription channels.' },
+      aspect_ratio: { type: 'string', enum: ['1:1', '3:2', '2:3', '4:3', '3:4', '4:5', '5:4', '16:9', '9:16', '21:9'], description: 'Optional output aspect ratio for Google Gemini, xAI Grok, subscription channels, and ComfyUI workflows with {{width}}/{{height}} placeholders (about one megapixel).' },
       image_size: { type: 'string', enum: ['1K', '2K', '4K'], description: 'Optional output resolution for Google Gemini, xAI Grok, Grok subscription (1K/2K), or Google subscription (1K/4K). NEVER send this for chatgpt-sub; omit unused fields entirely.' },
-      size: { type: 'string', description: 'Optional output size for OpenAI, Seedream, or DashScope; WIDTHxHEIGHT maps to aspect_ratio for xAI Grok.' },
+      size: { type: 'string', description: 'Optional output size for OpenAI, Seedream, or DashScope; WIDTHxHEIGHT maps to aspect_ratio for xAI Grok and sets the frame of ComfyUI workflows with {{width}}/{{height}} placeholders.' },
       quality: { type: 'string', description: 'Optional generation quality for OpenAI or compatible edits, independent of size.' },
-      workflow: { type: 'string', description: 'Optional name of the ComfyUI workflow to run; omit to use the active workflow from settings. Only meaningful when the ComfyUI provider is selected.' },
+      workflow: { type: 'string', description: 'Optional name of the ComfyUI workflow to run; omit to use the active workflow from settings. Only meaningful when the ComfyUI provider is selected. The source images fill the workflow\'s {{image}} inputs in node order, so pass as many images as it has inputs.' },
       ...editGifToolParameters,
     },
     output: imageOutput('Edited'),
@@ -666,22 +690,24 @@ export function apply(ctx: Context, config: Config = {}): void {
         })
 
       if (active.provider === 'comfyui') {
-        if (sourceImages.length > 1) {
-          throw new Error(`ComfyUI edit_image supports exactly one source image per call; this call resolved ${String(sourceImages.length)} images. Call edit_image again with source_attachment_id set to the single attachment ID of the image to edit.`)
-        }
-        const sourceImage = sourceImages[0]
-        if (sourceImage === undefined) throw new Error('edit_image requires a reference image')
+        if (sourceImages.length === 0) throw new Error('edit_image requires a reference image')
         const workflow = selectComfyUIWorkflow(active, args.workflow)
+        const slots = comfyUIWorkflowSlots(workflow.json)
+        // Checked before uploading, so a mismatch costs no ComfyUI round trip.
+        assertImageCount(slots.images, sourceImages.length)
+        const frame = comfyUIFrame(workflow.name, slots, args)
         const generated = await editComfyUIImage({
           baseURL: active.baseURL,
           workflowJson: workflow.json,
           prompt: mergeComfyUIPrompt(workflow.presetPrompt, args.prompt),
-          sourceImage: { data: sourceImage.data, mediaType: sourceImage.mediaType },
+          sourceImages: sourceImages.map(image => ({ data: image.data, mediaType: image.mediaType })),
           timeoutMs: active.timeoutMs,
           maxBytes: ctx.attachments.imageLimits.maxImageBytes,
           signal: exec.signal,
+          ...(frame.size === undefined ? {} : { size: frame.size }),
         })
-        return saveGenerated(ctx, generated, active.provider, workflow.name, 'API workflow', current(), exec, knownWorkspaceRoots)
+        const value = await saveGenerated(ctx, generated, active.provider, workflow.name, 'API workflow', current(), exec, knownWorkspaceRoots)
+        return frame.notice === undefined ? value : { ...value, notice: frame.notice }
       }
 
       if (active.provider === 'chatgpt-sub' || active.provider === 'grok-sub' || active.provider === 'google-sub') {
@@ -783,7 +809,7 @@ function imageOutput(verb: 'Generated' | 'Edited') {
         attachment: { type: 'object', required: true, additionalProperties: false, properties: {
           attachmentId: { type: 'string', required: true }, mediaType: { type: 'string', required: true }, bytes: { type: 'integer', required: true }, width: { type: 'integer', required: true }, height: { type: 'integer', required: true }, name: { type: 'string' }, originalDimensions: { type: 'object', additionalProperties: false, properties: { width: { type: 'integer', required: true }, height: { type: 'integer', required: true } } },
         } },
-        provider: { type: 'string', required: true }, channel: { type: 'string' }, model: { type: 'string', required: true }, output: { type: 'string', required: true }, savedTo: { type: 'string' }, saveError: { type: 'string' }, seed: { type: 'integer' }, animation: animationSchema, original: originalSchema,
+        provider: { type: 'string', required: true }, channel: { type: 'string' }, model: { type: 'string', required: true }, output: { type: 'string', required: true }, savedTo: { type: 'string' }, saveError: { type: 'string' }, seed: { type: 'integer' }, animation: animationSchema, original: originalSchema, notice: { type: 'string' },
       },
     },
     render: (args: unknown, value: GeneratedValue) => {
@@ -792,7 +818,7 @@ function imageOutput(verb: 'Generated' | 'Edited') {
       // The fixed sentence is a parsing contract for PTC dispatch cards
       // (image-result-node.ts); GIF facts are appended after it, never inside.
       return [
-        { type: 'text' as const, text: `${verb} one image with ${value.provider}/${value.model} (${value.output}). Attachment ID: ${String(value.attachment.attachmentId)}. ${action}${saved} Respond to the user without reading or searching for the image.${animationNotes(args, value)}${cardNote(value)}${originalNote(value)}` },
+        { type: 'text' as const, text: `${verb} one image with ${value.provider}/${value.model} (${value.output}). Attachment ID: ${String(value.attachment.attachmentId)}. ${action}${saved} Respond to the user without reading or searching for the image.${animationNotes(args, value)}${cardNote(value)}${originalNote(value)}${value.notice === undefined ? '' : ` ${value.notice}`}` },
         { type: 'image' as const, attachment: value.attachment },
       ]
     },

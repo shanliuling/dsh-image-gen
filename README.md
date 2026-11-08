@@ -316,6 +316,7 @@ pnpm dsh plugin --profile web add ./dsh-image-gen
 
 - 导入并管理多个命名工作流，支持预设 Prompt 和常用占位符。
 - Agent 可按名称选择工作流，在对话中完成文生图、图生图和批量生图。
+- 占位符：`{{prompt}}`、`{{seed}}`；宽高写 `{{width}}`/`{{height}}` 后，Agent 传入的尺寸或比例才会生效（默认 1024×1024）；图生图在 LoadImage 写 `{{image}}`，多张参考图就写多个，按节点编号顺序对应。
 
 > ComfyUI 暂未接入 Studio 和多模型对比。
 
@@ -342,7 +343,7 @@ pnpm dsh plugin --profile web add ./dsh-image-gen
 | **Aliyun DashScope / Qwen Image** |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |  —  |
 | **xAI Grok Imagine**              |    ✅    |    ✅    | ⚠️ 有限  |   ✅   |     ✅     |  —  |
 | **智谱 GLM-Image**                |    ✅    |    ✅    |    —     |   ✅   |     ✅     |  —  |
-| **Local ComfyUI**                 |    ✅    |    ✅    | ✅ 单图  |   —    |     —      |  —  |
+| **Local ComfyUI**                 |    ✅    |    ✅    | ✅ 多图  |   —    |     —      |  —  |
 | **ChatGPT 订阅（免 Key）**        |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |  —  |
 | **Grok 订阅（免 Key）**           |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |  —  |
 | **Google 订阅（免 Key）**         |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |  —  |
@@ -412,7 +413,7 @@ dsh --profile web --dump-config
 <details>
 <summary><strong>为什么 ComfyUI 没有出现在 Studio 中？</strong></summary>
 
-当前 Studio 与多模型对比仅支持云端 Provider，暂未接入 ComfyUI。ComfyUI 已支持在 Agent 对话中进行文生图、单图编辑、批量生图以及多个命名工作流。
+当前 Studio 与多模型对比仅支持云端 Provider，暂未接入 ComfyUI。ComfyUI 已支持在 Agent 对话中进行文生图、图生图（支持多张参考图）、批量生图以及多个命名工作流。
 
 </details>
 

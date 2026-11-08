@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { editComfyUIImage, generateComfyUIImage } from '../src/comfyui.js'
-import { prepareComfyUIWorkflow, validateComfyUIWorkflowJson } from '../src/comfyui-workflow.js'
+import { comfyUIRequestedSize, comfyUIWorkflowSlots, prepareComfyUIWorkflow, validateComfyUIWorkflowJson } from '../src/comfyui-workflow.js'
 
 const WORKFLOW = JSON.stringify({
   6: {
@@ -38,7 +38,7 @@ function editOptions(overrides: Partial<Parameters<typeof editComfyUIImage>[0]> 
     baseURL: 'http://127.0.0.1:8188',
     workflowJson: EDIT_WORKFLOW,
     prompt: 'cyberpunk restyle',
-    sourceImage: { data: new Uint8Array([1, 2, 3]), mediaType: 'image/png' },
+    sourceImages: [{ data: new Uint8Array([1, 2, 3]), mediaType: 'image/png' }],
     timeoutMs: 5_000,
     maxBytes: 1024,
     signal: new AbortController().signal,
@@ -103,23 +103,60 @@ describe('ComfyUI workflow preparation', () => {
 
   it('fails an edit when the workflow has no image placeholder', () => {
     expect(() => prepareComfyUIWorkflow(WORKFLOW, 'p', 1, 'up.png'))
-      .toThrow('must contain exactly one {{image}}')
+      .toThrow('must contain a {{image}} image input')
   })
 
-  it('fails an edit when the workflow has several image placeholders', () => {
+  it('fills several image placeholders in node order (#117)', () => {
     const workflow = JSON.stringify({
       1: { class_type: 'LoadImage', inputs: { image: '{{image}}' } },
       2: { class_type: 'LoadImageMask', inputs: { image: '%image%' } },
       6: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}}' } },
     })
+    expect(() => validateComfyUIWorkflowJson(workflow)).not.toThrow()
+    expect(comfyUIWorkflowSlots(workflow)).toEqual({ images: 2, size: false })
+    const prepared = prepareComfyUIWorkflow(workflow, 'p', 1, ['first.png', 'second.png']) as Record<string, { inputs: { image: string } }>
+    expect(prepared[1]?.inputs.image).toBe('first.png')
+    expect(prepared[2]?.inputs.image).toBe('second.png')
+  })
+
+  it('fails an edit whose image count does not match the placeholders', () => {
+    const workflow = JSON.stringify({
+      1: { class_type: 'LoadImage', inputs: { image: '{{image}}' } },
+      2: { class_type: 'LoadImage', inputs: { image: '{{image}}' } },
+      6: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}}' } },
+    })
     expect(() => prepareComfyUIWorkflow(workflow, 'p', 1, 'up.png'))
-      .toThrow('found 2')
-    expect(() => validateComfyUIWorkflowJson(workflow)).toThrow('at most one {{image}}')
+      .toThrow('has 2 {{image}} image input(s) but this call has 1 source image(s)')
+    expect(() => prepareComfyUIWorkflow(EDIT_WORKFLOW, 'p', 1, ['a.png', 'b.png']))
+      .toThrow('pass exactly 1')
   })
 
   it('fails a generation whose workflow still contains an image placeholder', () => {
     expect(() => prepareComfyUIWorkflow(EDIT_WORKFLOW, 'p', 1))
-      .toThrow('requires edit_image')
+      .toThrow('require edit_image')
+  })
+
+  it('injects width and height as numbers, defaulting to 1024 (#97)', () => {
+    const workflow = JSON.stringify({
+      5: { class_type: 'EmptyLatentImage', inputs: { width: '{{width}}', height: '{{height}}', batch_size: 1 } },
+      6: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}} at {{width}}x{{height}}' } },
+    })
+    expect(comfyUIWorkflowSlots(workflow)).toEqual({ images: 0, size: true })
+    const sized = prepareComfyUIWorkflow(workflow, 'p', 1, undefined, { width: 1344, height: 768 }) as Record<string, { inputs: Record<string, unknown> }>
+    expect(sized[5]?.inputs).toEqual({ width: 1344, height: 768, batch_size: 1 })
+    expect(sized[6]?.inputs.text).toBe('p at 1344x768')
+    const fallback = prepareComfyUIWorkflow(workflow, 'p', 1) as Record<string, { inputs: Record<string, unknown> }>
+    expect(fallback[5]?.inputs).toMatchObject({ width: 1024, height: 1024 })
+  })
+
+  it('maps a size or an aspect ratio to a frame', () => {
+    expect(comfyUIRequestedSize('1536x640', undefined)).toEqual({ width: 1536, height: 640 })
+    expect(comfyUIRequestedSize(' 800 × 600 ', undefined)).toEqual({ width: 800, height: 600 })
+    expect(comfyUIRequestedSize(undefined, '16:9')).toEqual({ width: 1344, height: 768 })
+    expect(comfyUIRequestedSize(undefined, undefined)).toBeUndefined()
+    expect(() => comfyUIRequestedSize('2K', undefined)).toThrow('must be WIDTHxHEIGHT')
+    expect(() => comfyUIRequestedSize('10x10', undefined)).toThrow('between 64 and 8192')
+    expect(() => comfyUIRequestedSize(undefined, '7:3')).toThrow('not supported')
   })
 })
 
@@ -257,7 +294,7 @@ describe('ComfyUI image editing', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     await expect(editComfyUIImage(editOptions({
-      sourceImage: { data: new Uint8Array([1]), mediaType: 'image/gif' },
+      sourceImages: [{ data: new Uint8Array([1]), mediaType: 'image/gif' }],
     }))).rejects.toThrow('ComfyUI edit_image accepts PNG, JPEG, or WebP source images; got image/gif')
     expect(fetchMock).not.toHaveBeenCalled()
   })
@@ -266,6 +303,35 @@ describe('ComfyUI image editing', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('folder missing', { status: 404 })))
 
     await expect(editComfyUIImage(editOptions())).rejects.toThrow('ComfyUI image upload failed (404): folder missing')
+  })
+
+  it('uploads several source images in order and fills each image input', async () => {
+    const twoInputs = JSON.stringify({
+      1: { class_type: 'LoadImage', inputs: { image: '{{image}}' } },
+      2: { class_type: 'LoadImage', inputs: { image: '{{image}}' } },
+      6: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}}' } },
+    })
+    const uploaded = (name: string): Response => new Response(JSON.stringify({ name, subfolder: '' }), { status: 200, headers: { 'content-type': 'application/json' } })
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(uploaded('face.png'))
+      .mockResolvedValueOnce(uploaded('scene.png'))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ prompt_id: 'job-1' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        'job-1': { status: { status_str: 'success', completed: true }, outputs: { save: { images: [{ filename: 'final.png', subfolder: '', type: 'output' }] } } },
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(new Uint8Array([7]), { status: 200, headers: { 'content-type': 'image/png' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await editComfyUIImage(editOptions({
+      workflowJson: twoInputs,
+      sourceImages: [{ data: new Uint8Array([1]), mediaType: 'image/png' }, { data: new Uint8Array([2]), mediaType: 'image/jpeg' }],
+    }))
+
+    const submitted = JSON.parse(String((fetchMock.mock.calls[2]?.[1] as RequestInit | undefined)?.body)) as {
+      prompt: Record<string, { inputs: { image?: string } }>
+    }
+    expect(submitted.prompt[1]?.inputs.image).toBe('face.png')
+    expect(submitted.prompt[2]?.inputs.image).toBe('scene.png')
   })
 
   it('reports an upload response without a stored name', async () => {

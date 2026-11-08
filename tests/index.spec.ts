@@ -425,6 +425,60 @@ describe('image tool registration', () => {
     expect(ctx.credentials.resolve).not.toHaveBeenCalled()
   })
 
+  it('tells the model when a ComfyUI workflow cannot take the requested size (#97)', async () => {
+    const { ctx, tools } = harnessContext()
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ prompt_id: 'job-1' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        'job-1': { status: { status_str: 'success', completed: true }, outputs: { save: { images: [{ filename: 'final.png', subfolder: '', type: 'output' }] } } },
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: { 'content-type': 'image/png' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    apply(ctx, {
+      provider: 'comfyui',
+      comfyuiWorkflows: [{ name: 'fixed.json', json: JSON.stringify({ 6: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}}' } } }) }],
+      comfyuiActiveWorkflow: 'fixed.json',
+      saveToWorkspace: false,
+    })
+
+    const generate = toolByName(tools, 'generate_image')
+    const args = { prompt: 'a portrait', aspect_ratio: '16:9' }
+    const value = await generate.execute(args, { signal: new AbortController().signal } as never) as { notice?: string }
+
+    expect(value.notice).toContain('the requested 16:9 was not applied')
+    const rendered = (generate.output as { render: (a: unknown, v: unknown) => { type: string; text?: string }[] }).render(args, value)
+    expect(rendered[0]?.text).toContain('sets its own frame size')
+  })
+
+  it('injects the requested aspect ratio into ComfyUI width and height placeholders', async () => {
+    const { ctx, tools } = harnessContext()
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ prompt_id: 'job-1' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        'job-1': { status: { status_str: 'success', completed: true }, outputs: { save: { images: [{ filename: 'final.png', subfolder: '', type: 'output' }] } } },
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: { 'content-type': 'image/png' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    apply(ctx, {
+      provider: 'comfyui',
+      comfyuiWorkflows: [{ name: 'sized.json', json: JSON.stringify({
+        5: { class_type: 'EmptyLatentImage', inputs: { width: '{{width}}', height: '{{height}}' } },
+        6: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}}' } },
+      }) }],
+      comfyuiActiveWorkflow: 'sized.json',
+      saveToWorkspace: false,
+    })
+
+    const value = await toolByName(tools, 'generate_image').execute(
+      { prompt: 'a portrait', aspect_ratio: '9:16' },
+      { signal: new AbortController().signal } as never,
+    ) as { notice?: string }
+
+    const submitted = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.body)) as { prompt: { 5: { inputs: { width: number; height: number } } } }
+    expect(submitted.prompt[5].inputs).toEqual({ width: 768, height: 1344 })
+    expect(value.notice).toBeUndefined()
+  })
+
   it('prepends the workflow preset before the user prompt on ComfyUI calls', async () => {
     const { ctx, tools } = harnessContext()
     const fetchMock = vi.fn()
@@ -588,7 +642,7 @@ describe('image tool registration', () => {
     expect(ctx.credentials.resolve).not.toHaveBeenCalled()
   })
 
-  it('rejects ComfyUI editing of several images with a selector hint', async () => {
+  it('rejects ComfyUI editing whose image count does not match the workflow before uploading', async () => {
     const { ctx, tools } = harnessContext()
     vi.mocked(ctx.attachments.readImage).mockResolvedValue({
       ref: { mediaType: 'image/png', attachmentId: 'sha256:a' as ImageAttachmentRef['attachmentId'], bytes: 1, width: 2, height: 2 },
@@ -596,12 +650,17 @@ describe('image tool registration', () => {
     } as never)
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
-    apply(ctx, { provider: 'comfyui', saveToWorkspace: false })
+    apply(ctx, {
+      provider: 'comfyui',
+      comfyuiWorkflowJson: JSON.stringify({ 1: { class_type: 'LoadImage', inputs: { image: '{{image}}' } }, 6: { class_type: 'CLIPTextEncode', inputs: { text: '{{prompt}}' } } }),
+      comfyuiWorkflowName: 'img2img.json',
+      saveToWorkspace: false,
+    })
 
     await expect(toolByName(tools, 'edit_image').execute(
       { prompt: 'restyle it' },
       execWithUserImages('sha256:a', 'sha256:b'),
-    )).rejects.toThrow('exactly one source image')
+    )).rejects.toThrow('this call has 2 source image(s); pass exactly 1')
     expect(fetchMock).not.toHaveBeenCalled()
     expect(ctx.credentials.resolve).not.toHaveBeenCalled()
   })

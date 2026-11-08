@@ -316,6 +316,7 @@ Bring private image generation on your local GPU directly into Agent conversatio
 
 - Import and manage multiple named workflows with prompt presets and common placeholders.
 - Let the Agent select a workflow by name for text-to-image, image-to-image, or batch generation in chat.
+- Placeholders: `{{prompt}}`, `{{seed}}`; with `{{width}}`/`{{height}}` the size or aspect ratio the Agent asks for takes effect (1024×1024 by default); for editing put `{{image}}` in a LoadImage input, one per reference image, filled in node order.
 
 > ComfyUI is not yet integrated into Studio or multi-model comparison.
 
@@ -342,7 +343,7 @@ Bring private image generation on your local GPU directly into Agent conversatio
 | **Aliyun DashScope / Qwen Image** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ | — |
 | **xAI Grok Imagine** | ✅ | ✅ | ⚠️ Limited | ✅ | ✅ | — |
 | **Zhipu GLM-Image** | ✅ | ✅ | — | ✅ | ✅ | — |
-| **Local ComfyUI** | ✅ | ✅ | ✅ Single | — | — | — |
+| **Local ComfyUI** | ✅ | ✅ | ✅ Multiple | — | — | — |
 | **ChatGPT subscription (key-free)** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ | — |
 | **Grok subscription (key-free)** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ | — |
 | **Google subscription (key-free)** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ | — |
@@ -412,7 +413,7 @@ The configuration field is `googleNative: true`. It defaults to `false`, keeping
 <details>
 <summary><strong>Why is ComfyUI not available in Studio?</strong></summary>
 
-Studio and multi-model comparison currently support cloud Providers only; ComfyUI is not yet integrated. ComfyUI supports text-to-image, single-image editing, batch generation, and multiple named workflows through Agent chat.
+Studio and multi-model comparison currently support cloud Providers only; ComfyUI is not yet integrated. ComfyUI supports text-to-image, image editing (with several reference images), batch generation, and multiple named workflows through Agent chat.
 
 </details>
 

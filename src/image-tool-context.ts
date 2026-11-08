@@ -1,5 +1,6 @@
 /** Live, credential-free instructions for the conversation model's image tools. */
 import { activeComfyUIWorkflow, resolveComfyUIWorkflows, resolveProvider, withProviderOverrides, type Config } from './config.js'
+import { comfyUIWorkflowSlots } from './comfyui-workflow.js'
 
 /** Workflow names listed for the model; a long list is cut so the system prompt stays small. */
 const MAX_LISTED_WORKFLOWS = 20
@@ -11,10 +12,21 @@ const MAX_LISTED_WORKFLOWS = 20
 function comfyUIWorkflowLine(config: Config): string[] {
   const workflows = resolveComfyUIWorkflows(config)
   if (workflows.length === 0) return []
-  const listed = workflows.slice(0, MAX_LISTED_WORKFLOWS).map(workflow => JSON.stringify(workflow.name)).join(', ')
+  const listed = workflows.slice(0, MAX_LISTED_WORKFLOWS).map(workflow => `${JSON.stringify(workflow.name)}${slotNote(workflow.json)}`).join(', ')
   const more = workflows.length > MAX_LISTED_WORKFLOWS ? ` (+${String(workflows.length - MAX_LISTED_WORKFLOWS)} more)` : ''
   const active = activeComfyUIWorkflow(config)
-  return [`ComfyUI workflows available for the workflow argument (provider=comfyui): ${listed}${more}; active: ${JSON.stringify(active?.name ?? '')}. Pass workflow only when the user asks for a specific one; the local ComfyUI server may not be running.`]
+  return [`ComfyUI workflows available for the workflow argument (provider=comfyui): ${listed}${more}; active: ${JSON.stringify(active?.name ?? '')}. Pass workflow only when the user asks for a specific one; the local ComfyUI server may not be running. A workflow marked [N images] runs through edit_image with exactly N source images; only one marked [size] honours size/aspect_ratio.`]
+}
+
+/** What a workflow takes from a call, so the model picks generate vs edit and the image count. */
+function slotNote(json: string): string {
+  let slots
+  try { slots = comfyUIWorkflowSlots(json) } catch { return '' }
+  const parts = [
+    ...(slots.images > 0 ? [`${String(slots.images)} image${slots.images === 1 ? '' : 's'}`] : []),
+    ...(slots.size ? ['size'] : []),
+  ]
+  return parts.length === 0 ? '' : ` [${parts.join(', ')}]`
 }
 
 export function imageToolContext(config: Config, configuredProviders?: readonly string[]): string {
