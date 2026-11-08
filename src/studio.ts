@@ -251,7 +251,7 @@ export async function generateFromStudio(
     if (subscriptions === undefined) throw new Error('订阅生图不可用：订阅管理器未初始化')
     const subProfile = subscriptionStudioProfile(input.provider, true)
     assertAllowed(subProfile, input, input.output?.format === 'gif')
-    return generateSubscriptionFromStudio(ctx, subscriptions, input, signal)
+    return generateSubscriptionFromStudio(ctx, config, subscriptions, input, signal)
   }
   const channel = input.provider === 'openai-compat' ? resolveOpenAICompatChannel(config, input.channel) : undefined
   const requestConfig = input.provider === 'openai-compat' ? withOpenAICompatChannel(config, input.channel) : config
@@ -463,6 +463,7 @@ export async function runPool<T>(
  */
 async function generateSubscriptionFromStudio(
   ctx: Context,
+  config: Config,
   subscriptions: SubscriptionManager,
   input: StudioGenerateRequest,
   signal: AbortSignal,
@@ -486,7 +487,15 @@ async function generateSubscriptionFromStudio(
   // manager layers map it onto aspect_ratio / imageConfig). `auto` quality is
   // never forwarded so the vendor default applies.
   const subCap = SUBSCRIPTION_CAPABILITIES[provider]
-  const wireSize = provider === 'chatgpt-sub' ? subCap.sizeFor?.(input.ratio, input.quality) : input.ratio
+  // A GIF takes its frame options (range-checked like the API-key channels)
+  // and only an explicit frame size: a ratio maps to a still-image size whose
+  // frame sheet can overflow.
+  const gifFields = input.output === undefined ? {} : gifRequestFields({ outputFormat: input.output.format, frameCount: input.output.frameCount, frameDurationMs: input.output.frameDurationMs })
+  const gif = gifFields.output_format === 'gif'
+    ? { ...(gifFields.frame_count === undefined ? {} : { frameCount: gifFields.frame_count }), ...(gifFields.frame_duration_ms === undefined ? {} : { frameDurationMs: gifFields.frame_duration_ms }) }
+    : undefined
+  if (gif !== undefined && input.output?.size !== undefined) validateGifFrameSize(input.output.size)
+  const wireSize = gif !== undefined ? input.output?.size : provider === 'chatgpt-sub' ? subCap.sizeFor?.(input.ratio, input.quality) : input.ratio
   const wireQuality = input.quality === 'auto' || input.quality === 'standard' ? undefined : input.quality
   const requestedOutput = input.ratio === 'auto' && wireQuality === undefined
     ? '通道默认'
@@ -499,6 +508,7 @@ async function generateSubscriptionFromStudio(
       ...(wireSize === undefined || wireSize.length === 0 ? {} : { size: wireSize }),
       ...(wireQuality === undefined ? {} : { quality: wireQuality }),
       ...(sourceImages.length > 0 ? { sourceImages } : {}),
+      ...(gif === undefined ? {} : { gif }),
       maxBytes: ctx.attachments.imageLimits.maxImageBytes,
       signal,
     })
@@ -510,9 +520,12 @@ async function generateSubscriptionFromStudio(
       mediaType: generated.mediaType,
       name: count > 1 ? `studio-image-${index + 1}` : 'studio-image',
     })
+    // Same as the API-key channels: keep the animation the host normalized away.
+    const original = await keepGifOriginal(vaultConfigOf(config), generated, attachment, message => { ctx.logger.warn(message) })
     return {
       attachment,
       output: subscriptionOutput(input.ratio, input.quality, requestedOutput, attachment.width, attachment.height, generated.reportedQuality),
+      ...(original === undefined ? {} : { original }),
     }
   }
   if (count === 1) {
@@ -569,6 +582,7 @@ function subscriptionResponse(
     failedCount,
     items,
     ...(primary.savedTo ? { savedTo: primary.savedTo } : {}),
+    ...(primary.original === undefined ? {} : { original: primary.original }),
     ...(errors !== undefined && errors.length > 0 ? { errors } : {}),
   }
 }
@@ -691,7 +705,7 @@ export function withGenerationModel<T extends StudioGenerateRequest>(profile: St
 
 function assertAllowed(profile: StudioProviderProfile, input: StudioGenerateRequest, gif: boolean): void {
   if (!studioModelOptionsForMode(profile, input.mode).some(option => option.value === input.model)) throw new Error('模型配置已变化，请刷新工作台后重试')
-  if (input.output !== undefined && input.provider !== 'openai' && input.provider !== 'openai-compat') throw new Error('该 Provider 不支持 GIF 输出参数')
+  if (input.output !== undefined && input.provider !== 'openai' && input.provider !== 'openai-compat' && input.provider !== 'chatgpt-sub') throw new Error('该 Provider 不支持 GIF 输出参数')
   // A GIF (asked for by the request or by the channel) takes no size from the
   // ratio table, so the ratio and tier a card remembered need not exist on this
   // channel (a relay with a size table lists only pixel tiers, never the legacy

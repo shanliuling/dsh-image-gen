@@ -21,6 +21,7 @@ import { createPkce, type Pkce } from './oauth.js'
 import { startLoopback } from './loopback.js'
 import { parseBlob, serializeBlob, type SubscriptionBlob } from './blob.js'
 import {
+  CODEX_GIF_MODEL,
   CODEX_IMAGE_EDIT_URL,
   CODEX_IMAGE_MODEL,
   CODEX_IMAGE_URL,
@@ -55,6 +56,12 @@ import {
 import { SUBSCRIPTION_PROVIDER_DISPLAY_NAMES, type SubscriptionProvider } from '../shared.js'
 import { xaiToolParameters } from '../xai-params.js'
 import { redactSecrets } from '../redact.js'
+
+/** GIF frame parameters for a subscription call, already range-checked by gifRequestFields. */
+export interface SubscriptionGifOptions {
+  frameCount?: number
+  frameDurationMs?: number
+}
 
 /** Vendor ids used by the credential refs and the wire calls. */
 export type SubscriptionVendor = 'codex' | 'grok' | 'antigravity'
@@ -228,9 +235,12 @@ export class SubscriptionManager {
     size?: string
     quality?: string
     referenceImages?: ReadonlyArray<SubscriptionReferenceImage>
+    /** Animated output; only the ChatGPT subscription (Codex images) takes it. */
+    gif?: SubscriptionGifOptions
     signal?: AbortSignal
   }): Promise<Array<{ b64_json: string; revisedPrompt?: string; reportedQuality?: string }>> {
     const { vendor, prompt } = options
+    if (options.gif !== undefined && vendor !== 'codex') throw new Error(`${providerNameOf(vendor)} 不支持 GIF 输出`)
     const session = await this.ensureFresh(vendor)
     const text = prompt.trim()
     if (text.length === 0) throw new Error('prompt must be a non-empty string')
@@ -267,10 +277,15 @@ export class SubscriptionManager {
       headers = codexIdentityHeaders(session)
       body = {
         prompt: codexPromptWithSize(text, options.size),
-        model: CODEX_IMAGE_MODEL,
+        model: options.gif === undefined ? CODEX_IMAGE_MODEL : CODEX_GIF_MODEL,
         ...(references.length > 0 ? { images: references.map(image => ({ image_url: toDataUrl(image) })) } : {}),
         ...(options.size !== undefined && options.size.length > 0 ? { size: options.size } : {}),
         ...(options.quality !== undefined && options.quality.length > 0 ? { quality: options.quality } : {}),
+        ...(options.gif === undefined ? {} : {
+          output_format: 'gif',
+          ...(options.gif.frameCount === undefined ? {} : { frame_count: options.gif.frameCount }),
+          ...(options.gif.frameDurationMs === undefined ? {} : { frame_duration_ms: options.gif.frameDurationMs }),
+        }),
       }
     } else {
       // Grok edits ride the public /v1/images/edits JSON endpoint; reference
