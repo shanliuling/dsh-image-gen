@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type FC } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ChangeEvent, type FC } from 'react'
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import {
   AlertTriangle,
@@ -36,6 +36,7 @@ import { DELETE_ROUTE, SAVE_WORKSPACE_ROUTE, STUDIO_ROUTE, thumbUrlFor, isSubscr
 import { deleteGalleryItem, getGalleryItems, subscribeGallery, toggleFavoriteGalleryItem, type GalleryItem, saveFavoritePrompt, getFavoritePrompts, deleteFavoritePrompt, subscribeFavorites, addFavoriteFolder, getFavoriteFolders, deleteFavoriteFolder, moveFavoritePrompt, updateFavoritePrompt, type FavoritePrompt, type FavoriteFolder } from './gallery-store.js'
 import { persistGalleryRecord } from './gallery-media.js'
 import { imageVersionKey } from './image-result-node.js'
+import { studioSession, type StudioViewState } from './studio-session.js'
 import { copyImageBlob, downloadBlobUrl, formatRelativeTime } from './browser-image-utils.js'
 import { buildComparisonTargets, comparisonOptionUnion, comparisonOutputOptions, initialComparisonProviders } from './multi-model-compare.js'
 import { WatermarkControl } from './watermark-control.js'
@@ -69,7 +70,7 @@ const PAGE_SIZE = 12
 const WORKBENCH_NARROW_WIDTH = 560
 
 type Mode = 'generate' | 'edit'
-type BatchKind = 'multi-image' | 'multi-model'
+type BatchKind = StudioViewState['batchKind'] & string
 
 export interface StudioReferenceItem {
   id: string
@@ -231,7 +232,12 @@ export const StudioView: FC<{
     favorite: item => railActionsRef.current?.favorite(item),
     toast: message => railActionsRef.current?.toast(message),
   }), [])
-  const [selected, setSelected] = useState<GalleryItem | null>(null)
+  // The session outlives this component (#99): a generation keeps running when
+  // the user switches views, and the results on screen come back on return.
+  const session = useMemo(() => studioSession(initialCanvasSurface ?? 'preview'), [initialCanvasSurface])
+  const sessionState = useSyncExternalStore(session.subscribe, session.getSnapshot)
+  const restoredView = useMemo(() => session.view(), [session])
+  const [selected, setSelected] = useState<GalleryItem | null>(() => restoredView?.selected ?? null)
   const [mode, setMode] = useState<Mode>('generate')
   const [provider, setProvider] = useState<StudioProvider>('google')
   const [channel, setChannel] = useState<string | undefined>(undefined)
@@ -244,12 +250,12 @@ export const StudioView: FC<{
   const [prompt, setPrompt] = useState('')
   const [references, setReferences] = useState<StudioReferenceItem[]>([])
   const [count, setCount] = useState(1)
-  const [currentBatch, setCurrentBatch] = useState<GalleryItem[] | null>(null)
-  const [selectedBatchIds, setSelectedBatchIds] = useState<string[]>([])
-  const [batchKind, setBatchKind] = useState<BatchKind | null>(null)
+  const [currentBatch, setCurrentBatch] = useState<GalleryItem[] | null>(() => restoredView?.currentBatch ?? null)
+  const [selectedBatchIds, setSelectedBatchIds] = useState<string[]>(() => restoredView?.selectedBatchIds ?? [])
+  const [batchKind, setBatchKind] = useState<BatchKind | null>(() => restoredView?.batchKind ?? null)
   const [comparisonEnabled, setComparisonEnabled] = useState(false)
   const [comparisonProviderKeys, setComparisonProviderKeys] = useState<string[]>([])
-  const [isGenerating, setIsGenerating] = useState(false)
+  const isGenerating = sessionState.generating
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
 
@@ -303,7 +309,6 @@ export const StudioView: FC<{
   const [lightboxOpen, setLightboxOpen] = useState(false)
   const [showDeleteModal, setShowDeleteModal] = useState(false)
   const [deleteWorkspaceFiles, setDeleteWorkspaceFiles] = useState(true)
-  const requestRef = useRef<AbortController | null>(null)
   const canvasRef = useRef<HTMLDivElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const image = useAttachmentImage(selected?.attachment)
@@ -443,12 +448,11 @@ export const StudioView: FC<{
     return () => { mounted = false; unsubscribe() }
   }, [])
 
-  // Abort only on component unmount
-  useEffect(() => {
-    return () => {
-      requestRef.current?.abort()
-    }
-  }, [])
+  // Leaving the workbench no longer aborts the generation (#99): the session
+  // keeps the request, and the view on screen is kept for the next mount.
+  const viewRef = useRef<StudioViewState>({ selected, currentBatch, selectedBatchIds, batchKind })
+  viewRef.current = { selected, currentBatch, selectedBatchIds, batchKind }
+  useEffect(() => () => { session.keepView(viewRef.current) }, [session])
 
   // Revoke all reference object URLs on component unmount
   useEffect(() => {
@@ -837,13 +841,7 @@ export const StudioView: FC<{
     }
   }
 
-  const cancelGeneration = () => {
-    if (requestRef.current) {
-      requestRef.current.abort()
-      requestRef.current = null
-      setIsGenerating(false)
-    }
-  }
+  const cancelGeneration = () => { session.cancel() }
 
   const toggleComparison = (enabled: boolean) => {
     setComparisonEnabled(enabled)
@@ -885,10 +883,12 @@ export const StudioView: FC<{
     // flight; where they were working when they hit generate decides whether
     // results land on the canvas directly (preview trials wait for a save).
     const startedOnInfinite = canvasSurfaceRef.current === 'infinite'
-    setIsGenerating(true)
-    setError(null)
     const controller = new AbortController()
-    requestRef.current = controller
+    if (!session.start(controller)) return
+    setError(null)
+    // Results go through the session, so a workbench mounted when they arrive
+    // shows them even if this one was left in the meantime.
+    let outcome: Parameters<typeof session.settle>[1]
     try {
       const referencesPayload: StudioReference[] | undefined = mode === 'edit' && references.length > 0
         ? await Promise.all(references.map(async (ref) => {
@@ -961,11 +961,17 @@ export const StudioView: FC<{
           ...(workspace?.workspaceId ? { workspaceId: workspace.workspaceId } : {}),
         }))
 
-        setCurrentBatch(galleryEntries.length > 1 ? galleryEntries : null)
-        setSelectedBatchIds(galleryEntries.length > 1 ? [galleryEntries[0]!.id] : [])
-        setBatchKind(galleryEntries.length > 1 ? 'multi-model' : null)
-        setSelected(galleryEntries[0]!)
-        resetFit()
+        outcome = {
+          view: {
+            currentBatch: galleryEntries.length > 1 ? galleryEntries : null,
+            selectedBatchIds: galleryEntries.length > 1 ? [galleryEntries[0]!.id] : [],
+            batchKind: galleryEntries.length > 1 ? 'multi-model' : null,
+            selected: galleryEntries[0]!,
+          },
+          notice: failed > 0
+            ? t('comparePartial', { success: String(successes.length), failed: String(failed) })
+            : galleryEntries.some(hasSubscriptionRatioMismatch) ? t('subscriptionRatioMismatch') : undefined,
+        }
         // Mirror the comparison batch onto the tldraw infinite canvas, but
         // only when the user was working there when the request started (see
         // the single-generation path).
@@ -978,8 +984,6 @@ export const StudioView: FC<{
             model: entry.model,
           })))
         }
-        if (failed > 0) flash(t('comparePartial', { success: String(successes.length), failed: String(failed) }))
-        else if (galleryEntries.some(hasSubscriptionRatioMismatch)) flash(t('subscriptionRatioMismatch'))
         return
       }
 
@@ -1031,18 +1035,11 @@ export const StudioView: FC<{
         ...(workspace?.workspaceId ? { workspaceId: workspace.workspaceId } : {}),
       }))
 
-      if (galleryEntries.length > 1) {
-        setCurrentBatch(galleryEntries)
-        setSelectedBatchIds([galleryEntries[0]!.id])
-        setBatchKind('multi-image')
-        setSelected(galleryEntries[0]!)
-      } else if (galleryEntries.length === 1) {
-        setCurrentBatch(null)
-        setSelectedBatchIds([])
-        setBatchKind(null)
-        setSelected(galleryEntries[0]!)
-      }
-      resetFit()
+      const view: StudioViewState | undefined = galleryEntries.length > 1
+        ? { currentBatch: galleryEntries, selectedBatchIds: [galleryEntries[0]!.id], batchKind: 'multi-image', selected: galleryEntries[0]! }
+        : galleryEntries.length === 1
+          ? { currentBatch: null, selectedBatchIds: [], batchKind: null, selected: galleryEntries[0]! }
+          : undefined
       // Mirror the generated batch onto the tldraw infinite canvas, but only
       // when the user was working there when the request started. Preview-mode
       // generations stay in the preview pane until saved: unsaved attempts
@@ -1057,23 +1054,36 @@ export const StudioView: FC<{
         })))
       }
 
-      if (payload.failedCount && payload.failedCount > 0) {
-        flash(t('partialSuccess', { success: String(generatedList.length), failed: String(payload.failedCount) }))
-      } else if (galleryEntries.some(hasSubscriptionRatioMismatch)) {
-        flash(t('subscriptionRatioMismatch'))
+      outcome = {
+        view,
+        notice: payload.failedCount && payload.failedCount > 0
+          ? t('partialSuccess', { success: String(generatedList.length), failed: String(payload.failedCount) })
+          : galleryEntries.some(hasSubscriptionRatioMismatch) ? t('subscriptionRatioMismatch') : undefined,
       }
     } catch (submitError) {
-      if (controller.signal.aborted) {
-        return
-      }
-      setError(messageOf(submitError))
+      if (controller.signal.aborted) return
+      outcome = { error: messageOf(submitError) }
     } finally {
-      if (requestRef.current === controller) {
-        requestRef.current = null
-        setIsGenerating(false)
-      }
+      session.settle(controller, outcome)
     }
   }
+
+  // Show each generation outcome once, in whichever workbench is mounted when
+  // it arrives or the first one mounted after it.
+  useEffect(() => {
+    const outcome = sessionState.outcome
+    if (outcome === undefined || session.delivered(outcome.seq)) return
+    session.markDelivered(outcome.seq)
+    if (outcome.view !== undefined) {
+      setCurrentBatch(outcome.view.currentBatch)
+      setSelectedBatchIds(outcome.view.selectedBatchIds)
+      setBatchKind(outcome.view.batchKind)
+      setSelected(outcome.view.selected)
+      resetFit()
+    }
+    if (outcome.error !== undefined) setError(outcome.error)
+    if (outcome.notice !== undefined) flash(outcome.notice)
+  }, [session, sessionState.outcome])
 
   const isSelectedInGallery = useMemo(() => {
     if (selected === null) return false
