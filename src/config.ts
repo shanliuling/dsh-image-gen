@@ -18,6 +18,7 @@ import {
   DEFAULT_OPENAI_MODEL,
   DEFAULT_SEEDREAM_BASE_URL,
   DEFAULT_SEEDREAM_MODEL,
+  currentSeedreamModel,
   DEFAULT_SUBSCRIPTION_MODELS,
   DEFAULT_XAI_BASE_URL,
   DEFAULT_XAI_MODEL,
@@ -312,7 +313,7 @@ export function resolveProvider(config: Config):
       return {
         provider: 'seedream',
         apiKeyEnv: SEEDREAM_API_KEY_ENV,
-        model: config.seedreamModel ?? DEFAULT_SEEDREAM_MODEL,
+        model: currentSeedreamModel(config.seedreamModel),
         baseURL: config.seedreamBaseURL ?? DEFAULT_SEEDREAM_BASE_URL,
         imageSize: '2K',
         arkOptions: {

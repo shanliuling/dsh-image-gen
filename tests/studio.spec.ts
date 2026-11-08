@@ -69,7 +69,8 @@ describe('multi-model comparison planning', () => {
       // openai speaks 16:9 now but tops out at low/medium/high, so only the
       // quality falls back to its default.
       { provider: 'openai', ratio: '16:9', quality: 'auto', adjusted: true },
-      { provider: 'seedream', ratio: '16:9', quality: '4K', adjusted: false },
+      // Seedream 5.0 pro tops out at 2K.
+      { provider: 'seedream', ratio: '16:9', quality: '2K', adjusted: true },
     ])
   })
 
@@ -88,7 +89,7 @@ describe('multi-model comparison planning', () => {
     ])
     // dashscope is signed out above, so its `standard` tier stays out of the union.
     expect(comparisonOptionUnion(unionProfiles, 'qualityOptions').map(option => option.value)).toEqual([
-      'auto', '1K', '2K', '3K', '4K', 'low', 'medium', 'high', 'xhigh', 'max',
+      'auto', '1K', '1.5K', '2K', '4K', 'low', 'medium', 'high', 'xhigh', 'max',
     ])
   })
 })
@@ -107,10 +108,14 @@ describe('image workbench provider capabilities', () => {
 
     const seedream = studioProfile({}, 'seedream', true)
     expect(seedream).toMatchObject({ model: DEFAULT_SEEDREAM_MODEL, defaultRatio: 'auto', defaultQuality: '2K', configured: true })
-    // Seedream 5.0 dropped the 1K tier and gained 3K; picking 1K used to be a
-    // guaranteed upstream error.
+    // Seedream 5.0 pro (the default since 5.0/5.0 lite retire on 2026-11-24)
+    // takes 1K/1.5K/2K; the earlier models keep 2K/3K/4K, where 1K used to be
+    // a guaranteed upstream error.
     expect(seedream.ratioOptions.map(o => o.value)).toEqual(['auto', '1:1', '4:3', '3:4', '16:9', '9:16', '3:2', '2:3', '21:9'])
-    expect(seedream.qualityOptions.map(o => o.value)).toEqual(['2K', '3K', '4K'])
+    expect(seedream.qualityOptions.map(o => o.value)).toEqual(['1K', '1.5K', '2K'])
+    expect(studioProfile({ seedreamModel: 'doubao-seedream-4-0-250828' }, 'seedream', true).qualityOptions.map(o => o.value)).toEqual(['2K', '3K', '4K'])
+    // A saved retired model, the former default among them, runs on its replacement.
+    expect(studioProfile({ seedreamModel: 'doubao-seedream-5-0-260128' }, 'seedream', true).model).toBe(DEFAULT_SEEDREAM_MODEL)
 
     const dashscope = studioProfile({}, 'dashscope', true)
     expect(dashscope).toMatchObject({ model: DEFAULT_DASHSCOPE_MODEL, defaultRatio: '1:1', defaultQuality: 'standard', configured: true })

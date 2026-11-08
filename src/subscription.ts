@@ -20,7 +20,6 @@ import { SUBSCRIPTION_TIMEOUT_MS, type SubscriptionProvider } from './shared.js'
 import { SUBSCRIPTION_CAPABILITIES } from './capabilities.js'
 
 export { SubscriptionManager, vendorOf } from './subscription/manager.js'
-export { CODEX_GIF_MODEL } from './subscription/vendors/codex.js'
 export { registerSubscriptionRoutes } from './subscription/subscription-route.js'
 export { SUBSCRIPTION_TIMEOUT_MS } from './shared.js'
 

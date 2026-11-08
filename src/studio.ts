@@ -39,7 +39,7 @@ import {
   type SubscriptionProvider,
 } from './shared.js'
 
-import { CLOUD_CAPABILITIES, RATIO_LABELS, SUBSCRIPTION_CAPABILITIES } from './capabilities.js'
+import { CLOUD_CAPABILITIES, cloudCapability, RATIO_LABELS, SUBSCRIPTION_CAPABILITIES } from './capabilities.js'
 import { compatGenerationExtraBody, compatQualityOptions, compatRequestQuality, gifRequestFields, officialQualityOptions, officialSizeTable, validateGifFrameSize, validateOfficialSize, PROVIDER_DEFAULT_QUALITY } from './openai-output.js'
 import { keepGifOriginal } from './vault-registry.js'
 import { vaultConfigOf } from './vault-store.js'
@@ -309,7 +309,7 @@ export async function generateFromStudio(
         : p === 'openai-compat' ? openAIRequestSize(requestConfig, input.ratio, input.resolution ?? input.quality)
         : p === 'openai' ? openAIRequestSize({ openaiCompatSizes: officialTable! }, input.ratio, officialResolution)
         : p === 'xai' ? undefined
-        : CLOUD_CAPABILITIES[p].sizeFor?.(input.ratio, input.quality)
+        : cloudCapability(p, wired.model).sizeFor?.(input.ratio, input.quality)
       if (p === 'openai' && size !== undefined) {
         if (gif) validateGifFrameSize(size)
         else validateOfficialSize(wired.model, size)
@@ -329,7 +329,7 @@ export async function generateFromStudio(
         : await generateOpenAICompatibleImage({ provider: p, apiKey: credential, baseURL: wired.baseURL, model: wired.model, prompt: input.prompt, ...(size === undefined ? {} : { size }), maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal, ...(quality === undefined ? {} : { quality }), ...(extraBody === undefined ? {} : { extraBody }) })
       output = size ?? `${input.ratio}, ${input.quality}`
     } else if (wired.provider === 'seedream') {
-      const size = CLOUD_CAPABILITIES.seedream.sizeFor?.(input.ratio, input.quality) ?? input.quality
+      const size = cloudCapability('seedream', wired.model).sizeFor?.(input.ratio, input.quality) ?? input.quality
       const arkOptions = { ...wired.arkOptions, watermark: selectedWatermark(input.watermark, wired.arkOptions.watermark)! }
       generated = input.mode === 'edit'
         ? await editSeedreamImage({ apiKey: credential, baseURL: wired.baseURL, model: wired.model, prompt: input.prompt, sourceImages, size, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal, arkOptions })
@@ -629,7 +629,7 @@ function cloudStudioProfile(config: Config, provider: CloudImageProvider, config
       resolutionOptions, defaultResolution: resolutionOptions[defaultRatio]?.[0]?.value ?? '1K' }
   }
   // Every remaining cloud row reads its picker shape from the capability table.
-  const cap = CLOUD_CAPABILITIES[provider as Exclude<CloudImageProvider, 'openai-compat'>]
+  const cap = cloudCapability(provider as Exclude<CloudImageProvider, 'openai-compat'>, model)
   return profile(provider, model, configured, cap.ratioOptions, cap.qualityOptions, cap.defaultRatio, cap.defaultQuality)
 }
 

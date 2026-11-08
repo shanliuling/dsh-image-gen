@@ -65,7 +65,7 @@ describe('subscription manager edit wire protocol', () => {
     expect(url).toBe('https://chatgpt.com/backend-api/codex/images/edits')
     const body = JSON.parse(String(init.body)) as { model: string; prompt: string; images: Array<{ image_url: string }> }
     expect(body.prompt).toBe('make it blue')
-    expect(body.model).toBe('gpt-image-2.5-flare')
+    expect(body.model).toBe('gpt-image-2.6-flare')
     expect(body.images).toHaveLength(1)
     expect(body.images[0]!.image_url).toBe(`data:image/png;base64,${Buffer.from(reference.data).toString('base64')}`)
     const headers = init.headers as Record<string, string>
@@ -140,7 +140,7 @@ describe('subscription manager edit wire protocol', () => {
     expect(JSON.parse(String(init.body))).toMatchObject({ size: '864x1536', quality: 'high' })
   })
 
-  it('asks the Codex route for a GIF on the 2.6 model, and keeps stills on the probed model', async () => {
+  it('asks the Codex route for a GIF with its frame options, on the same 2.6 model as stills', async () => {
     const { manager, fetchMock } = harness()
     await manager.generate({ vendor: 'codex', prompt: 'a bouncing ball', gif: { frameCount: 6, frameDurationMs: 150 } })
     const gifBody = JSON.parse(String((fetchMock.mock.calls[0] as [string, RequestInit])[1].body)) as Record<string, unknown>
@@ -153,7 +153,7 @@ describe('subscription manager edit wire protocol', () => {
     expect(editBody).not.toHaveProperty('frame_count')
     await manager.generate({ vendor: 'codex', prompt: 'a portrait' })
     const stillBody = JSON.parse(String((fetchMock.mock.calls[2] as [string, RequestInit])[1].body)) as Record<string, unknown>
-    expect(stillBody.model).toBe('gpt-image-2.5-flare')
+    expect(stillBody.model).toBe('gpt-image-2.6-flare')
     expect(stillBody).not.toHaveProperty('output_format')
     await expect(manager.generate({ vendor: 'grok', prompt: 'a ball', gif: {} })).rejects.toThrow('不支持 GIF')
     expect(fetchMock).toHaveBeenCalledTimes(3)

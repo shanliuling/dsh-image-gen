@@ -21,7 +21,6 @@ import { createPkce, type Pkce } from './oauth.js'
 import { startLoopback } from './loopback.js'
 import { parseBlob, serializeBlob, type SubscriptionBlob } from './blob.js'
 import {
-  CODEX_GIF_MODEL,
   CODEX_IMAGE_EDIT_URL,
   CODEX_IMAGE_MODEL,
   CODEX_IMAGE_URL,
@@ -277,7 +276,7 @@ export class SubscriptionManager {
       headers = codexIdentityHeaders(session)
       body = {
         prompt: codexPromptWithSize(text, options.size),
-        model: options.gif === undefined ? CODEX_IMAGE_MODEL : CODEX_GIF_MODEL,
+        model: CODEX_IMAGE_MODEL,
         ...(references.length > 0 ? { images: references.map(image => ({ image_url: toDataUrl(image) })) } : {}),
         ...(options.size !== undefined && options.size.length > 0 ? { size: options.size } : {}),
         ...(options.quality !== undefined && options.quality.length > 0 ? { quality: options.quality } : {}),

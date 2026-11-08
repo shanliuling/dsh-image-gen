@@ -640,10 +640,28 @@ export function arkOutputBody(
 
 /** Default model names. */
 export const DEFAULT_GOOGLE_MODEL = 'gemini-3.1-flash-image'
-export const DEFAULT_OPENAI_MODEL = 'gpt-image-2'
-export const DEFAULT_SEEDREAM_MODEL = 'doubao-seedream-5-0-260128'
+export const DEFAULT_OPENAI_MODEL = 'gpt-image-2.6-flare'
+export const DEFAULT_SEEDREAM_MODEL = 'doubao-seedream-5-0-pro-260628'
+
+/**
+ * Seedream models Volcano Ark retires on 2026-11-24 (batch 10), mapped to the
+ * model that takes their requests. A saved settings value naming one of them
+ * (the plugin's own former default among them) would start failing that day.
+ */
+const RETIRED_SEEDREAM_MODELS: Readonly<Record<string, string>> = {
+  'doubao-seedream-5-0-260128': DEFAULT_SEEDREAM_MODEL,
+  'doubao-seedream-5-0-lite-260128': DEFAULT_SEEDREAM_MODEL,
+  'doubao-seedream-4-5-251128': DEFAULT_SEEDREAM_MODEL,
+}
+
+/** The Seedream model a request should use: a retired one is replaced, anything else is kept. */
+export function currentSeedreamModel(model: string | undefined): string {
+  const trimmed = model?.trim()
+  if (trimmed === undefined || trimmed.length === 0) return DEFAULT_SEEDREAM_MODEL
+  return RETIRED_SEEDREAM_MODELS[trimmed] ?? trimmed
+}
 export const DEFAULT_DASHSCOPE_MODEL = 'qwen-image-3.0'
-export const DEFAULT_XAI_MODEL = 'grok-imagine-image'
+export const DEFAULT_XAI_MODEL = 'grok-imagine-image-2.0'
 export const DEFAULT_ZHIPU_MODEL = 'glm-image'
 
 /** One named ComfyUI API-format workflow imported through settings. */
@@ -718,7 +736,7 @@ export function mergeComfyUIPrompt(preset: string | undefined, user: string): st
 
 /** Default models for the subscription channels; fixed by the bridge protocol. */
 export const DEFAULT_SUBSCRIPTION_MODELS: Record<SubscriptionProvider, string> = {
-  'chatgpt-sub': 'gpt-image-2.5-flare',
+  'chatgpt-sub': 'gpt-image-2.6-flare',
   'grok-sub': 'grok-imagine-image-2.0',
   'google-sub': 'gemini-3.1-flash-image',
 }

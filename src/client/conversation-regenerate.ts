@@ -55,7 +55,8 @@ function outputSettings(provider: CloudImageProvider, output?: string | undefine
     }
   }
   if (provider === 'seedream') {
-    return { ratio: 'auto', quality: normalized === '1K' || normalized === '4K' ? normalized : '2K' }
+    // 1K/1.5K/2K on Seedream 5.0 pro/flash, 2K/3K/4K on the earlier models.
+    return { ratio: 'auto', quality: ['1K', '1.5K', '2K', '3K', '4K'].includes(normalized) ? normalized : '2K' }
   }
   if (provider === 'openai' || provider === 'openai-compat' || provider === 'xai' || provider === 'zhipu') {
     const [size, qualityPart] = normalized.split(',').map(value => value.trim())

@@ -78,7 +78,7 @@ export function initialComparisonProviders(
 }
 
 const RATIO_SORT_ORDER = ['auto', '1:1', '3:2', '2:3', '4:3', '3:4', '4:5', '5:4', '16:9', '9:16', '21:9']
-const QUALITY_SORT_ORDER = ['auto', 'standard', '1k', '1K', '2k', '2K', '3K', '4K', 'low', 'medium', 'high', 'xhigh', 'max', 'hd']
+const QUALITY_SORT_ORDER = ['auto', 'standard', '1k', '1K', '1.5K', '2k', '2K', '3K', '4K', 'low', 'medium', 'high', 'xhigh', 'max', 'hd']
 
 /** Union of every configured profile's options, for the shared comparison pickers. */
 export function comparisonOptionUnion(
