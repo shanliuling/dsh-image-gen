@@ -15,7 +15,7 @@
  */
 import type { ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import { detectImageMediaType } from './reference-image.js'
-import { SubscriptionManager, vendorOf, type SubscriptionGifOptions } from './subscription/manager.js'
+import { SubscriptionManager, vendorOf } from './subscription/manager.js'
 import { SUBSCRIPTION_TIMEOUT_MS, type SubscriptionProvider } from './shared.js'
 import { SUBSCRIPTION_CAPABILITIES } from './capabilities.js'
 
@@ -54,8 +54,6 @@ export async function generateSubscriptionImage(options: {
   size?: string
   quality?: string
   sourceImages?: ReadonlyArray<{ data: Uint8Array; mediaType: ImageMediaType }>
-  /** Animated output (ChatGPT subscription only). */
-  gif?: SubscriptionGifOptions
   maxBytes: number
   signal: AbortSignal
 }): Promise<{ data: Uint8Array; mediaType: ImageMediaType; revisedPrompt?: string; reportedQuality?: string }> {
@@ -70,7 +68,6 @@ export async function generateSubscriptionImage(options: {
       ...(size !== undefined && size.length > 0 ? { size } : {}),
       ...(quality !== undefined && quality.length > 0 ? { quality } : {}),
       ...(sourceImages.length > 0 ? { referenceImages: sourceImages } : {}),
-      ...(options.gif === undefined ? {} : { gif: options.gif }),
       signal,
     }),
     signal,

@@ -310,31 +310,6 @@ describe('subscription workbench generation', () => {
     }
   })
 
-  it('asks the ChatGPT subscription for a GIF from the workbench and keeps the original the host normalized', async () => {
-    const manager = stubSubscriptionManager({ 'chatgpt-sub': { state: 'logged-in', email: 'user@example.com' } })
-    const gif = gifBytes(3)
-    const generate = vi.spyOn(manager, 'generate').mockResolvedValueOnce([{ b64_json: Buffer.from(gif).toString('base64') }])
-    const ctx = studioCtx()
-    ctx.attachments.imageLimits.mediaTypes = ['image/jpeg', 'image/png', 'image/gif']
-    ctx.attachments.saveImage.mockImplementation(async () => ({ attachmentId: 'att-still', mediaType: 'image/webp', bytes: 40, width: 16, height: 16 }))
-    const vaultDir = await mkdtemp(join(tmpdir(), 'dsh-sub-gif-'))
-    try {
-      const result = await generateFromStudio(ctx, { vaultDir }, {
-        mode: 'generate', provider: 'chatgpt-sub', model: DEFAULT_SUBSCRIPTION_MODELS['chatgpt-sub'],
-        prompt: 'a bouncing ball', ratio: '16:9', quality: 'auto', output: { format: 'gif', frameCount: 3 },
-      }, new AbortController().signal, undefined, manager)
-      expect(generate.mock.calls[0]?.[0]).toMatchObject({ vendor: 'codex', gif: { frameCount: 3 } })
-      expect(generate.mock.calls[0]?.[0]).not.toHaveProperty('size')
-      expect(result.original).toMatchObject({ bytes: gif.byteLength, mediaType: 'image/gif' })
-      await expect(generateFromStudio(ctx, {}, {
-        mode: 'generate', provider: 'chatgpt-sub', model: DEFAULT_SUBSCRIPTION_MODELS['chatgpt-sub'],
-        prompt: 'a bouncing ball', ratio: 'auto', quality: 'auto', output: { format: 'gif', frameCount: 40 },
-      }, new AbortController().signal, undefined, manager)).rejects.toThrow('frame_count')
-    } finally {
-      await rm(vaultDir, { recursive: true, force: true })
-    }
-  })
-
   it('reports actual attachment dimensions when the subscription returns a square image for 9:16', async () => {
     const manager = stubSubscriptionManager({ 'chatgpt-sub': { state: 'logged-in', email: 'user@example.com' } })
     vi.spyOn(manager, 'generate').mockResolvedValueOnce([{ b64_json: TINY_PNG, reportedQuality: 'medium' }])

@@ -140,25 +140,6 @@ describe('subscription manager edit wire protocol', () => {
     expect(JSON.parse(String(init.body))).toMatchObject({ size: '864x1536', quality: 'high' })
   })
 
-  it('asks the Codex route for a GIF with its frame options, on the same 2.6 model as stills', async () => {
-    const { manager, fetchMock } = harness()
-    await manager.generate({ vendor: 'codex', prompt: 'a bouncing ball', gif: { frameCount: 6, frameDurationMs: 150 } })
-    const gifBody = JSON.parse(String((fetchMock.mock.calls[0] as [string, RequestInit])[1].body)) as Record<string, unknown>
-    expect(gifBody).toMatchObject({ model: 'gpt-image-2.6-flare', output_format: 'gif', frame_count: 6, frame_duration_ms: 150 })
-    await manager.generate({ vendor: 'codex', prompt: 'animate it', gif: {}, referenceImages: [{ data: new Uint8Array([1]), mediaType: 'image/png' }] })
-    const [editUrl, editInit] = fetchMock.mock.calls[1] as [string, RequestInit]
-    expect(editUrl).toBe('https://chatgpt.com/backend-api/codex/images/edits')
-    const editBody = JSON.parse(String(editInit.body)) as Record<string, unknown>
-    expect(editBody).toMatchObject({ model: 'gpt-image-2.6-flare', output_format: 'gif' })
-    expect(editBody).not.toHaveProperty('frame_count')
-    await manager.generate({ vendor: 'codex', prompt: 'a portrait' })
-    const stillBody = JSON.parse(String((fetchMock.mock.calls[2] as [string, RequestInit])[1].body)) as Record<string, unknown>
-    expect(stillBody.model).toBe('gpt-image-2.6-flare')
-    expect(stillBody).not.toHaveProperty('output_format')
-    await expect(manager.generate({ vendor: 'grok', prompt: 'a ball', gif: {} })).rejects.toThrow('不支持 GIF')
-    expect(fetchMock).toHaveBeenCalledTimes(3)
-  })
-
   it('preserves the effective quality reported by the Codex response when present', async () => {
     const { manager, fetchMock } = harness()
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({

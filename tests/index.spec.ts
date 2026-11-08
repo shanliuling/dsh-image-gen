@@ -868,9 +868,9 @@ describe('GIF output through the conversation tools', () => {
     vi.stubGlobal('fetch', fetchMock)
     apply(ctx, { provider: 'google', saveToWorkspace: false })
     for (const args of [{ output_format: 'gif' }, { frame_count: 4 }, { frame_duration_ms: 100 }]) {
-      await expect(toolByName(tools, 'generate_image').execute({ prompt: 'wave', ...args }, exec())).rejects.toThrow('only supported with provider=openai, openai-compat or chatgpt-sub')
+      await expect(toolByName(tools, 'generate_image').execute({ prompt: 'wave', ...args }, exec())).rejects.toThrow('only supported with provider=openai or openai-compat')
     }
-    await expect(toolByName(tools, 'generate_images').execute({ prompts: ['wave'], output_format: 'gif' }, exec())).resolves.toMatchObject({ failures: [{ index: 0, error: expect.stringContaining('provider=openai, openai-compat or chatgpt-sub') }] })
+    await expect(toolByName(tools, 'generate_images').execute({ prompts: ['wave'], output_format: 'gif' }, exec())).resolves.toMatchObject({ failures: [{ index: 0, error: expect.stringContaining('provider=openai or openai-compat') }] })
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
@@ -1097,7 +1097,7 @@ describe('GIF output through the conversation tools', () => {
       apply(ctx, { provider: 'google', saveToWorkspace: false })
       sourceImage(ctx)
       for (const args of [{ output_format: 'gif' }, { frame_count: 4 }, { frame_duration_ms: 100 }]) {
-        await expect(toolByName(tools, 'edit_image').execute({ prompt: 'wave', ...args }, editExec())).rejects.toThrow('only supported with provider=openai, openai-compat or chatgpt-sub')
+        await expect(toolByName(tools, 'edit_image').execute({ prompt: 'wave', ...args }, editExec())).rejects.toThrow('only supported with provider=openai or openai-compat')
       }
       expect(fetchMock).not.toHaveBeenCalled()
     })
@@ -1174,26 +1174,6 @@ describe('GIF originals kept for the conversation card', () => {
     expect(schemaOf(toolByName(tools, 'generate_image')).properties.original).toEqual(expected)
     expect(schemaOf(toolByName(tools, 'edit_image')).properties.original).toEqual(expected)
     expect(schemaOf(toolByName(tools, 'generate_images')).properties.images?.items.properties.original).toEqual(expected)
-  })
-
-  it('makes a GIF through the ChatGPT subscription and keeps its original for the card', async () => {
-    const { ctx, tools } = harnessContext()
-    vi.mocked(ctx.attachments.saveImage).mockResolvedValue(webp())
-    const blob = { accessToken: 'access', refreshToken: 'refresh', expiresAt: Date.now() + 3_600_000, accountId: 'acct', email: 'user@example.com' }
-    vi.mocked(ctx.credentials.resolve).mockResolvedValue({ value: JSON.stringify(blob) } as never)
-    const fetchMock = vi.fn(async () => gifResponse())
-    vi.stubGlobal('fetch', fetchMock)
-    apply(ctx, { provider: 'chatgpt-sub', saveToWorkspace: false, vaultDir: await vaultDir() })
-    const value = await toolByName(tools, 'generate_image').execute({ prompt: 'wave', output_format: 'gif', frame_count: 3, aspect_ratio: '16:9' }, exec()) as Record<string, unknown>
-    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
-    expect(url).toBe('https://chatgpt.com/backend-api/codex/images/generations')
-    const body = JSON.parse(String(init.body)) as Record<string, unknown>
-    expect(body).toMatchObject({ model: 'gpt-image-2.6-flare', output_format: 'gif', frame_count: 3 })
-    // A ratio would map to a still size whose frame sheet can overflow; the subscription picks the frame size.
-    expect(body).not.toHaveProperty('size')
-    expect(value).toMatchObject({ provider: 'chatgpt-sub', model: 'gpt-image-2.6-flare', original, animation: { frames: 3 } })
-    await expect(toolByName(tools, 'generate_image').execute({ prompt: 'wave', output_format: 'gif', size: '1000x1000' }, exec())).rejects.toThrow('16 的倍数')
-    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it('carries the original through a run_code dispatch, whose card sees only the rendered text', async () => {

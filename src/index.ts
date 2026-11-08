@@ -109,7 +109,7 @@ function cleanImageToolArgs<T extends SingleGenerationArgs>(args: T): T {
 
 /** GIF output parameters shared by generate_image and generate_images (OpenAI images contract). */
 const gifToolParameters = {
-  output_format: { type: 'string', enum: ['gif'], description: 'Optional. Only for provider=openai, openai-compat or chatgpt-sub; gif produces a looping animation. For GIF, omit size unless the user asks for exact dimensions: all frames are tiled into one sheet whose longest edge must stay at or below 3840 px. To animate a subject from reference images, use edit_image with output_format=gif instead.' },
+  output_format: { type: 'string', enum: ['gif'], description: 'Optional. Only for provider=openai or openai-compat; gif produces a looping animation. For GIF, omit size unless the user asks for exact dimensions: all frames are tiled into one sheet whose longest edge must stay at or below 3840 px. To animate a subject from reference images, use edit_image with output_format=gif instead.' },
   frame_count: { type: 'integer', description: 'Optional, GIF only: number of frames, 2-16. Omit to use the provider default.' },
   frame_duration_ms: { type: 'integer', description: 'Optional, GIF only: milliseconds per frame, 20-2000; the provider rounds to 10 ms. Omit to use the provider default.' },
 } as const
@@ -117,7 +117,7 @@ const gifToolParameters = {
 /** The same GIF parameters on edit_image, which animates the reference images. */
 const editGifToolParameters = {
   ...gifToolParameters,
-  output_format: { type: 'string', enum: ['gif'], description: 'Optional. Only for provider=openai, openai-compat or chatgpt-sub; gif animates the reference images into a looping animation, for example a sticker of the same character in motion. Omit size unless the user asks for exact dimensions: all frames are tiled into one sheet whose longest edge must stay at or below 3840 px. Many OpenAI-compatible relays do not implement image edits; if the relay rejects the edit or returns a still image, tell the user instead of retrying or assembling frames yourself.' },
+  output_format: { type: 'string', enum: ['gif'], description: 'Optional. Only for provider=openai or openai-compat; gif animates the reference images into a looping animation, for example a sticker of the same character in motion. Omit size unless the user asks for exact dimensions: all frames are tiled into one sheet whose longest edge must stay at or below 3840 px. Many OpenAI-compatible relays do not implement image edits; if the relay rejects the edit or returns a still image, tell the user instead of retrying or assembling frames yourself.' },
 } as const
 
 /** Output schema node for GeneratedValue.animation; every object node must state additionalProperties. */
@@ -133,25 +133,8 @@ interface BatchGeneratedValue {
 
 /** GIF fields follow the OpenAI images contract; other providers would drop them silently. */
 function assertGifProvider(args: Pick<SingleGenerationArgs, 'output_format' | 'frame_count' | 'frame_duration_ms'>, provider: ImageProvider): void {
-  if ((args.output_format !== undefined || args.frame_count !== undefined || args.frame_duration_ms !== undefined) && provider !== 'openai' && provider !== 'openai-compat' && provider !== 'chatgpt-sub') {
-    throw new Error('output_format, frame_count and frame_duration_ms are only supported with provider=openai, openai-compat or chatgpt-sub.')
-  }
-}
-
-/**
- * The GIF part of a ChatGPT subscription call: the frame options for the
- * vendor and the size inputs. A GIF size is one frame and goes through only
- * when given explicitly; an aspect ratio would map to a still-image size whose
- * frame sheet can overflow, so the subscription picks the frame size instead.
- */
-function subscriptionGif(args: SingleGenerationArgs): { gif?: { frameCount?: number; frameDurationMs?: number }; sizeArgs: { size?: string; aspectRatio?: string; imageSize?: string } } {
-  const fields = gifRequestFields({ outputFormat: args.output_format, frameCount: args.frame_count, frameDurationMs: args.frame_duration_ms })
-  const sizeArgs = { ...(args.size !== undefined ? { size: args.size } : {}), ...(args.aspect_ratio !== undefined ? { aspectRatio: args.aspect_ratio } : {}), ...(args.image_size !== undefined ? { imageSize: args.image_size } : {}) }
-  if (fields.output_format !== 'gif') return { sizeArgs }
-  if (args.size !== undefined) validateGifFrameSize(args.size)
-  return {
-    gif: { ...(fields.frame_count === undefined ? {} : { frameCount: fields.frame_count }), ...(fields.frame_duration_ms === undefined ? {} : { frameDurationMs: fields.frame_duration_ms }) },
-    sizeArgs: { ...(args.size !== undefined ? { size: args.size } : {}), ...(args.image_size !== undefined ? { imageSize: args.image_size } : {}) },
+  if ((args.output_format !== undefined || args.frame_count !== undefined || args.frame_duration_ms !== undefined) && provider !== 'openai' && provider !== 'openai-compat') {
+    throw new Error('output_format, frame_count and frame_duration_ms are only supported with provider=openai or openai-compat.')
   }
 }
 
@@ -471,14 +454,12 @@ export function apply(ctx: Context, config: Config = {}): void {
       return saveGenerated(ctx, generated, active.provider, workflow.name, 'API workflow', current(), exec, knownWorkspaceRoots)
     }
     if (active.provider === 'chatgpt-sub' || active.provider === 'grok-sub' || active.provider === 'google-sub') {
-      const { gif, sizeArgs } = subscriptionGif(args)
-      const subscriptionParams = subscriptionToolParameters(active.provider, sizeArgs)
+      const subscriptionParams = subscriptionToolParameters(active.provider, { ...(args.size !== undefined ? { size: args.size } : {}), ...(args.aspect_ratio !== undefined ? { aspectRatio: args.aspect_ratio } : {}), ...(args.image_size !== undefined ? { imageSize: args.image_size } : {}) })
       const generated = await generateSubscriptionImage({
         manager: subscriptionManager,
         provider: active.provider,
         prompt: args.prompt,
         ...subscriptionParams,
-        ...(gif === undefined ? {} : { gif }),
         maxBytes: ctx.attachments.imageLimits.maxImageBytes,
         signal: exec.signal,
       })
@@ -705,15 +686,13 @@ export function apply(ctx: Context, config: Config = {}): void {
 
       if (active.provider === 'chatgpt-sub' || active.provider === 'grok-sub' || active.provider === 'google-sub') {
         if (sourceImages.length === 0) throw new Error('edit_image requires a reference image')
-        const { gif, sizeArgs } = subscriptionGif(args)
-        const subscriptionParams = subscriptionToolParameters(active.provider, sizeArgs)
+        const subscriptionParams = subscriptionToolParameters(active.provider, { ...(args.size !== undefined ? { size: args.size } : {}), ...(args.aspect_ratio !== undefined ? { aspectRatio: args.aspect_ratio } : {}), ...(args.image_size !== undefined ? { imageSize: args.image_size } : {}) })
         const generated = await generateSubscriptionImage({
           manager: subscriptionManager,
           provider: active.provider,
           prompt: args.prompt,
           sourceImages,
           ...subscriptionParams,
-          ...(gif === undefined ? {} : { gif }),
           maxBytes: ctx.attachments.imageLimits.maxImageBytes,
           signal: exec.signal,
         })

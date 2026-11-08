@@ -341,7 +341,7 @@ pnpm dsh plugin --profile web add ./dsh-image-gen
 > Studio 与多模型对比目前只支持云端 Provider（含订阅通道）；多模型对比调用的是各 Provider 在设置中已配置的模型。
 > 智谱 GLM-Image 上游本身不支持图生图；xAI 图生图走 OpenAI 兼容协议（multipart），部分网关可能需等待后续适配。
 > 订阅通道通过账号登录使用（免 API Key），图生图走各订阅渠道的编辑接口（最多 5 张参考图），比例与清晰度可在 Studio 中直接选择。
-> OpenAI、兼容渠道与 ChatGPT 订阅的对话生图和图生图都可以直接要求输出 GIF 动图，例如把参考图里的角色做成动图（需模型与中转支持；图生图还要求中转支持改图接口），帧数、帧时长等参数见 [Provider 配置参考](docs/providers.md)。按帧编辑暂只支持 OpenAI 与兼容渠道。
+> OpenAI 与兼容渠道的对话生图和图生图都可以直接要求输出 GIF 动图，例如把参考图里的角色做成动图（需模型与中转支持；图生图还要求中转支持改图接口），帧数、帧时长等参数见 [Provider 配置参考](docs/providers.md)。ChatGPT 订阅使用的接口暂不支持 GIF 输出。
 
 📖 **默认模型与 Endpoint、各 Provider 的比例 / 清晰度、尺寸表、水印、中转站编辑格式等高级配置，见 [Provider 配置参考](docs/providers.md)。**
 

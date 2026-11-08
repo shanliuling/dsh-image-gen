@@ -17,8 +17,9 @@ const CODEX_SCOPE = 'openid profile email offline_access api.connectors.read api
 export const CODEX_IMAGE_URL = 'https://chatgpt.com/backend-api/codex/images/generations'
 /** Where the ChatGPT subscription image edit request goes. */
 export const CODEX_IMAGE_EDIT_URL = 'https://chatgpt.com/backend-api/codex/images/edits'
-/** The model served by this endpoint: Images 2.6 (2026-11-04), which also
- * draws the GIF output. 2.5-flare was the probed model as of 2026-09-14. */
+/** The model served by this endpoint: Images 2.6 (2026-11-04), probed live
+ * for stills on 2026-11-08 (2.5-flare before). The route rejects
+ * `output_format: gif` (HTTP 400), so GIF stays off this channel. */
 export const CODEX_IMAGE_MODEL = 'gpt-image-2.6-flare'
 
 /** Public client id of the Codex CLI; vendor-fixed redirect on port 1455. */
