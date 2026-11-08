@@ -96,6 +96,21 @@ describe('guardedFetch transport diagnostics (#79)', () => {
       .rejects.toThrow(/\[REDACTED\]/)
   })
 
+  it('redacts URL credentials that Node echoes when it refuses a URL with userinfo (#114)', async () => {
+    // Node's own refusal, reproduced without network: the message carries the whole URL.
+    const nodeRefusal = (url: string) => new TypeError(`Request cannot be constructed from a URL that includes credentials: ${url}`)
+    for (const url of ['https://user:password@cdn.example/image', '//user:password@cdn.example/image', 'https://tok3n-secret@relay.example/v1/images']) {
+      vi.stubGlobal('fetch', vi.fn(async () => { throw nodeRefusal(url) }))
+      const failure = await guardedFetch('openai-compat image download', signal, () => fetch('https://cdn.example/image')).catch((error: unknown) => error as Error)
+      expect(failure.message).not.toMatch(/password|tok3n-secret/)
+      expect(failure.message).toContain('//[REDACTED]@')
+    }
+    // Redaction runs before truncation, so a long URL cannot leave half a password behind.
+    vi.stubGlobal('fetch', vi.fn(async () => { throw nodeRefusal(`https://user:${'p'.repeat(40)}secretTail@cdn.example/${'x'.repeat(2000)}`) }))
+    const long = await guardedFetch('openai-compat image download', signal, () => fetch('https://cdn.example/image')).catch((error: unknown) => error as Error)
+    expect(long.message).not.toContain('secretTail')
+  })
+
   it('leaves successful fetches untouched', async () => {
     const response = new Response('{}', { headers: { 'content-type': 'application/json' } })
     const fetchMock = vi.fn(async () => response)

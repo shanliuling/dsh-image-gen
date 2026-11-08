@@ -30,5 +30,10 @@ export function redactSecrets(text: string, ...secrets: Array<string | undefined
     if (secret !== undefined && secret.length >= 8) redacted = redacted.split(secret).join(REDACTED)
   }
   for (const pattern of KEY_SHAPED_PATTERNS) redacted = redacted.replace(pattern, REDACTED)
+  // URL userinfo (https://user:password@host, //token@host): Node echoes the
+  // whole URL when it refuses one with credentials (#114). The scheme and host
+  // stay readable for diagnosis; the run before @ may not contain a slash, so
+  // a path such as /@user is left alone.
+  redacted = redacted.replace(/\/\/[^\s/?#@]+@/g, `//${REDACTED}@`)
   return redacted
 }
