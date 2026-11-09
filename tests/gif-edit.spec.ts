@@ -296,13 +296,13 @@ describe('sending a frame edit', () => {
     expect(busy.controller.current).toBeDefined()
   })
 
-  it('a cancel after the reply came back still files the new version, which is paid for, and leaves no overlay', async () => {
+  it('an abort after the reply came back, the card being handed another image, still files the new version, which is paid for, and leaves no overlay', async () => {
     const server = studio()
     const { edit, input, busy } = mount()
     edit.setEditorOpen(true)
     await sendAndAnswer(edit, server)
     expect(edit.status.getSnapshot().phase).toBe('finishing')
-    // The card's own cancel aborts the request's controller.
+    // Once the reply is in, no cancel is offered; the card being handed another image still aborts the request's controller.
     busy.controller.current?.abort()
     expect(edit.status.getSnapshot()).toEqual(idle)
     await vi.advanceTimersByTimeAsync(GIF_EDIT_FINISH_MS)
