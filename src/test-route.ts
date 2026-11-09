@@ -220,6 +220,7 @@ export async function fetchGoogleImageModels(
   url.searchParams.set('pageSize', String(GOOGLE_MODELS_PAGE_SIZE))
   const result = await fetchClassifiedJson(url, { 'x-goog-api-key': apiKey }, apiKey, signal)
   if (!result.ok) return result
+  if (result.payload === null) return { ok: false, reason: 'error', message: '响应不是有效的 JSON' }
   return { ok: true, models: filterImageModelIds(parseGoogleModelIds(result.payload)) }
 }
 
@@ -249,6 +250,7 @@ export async function fetchOpenAIImageModels(
   const path = provider === 'xai' ? 'image-generation-models' : 'models'
   const result = await fetchClassifiedJson(joinUrl(base, path), { authorization: `Bearer ${apiKey}` }, apiKey, signal)
   if (!result.ok) return result
+  if (result.payload === null) return { ok: false, reason: 'error', message: '响应不是有效的 JSON' }
   const ids = parseOpenAIModelIds(result.payload)
   return {
     ok: true,
@@ -277,6 +279,7 @@ export async function fetchDashScopeImageModels(
   url.searchParams.set('page_size', '100')
   const result = await fetchClassifiedJson(url, { authorization: `Bearer ${apiKey}` }, apiKey, signal)
   if (!result.ok) return result
+  if (result.payload === null) return { ok: false, reason: 'error', message: '响应不是有效的 JSON' }
   return { ok: true, models: parseDashScopeImageModelIds(result.payload) }
 }
 

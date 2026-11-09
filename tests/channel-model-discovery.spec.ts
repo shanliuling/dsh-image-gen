@@ -4,6 +4,7 @@ import {
   discoverOfficialModels,
   forgetDiscoveredChannelModels,
   primeChannelModels,
+  widenProfileModels,
   withCachedChannelModels,
   withCachedOfficialModels,
 } from '../src/channel-model-discovery.js'
@@ -163,5 +164,49 @@ describe('workbench channel model discovery', () => {
     expect(start.stale).toBe(false)
     expect(fetchMock).not.toHaveBeenCalled()
     expect(withCachedChannelModels(config).pending).toEqual([])
+  })
+
+  it('widens the legacy flat default channel, which is not stored in the array', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => catalog('relay-only-image-model')))
+    const config = {
+      provider: 'openai-compat',
+      openaiCompatBaseURL: RELAY,
+      openaiCompatKeyRef: 'DSH_IMAGE_GEN_OPENAI_COMPAT_KEY',
+      openaiCompatModels: ['flux-pro-1.1'],
+      openaiCompatChannels: [],
+    } as Config
+    await primeChannelModels(keyCtx('sk-relay'), config, {
+      id: 'default', label: '', keyRef: 'DSH_IMAGE_GEN_OPENAI_COMPAT_KEY', baseURL: RELAY,
+      model: 'flux-pro-1.1', models: ['flux-pro-1.1'],
+    } as any)
+    // The flat row is rebuilt from the flat fields, so its catalog lands there.
+    expect(withCachedChannelModels(config).config.openaiCompatModels).toEqual([
+      'flux-pro-1.1', 'relay-only-image-model',
+    ])
+  })
+
+  it('keeps the previous catalog when a refresh fails or returns non-JSON', async () => {
+    const config = relayConfig([])
+    const channel = config.openaiCompatChannels![0]!
+    vi.stubGlobal('fetch', vi.fn(async () => catalog('seedream-4.0')))
+    await primeChannelModels(keyCtx('sk-relay'), config, channel)
+    const past = Date.now() - 6 * 60_000
+    // Expire the entry by probing with a clock ahead of its TTL.
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('network down') }))
+    await primeChannelModels(keyCtx('sk-relay'), config, channel, past + 11 * 60_000)
+    expect(withCachedChannelModels(config).config.openaiCompatChannels?.[0]?.models).toEqual(['seedream-4.0'])
+    // An unparsable 200 is not a successful catalog either.
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('<html>502</html>', { status: 200 })))
+    await primeChannelModels(keyCtx('sk-relay'), config, channel, past + 21 * 60_000)
+    expect(withCachedChannelModels(config).config.openaiCompatChannels?.[0]?.models).toEqual(['seedream-4.0'])
+  })
+
+  it('lets the validation profile accept a model that discovery offered', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => catalog('relay-only-image-model')))
+    const config = relayConfig([])
+    await primeChannelModels(keyCtx('sk-relay'), config, config.openaiCompatChannels![0]!)
+    const profile = { provider: 'openai-compat', channel: 'relay', model: 'flux-pro-1.1' } as any
+    const widened = widenProfileModels(profile, config)
+    expect(widened.profile.modelOptions.map((o: any) => o.value)).toContain('relay-only-image-model')
   })
 })

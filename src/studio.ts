@@ -43,7 +43,7 @@ import { CLOUD_CAPABILITIES, cloudCapability, RATIO_LABELS, SUBSCRIPTION_CAPABIL
 import { compatGenerationExtraBody, compatQualityOptions, compatRequestQuality, gifRequestFields, officialQualityOptions, officialSizeTable, validateGifFrameSize, validateOfficialSize, PROVIDER_DEFAULT_QUALITY } from './openai-output.js'
 import { keepGifOriginal } from './vault-registry.js'
 import { vaultConfigOf } from './vault-store.js'
-import { discoverOfficialModels, primeChannelModels, withCachedChannelModels, withCachedOfficialModels } from './channel-model-discovery.js'
+import { primeChannelModels, refreshProfileModels, widenProfileModels, withCachedChannelModels } from './channel-model-discovery.js'
 import { compatEditExtraBody, selectedWatermark, watermarkProfile } from './watermark.js'
 
 const LEGACY_OPENAI_TABLE: Record<string, Record<string, string>> = {
@@ -185,20 +185,15 @@ export async function describeStudio(
   const cloudRows = CLOUD_IMAGE_PROVIDERS.flatMap(provider => provider === 'openai-compat'
     ? compatChannels.map(channel => studioProfile(effectiveConfig, provider, configured[`openai-compat:${channel.id}`] === true, channel.id))
     : [studioProfile(effectiveConfig, provider, configured[provider] === true)])
-  // Official rows name a single model in config, so their picker listed exactly
-  // one entry even when the vendor served several image models. Widen from the
-  // cache and start a probe for any row still cold: like the relay path, this
-  // reply keeps the configured model and the next render offers the rest.
-  const cloudProfiles = await Promise.all(cloudRows.map(async row => {
-    if (row.provider === 'openai-compat' || !row.configured) return row
-    const apiKey = await resolveApiKey(ctx, row.provider as CloudImageProvider).catch(() => undefined)
-    const known = studioModelOptionsForMode(row, 'generate').map(option => option.value)
-    const widened = withCachedOfficialModels(row.provider as CloudImageProvider, effectiveConfig, known, apiKey)
-    if (widened.stale) void discoverOfficialModels(ctx, effectiveConfig, row.provider as CloudImageProvider).catch(() => undefined)
-    return widened.modelOptions.length === known.length
-      ? row
-      : { ...row, modelOptions: widened.modelOptions.map(value => ({ value, label: value })) }
-  }))
+  // Widen each configured row with the catalog already discovered for its endpoint.
+  // Synchronous: a cold row keeps its configured model and only queued a probe, so the
+  // reply never waits on a vendor.
+  const cloudProfiles = cloudRows.map(row => {
+    if (!row.configured) return row
+    const widened = widenProfileModels(row, effectiveConfig)
+    if (widened.refresh) refreshProfileModels(ctx, effectiveConfig, widened.profile)
+    return widened.profile
+  })
   // Subscription profiles: configured means "signed in", and the parameter
   // matrix collapses to a single channel-default pair (prompt-only channels).
   const subStatuses = await Promise.all(SUBSCRIPTION_PROVIDERS.map(async provider => {
@@ -276,7 +271,7 @@ export async function generateFromStudio(
   }
   const channel = input.provider === 'openai-compat' ? resolveOpenAICompatChannel(config, input.channel) : undefined
   const requestConfig = input.provider === 'openai-compat' ? withOpenAICompatChannel(config, input.channel) : config
-  const profile = studioProfile(requestConfig, input.provider, true, channel?.id)
+  const profile = widenProfileModels(studioProfile(requestConfig, input.provider, true, channel?.id), requestConfig).profile
   const model = withGenerationModel(profile, input).model
   const channelGif = channelSelectsGif(config, input)
   assertAllowed(profile, { ...input, model }, input.output?.format === 'gif' || channelGif)
