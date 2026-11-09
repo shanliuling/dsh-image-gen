@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  discoverOfficialModels,
   forgetDiscoveredChannelModels,
   primeChannelModels,
   withCachedChannelModels,
+  withCachedOfficialModels,
 } from '../src/channel-model-discovery.js'
 import type { Config } from '../src/config.js'
 
@@ -128,5 +130,38 @@ describe('workbench channel model discovery', () => {
     // Discovery decorates the read path; the object the caller owns is untouched.
     expect(JSON.stringify(config)).toBe(before)
     expect(widened).not.toBe(config)
+  })
+
+  it('discovers official row models through the vendor catalog filter', async () => {
+    const fetchMock = vi.fn(async () => catalog('glm-image', 'cogview-4', 'glm-4-air'))
+    vi.stubGlobal('fetch', fetchMock)
+    const config = { provider: 'zhipu', zhipuBaseURL: 'https://relay.example.com/v1' } as Config
+    const models = await discoverOfficialModels(keyCtx('sk-zhipu'), config, 'zhipu')
+    // The zhipu vendor filter keeps only the GLM-Image/CogView families, so the
+    // official row widens with exactly what that vendor would accept.
+    expect(models).toEqual(['glm-image', 'cogview-4'])
+    expect(String(fetchMock.mock.calls[0][0])).toBe('https://relay.example.com/v1/models')
+    expect((fetchMock.mock.calls[0][1]?.headers as Record<string, string>).authorization).toBe('Bearer sk-zhipu')
+  })
+
+  it('has no catalog to offer for a provider that does not publish one', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const config = {} as Config
+    for (const provider of ['comfyui', 'chatgpt-sub', 'grok-sub', 'google-sub'] as const) {
+      await expect(discoverOfficialModels(keyCtx('sk-any'), config, provider)).resolves.toEqual([])
+    }
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('leaves an official row untouched when that provider has no stored key', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const config = { zhipuModel: 'glm-image' } as Config
+    const start = withCachedOfficialModels('zhipu', config, ['glm-image'], undefined)
+    expect(start.modelOptions).toEqual(['glm-image'])
+    expect(start.stale).toBe(false)
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(withCachedChannelModels(config).pending).toEqual([])
   })
 })
