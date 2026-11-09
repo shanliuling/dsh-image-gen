@@ -1,4 +1,4 @@
-import { createElement } from 'react'
+import { createElement, isValidElement, type ReactElement, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import { createGifPlayer, type GifPlayer, type GifPlayerDeps } from '../src/client/gif-player.js'
@@ -6,6 +6,8 @@ import {
   GifCommentBar,
   GifCommentLayer,
   GifEditChip,
+  GifEditDoneBar,
+  GifEditOverlay,
   GifEditToggle,
   commentKeyAction,
   gifEditAvailability,
@@ -13,6 +15,7 @@ import {
 } from '../src/client/gif-comments.js'
 import { GifFilmstrip } from '../src/client/gif-filmstrip.js'
 import { GIF_TEXT, gifT } from '../src/client/gif-i18n.js'
+import { GIF_STYLE } from '../src/client/gif-style.js'
 import { planGifSheet, sheetViewSize, type GifComment } from '../src/client/gif-sheet.js'
 import { gifBytes } from './gif-fixture.js'
 
@@ -32,6 +35,15 @@ function readyPlayer(frames = 8): GifPlayer {
 }
 
 const ready = (player: GifPlayer) => vi.waitFor(() => { expect(player.getSnapshot().status).toBe('ready') })
+
+type ButtonElement = ReactElement<{ children?: ReactNode; disabled?: boolean; onClick?: () => void }>
+const childrenOf = (node: ReactElement) => (node.props as { children?: ReactNode }).children
+const textOf = (node: ReactNode): string => Array.isArray(node) ? node.map(textOf).join('') : isValidElement(node) ? textOf(childrenOf(node)) : typeof node === 'string' || typeof node === 'number' ? String(node) : ''
+/** The buttons of a component made of plain elements, called directly so their handlers can be pressed without a DOM. */
+const buttons = (node: ReactNode): ButtonElement[] => Array.isArray(node)
+  ? node.flatMap(buttons)
+  : isValidElement(node) ? [...(node.type === 'button' ? [node as ButtonElement] : []), ...buttons(childrenOf(node))] : []
+const button = (node: ReactNode, label: string) => buttons(node).find(candidate => textOf(candidate) === label)
 
 describe('frame comment availability', () => {
   const frames = (count: number) => Array.from({ length: count }, () => ({}) as ImageBitmap)
@@ -118,11 +130,14 @@ describe('editing entry points', () => {
 })
 
 describe('frame comment bar', () => {
-  const render = (props: Partial<Parameters<typeof GifCommentBar>[0]> = {}, lang: 'zh' | 'en' = 'zh') =>
-    renderToStaticMarkup(createElement(GifCommentBar, {
-      view: 'gif', current: 3, total: 8, count: 3, sending: false, t: gifT(lang),
-      onView() {}, onClear() {}, onCancel() {}, onSend() {}, onFallback() {}, ...props,
-    }))
+  const props = (overrides: Partial<Parameters<typeof GifCommentBar>[0]> = {}, lang: 'zh' | 'en' = 'zh'): Parameters<typeof GifCommentBar>[0] => ({
+    view: 'gif', current: 3, total: 8, count: 3, phase: undefined, seconds: 0, t: gifT(lang),
+    onView() {}, onClear() {}, onSend() {}, onFallback() {}, ...overrides,
+  })
+  const render = (overrides: Partial<Parameters<typeof GifCommentBar>[0]> = {}, lang: 'zh' | 'en' = 'zh') =>
+    renderToStaticMarkup(createElement(GifCommentBar, props(overrides, lang)))
+  const labels = (overrides: Partial<Parameters<typeof GifCommentBar>[0]> = {}, lang: 'zh' | 'en' = 'zh') =>
+    buttons(GifCommentBar(props(overrides, lang))).map(textOf)
 
   it('counts the frame and the notes, switches between the GIF and all frames, and sends the note count', () => {
     const zh = render()
@@ -132,7 +147,6 @@ describe('frame comment bar', () => {
     expect(zh).toContain('aria-pressed="false">全部帧<')
     expect(zh).toContain('>发送 (3)<')
     expect(zh).toContain('>清空<')
-    expect(zh).toContain('>取消<')
     expect(zh).not.toContain('dsh-ig-gif-edit-error')
     expect(zh).not.toContain('dsh-ig-gif-edit-notice')
     const sheet = render({ view: 'sheet' })
@@ -144,15 +158,41 @@ describe('frame comment bar', () => {
     expect(en).toContain('>Send (3)<')
   })
 
-  it('disables sending without notes or a sheet and while a request runs, when the cancel button stays live to stop it', () => {
+  it('disables sending without notes or a sheet', () => {
     const empty = render({ count: 0 })
     expect(empty).toMatch(/<button[^>]*disabled[^>]*>清空</)
     expect(empty).toMatch(/<button[^>]*disabled[^>]*>发送 \(0\)</)
     expect(render({ total: 0 })).toMatch(/<button[^>]*disabled[^>]*>发送 \(3\)</)
     expect(render()).not.toMatch(/<button[^>]*disabled[^>]*>发送 \(3\)</)
-    const sending = render({ sending: true })
-    expect(sending).toMatch(/<button[^>]*disabled[^>]*>发送中…</)
-    expect(sending).not.toMatch(/<button[^>]*disabled[^>]*>取消</)
+  })
+
+  it('has no cancel of its own, sending or not: the player bar\'s switch leaves editing and the overlay stops a send', () => {
+    expect(labels()).toEqual(['动图', '全部帧', '清空', '发送 (3)'])
+    expect(labels({ phase: 'preparing' })).toEqual(['动图', '全部帧', '清空', '准备中…'])
+    expect(labels({ phase: 'redrawing', seconds: 12 })).toEqual(['动图', '全部帧', '清空', '正在修改… 12 秒'])
+    expect(labels({ phase: 'finishing', seconds: 30 })).toEqual(['动图', '全部帧', '清空', '正在修改… 30 秒'])
+    expect(labels({ phase: 'redrawing', seconds: 12 }, 'en')).toEqual(['GIF', 'All frames', 'Clear', 'Editing… 12s'])
+  })
+
+  it('while preparing, says the notes are being turned into a sheet and shows the send busy', () => {
+    const preparing = render({ phase: 'preparing' })
+    expect(preparing).toContain(`<p class="dsh-ig-gif-edit-hint">${GIF_TEXT.zh.gifEditPreparingHint}</p>`)
+    expect(preparing).toContain('<button type="button" class="dsh-ig-gif-edit-send is-busy" disabled=""><span class="dsh-ig-gif-edit-spinner" aria-hidden="true"></span>准备中…</button>')
+    expect(preparing).toMatch(/<button[^>]*disabled[^>]*>清空</)
+    expect(render({ phase: 'preparing' }, 'en')).toContain('</span>Preparing…</button>')
+  })
+
+  it('while redrawing, says it may take a while and counts the seconds on the disabled send button', () => {
+    const redrawing = render({ phase: 'redrawing', seconds: 12 })
+    expect(redrawing).toContain(`<p class="dsh-ig-gif-edit-hint">${GIF_TEXT.zh.gifEditRedrawingHint}</p>`)
+    expect(redrawing).toContain('<button type="button" class="dsh-ig-gif-edit-send is-busy" disabled=""><span class="dsh-ig-gif-edit-spinner" aria-hidden="true"></span>正在修改… 12 秒</button>')
+    // The seconds come from the edit's clock; each tick renders the next count.
+    expect(render({ phase: 'redrawing', seconds: 13 })).toContain('>正在修改… 13 秒</button>')
+    const en = render({ phase: 'redrawing', seconds: 12 }, 'en')
+    expect(en).toContain(GIF_TEXT.en.gifEditRedrawingHint)
+    expect(en).toContain('</span>Editing… 12s</button>')
+    // Once the reply is in, the count stops where it was.
+    expect(render({ phase: 'finishing', seconds: 30 })).toContain('>正在修改… 30 秒</button>')
   })
 
   it('shows the relay error with the fallback to a plain regeneration', () => {
@@ -164,6 +204,86 @@ describe('frame comment bar', () => {
     expect(failed).toContain(GIF_TEXT.zh.gifEditFallbackRegenerate)
     // A failure before the request reached the relay (the sheet could not be encoded) carries no hint about the channel.
     expect(render({ error: GIF_TEXT.zh.gifSheetTooLarge })).not.toContain(GIF_TEXT.zh.gifEditFailedHint)
+    // A failed edit leaves the bar as it was before the send, ready to send again.
+    expect(failed).toContain(GIF_TEXT.zh.gifEditHint)
+    expect(failed).toContain('<button type="button" class="dsh-ig-gif-edit-send">发送 (3)</button>')
+  })
+})
+
+describe('edit overlay', () => {
+  const overlay = (phase: 'preparing' | 'redrawing' | 'finishing', progress = 0, lang: 'zh' | 'en' = 'zh') =>
+    renderToStaticMarkup(createElement(GifEditOverlay, { phase, progress, t: gifT(lang), onCancel() {} }))
+  const text = (markup: string) => markup.replace(/<[^>]*>/g, '')
+
+  it('names the step over the picture, with an estimated bar only while redrawing, and never seconds, a percentage or a frame', () => {
+    const preparing = overlay('preparing')
+    expect(preparing).toContain('<span class="dsh-ig-gif-edit-busy-text" role="status">准备中…</span>')
+    expect(preparing).not.toContain('dsh-ig-gif-edit-busy-track')
+    const redrawing = overlay('redrawing', 0.42)
+    expect(redrawing).toContain('<span class="dsh-ig-gif-edit-busy-text" role="status">正在逐帧修改…</span>')
+    expect(redrawing).toContain('style="transform:scaleX(0.42)"')
+    expect(overlay('redrawing', 0.42, 'en')).toContain('>Redrawing frame by frame…</span>')
+    for (const markup of [preparing, redrawing]) expect(text(markup)).not.toMatch(/\d|%/)
+  })
+
+  it('fills the bar once the reply is in and stays until the new version is filed, with nothing left to cancel', () => {
+    const finishing = overlay('finishing', 1)
+    expect(finishing).toContain('class="dsh-ig-gif-edit-busy is-finishing"')
+    expect(finishing).toContain('style="transform:scaleX(1)"')
+    expect(finishing).not.toContain(GIF_TEXT.zh.gifEditCancelSend)
+    // No fade of its own: the overlay goes when the edit's phase ends, so the old version never shows through it as if it were the new one.
+    expect(GIF_STYLE).not.toMatch(/\.dsh-ig-gif-edit-busy\.is-finishing\{[^}]*animation/)
+  })
+
+  it('cancels the edit from the picture while it runs, the one way to stop a send in the preview', () => {
+    const onCancel = vi.fn()
+    for (const phase of ['preparing', 'redrawing'] as const) {
+      const cancel = button(GifEditOverlay({ phase, progress: 0.3, t, onCancel }), '取消修改')
+      expect(cancel?.props.disabled).toBeUndefined()
+      cancel?.props.onClick?.()
+    }
+    expect(onCancel).toHaveBeenCalledTimes(2)
+    expect(button(GifEditOverlay({ phase: 'redrawing', progress: 0.3, t: gifT('en'), onCancel }), 'Cancel edit')).toBeDefined()
+  })
+})
+
+describe('finished edit bar', () => {
+  const message = t('gifEditDoneHere', { seconds: '42' })
+  const bar = (props: Partial<Parameters<typeof GifEditDoneBar>[0]> = {}) =>
+    renderToStaticMarkup(createElement(GifEditDoneBar, { done: { message, still: false }, availability: 'ready', t, onContinue() {}, onFinish() {}, ...props }))
+
+  it('says how long it took and that the old version is kept, and offers going on or closing', () => {
+    const markup = bar()
+    expect(markup).toContain('改好了：已按评论逐帧修改，存为新版本，用了 42 秒。旧版本保留，可以切回。')
+    // Only the message is announced, not the buttons after it.
+    expect(markup).toContain('<div class="dsh-ig-gif-edit is-done"><p class="dsh-ig-gif-edit-done-text" role="status">')
+    expect(markup).toContain('<button type="button" class="dsh-ig-gif-edit-ghost">继续修改</button>')
+    expect(markup).toContain('<button type="button" class="dsh-ig-gif-edit-send">完成</button>')
+    const en = renderToStaticMarkup(createElement(GifEditDoneBar, { done: { message: gifT('en')('gifEditDoneHere', { seconds: '42' }), still: false }, availability: 'ready', t: gifT('en'), onContinue() {}, onFinish() {} }))
+    expect(en).toContain('saved as a new version in 42s')
+    expect(en).toContain('>Keep editing</button>')
+    expect(en).toContain('>Done</button>')
+  })
+
+  it('goes on editing the new version or closes the preview', () => {
+    const onContinue = vi.fn()
+    const onFinish = vi.fn()
+    const tree = GifEditDoneBar({ done: { message, still: false }, availability: 'ready', t, onContinue, onFinish })
+    button(tree, '继续修改')?.props.onClick?.()
+    expect(onContinue).toHaveBeenCalledOnce()
+    expect(onFinish).not.toHaveBeenCalled()
+    button(tree, '完成')?.props.onClick?.()
+    expect(onFinish).toHaveBeenCalledOnce()
+  })
+
+  it('lets the new animation take notes once its frames are decoded, and a still none', () => {
+    expect(bar({ availability: 'decoding' })).toContain(`<button type="button" class="dsh-ig-gif-edit-ghost" disabled="" title="${GIF_TEXT.zh.gifEditDecoding}">继续修改</button>`)
+    // The plain preview, while the new animation's bytes load, has no editor to go on in.
+    expect(bar({ availability: undefined, onContinue: undefined })).toContain('<button type="button" class="dsh-ig-gif-edit-ghost" disabled="">继续修改</button>')
+    const still = bar({ done: { message: GIF_TEXT.zh.gifEditStill, still: true }, availability: undefined })
+    expect(still).toContain(GIF_TEXT.zh.gifEditStill)
+    expect(still).not.toContain('继续修改')
+    expect(still).toContain('>完成</button>')
   })
 })
 

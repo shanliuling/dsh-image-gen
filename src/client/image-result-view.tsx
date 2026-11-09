@@ -17,7 +17,7 @@ import { DICT, usePluginLanguage, type DictKey } from './plugin-i18n.js'
 import { CLOUD_IMAGE_PROVIDERS, STUDIO_ROUTE, type ImageProvider, type StudioGenerateResponse } from '../shared.js'
 import { conversationRegenerateRequest, gifOutputRequest } from './conversation-regenerate.js'
 import { GifCardOverlay, GifToolbarDownload, useGifCard } from './gif-card.js'
-import { GifCardEditChip, GifEditLightbox, GifEditNotice, useGifEdit } from './gif-edit.js'
+import { GIF_EDIT_SENT_TOAST_MS, GifCardEditChip, GifEditDoneDock, GifEditLightbox, GifEditNotice, useGifEdit } from './gif-edit.js'
 import { GifStage } from './gif-player.js'
 import { startGalleryImageDrag } from './tl/gallery-image-transfer.js'
 
@@ -189,14 +189,15 @@ function ImageResultCard({
     versionKey: activeAttachment === undefined ? undefined : imageVersionKey(String(activeAttachment.attachmentId), activeOriginal),
     busy: { running: isRegenerating, setRunning: setIsRegenerating, controller: regenerateControllerRef },
     addRevision: async revision => {
-      const savedOk = await persistGalleryRecord(revisionGalleryRecord(revision))
+      // The new version's picture is fetched (and cached) alongside, so a preview still open switches straight to it rather than showing the old one while it loads.
+      const [savedOk] = await Promise.all([persistGalleryRecord(revisionGalleryRecord(revision)), fetchAttachmentBlob(revision.attachment).catch(() => undefined)])
       setRevisionChain(appendConversationImageRevision(String(originId), revision))
       return savedOk
     },
     onSent: message => {
       setPreviewOpen(false)
       setToast(message)
-      setTimeout(() => { setToast(undefined) }, 3500)
+      setTimeout(() => { setToast(undefined) }, GIF_EDIT_SENT_TOAST_MS)
     },
     onFallback: (prompt, hint) => {
       setPreviewOpen(false)
@@ -249,6 +250,10 @@ function ImageResultCard({
     window.addEventListener('keydown', onKeyDown)
     return () => { window.removeEventListener('keydown', onKeyDown) }
   }, [previewOpen])
+
+  // A finished edit is told only in the preview it came back in: closing that preview drops it,
+  // and so does opening the next one, should it have landed just as the last one closed.
+  useEffect(() => { edit.dismissDone() }, [previewOpen])
 
   const currentUrlRef = useRef<string | undefined>()
 
@@ -480,6 +485,7 @@ function ImageResultCard({
           alt={activeAttachment?.name ?? 'Generated image preview'}
         />
       </div>
+      <GifEditDoneDock edit={edit} onFinish={() => { setPreviewOpen(false) }} />
     </div> : null}
     {regenerateOpen && activeResult !== undefined ? <div className="dsh-ig-regenerate-backdrop" onMouseDown={(event) => {
       if (event.target === event.currentTarget && !isRegenerating) setRegenerateOpen(false)

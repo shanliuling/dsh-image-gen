@@ -1,9 +1,10 @@
 /**
  * Frame comments in the GIF lightbox: whether an animation can be edited and
  * with which model, the pins and note boxes over the frame (or over the sheet
- * of every frame), the editing toggle in the player bar, the card's edit chip
- * and the edit bar under the player. The notes and the request live in
- * gif-edit.tsx; this file owns only the interaction.
+ * of every frame), the editing toggle in the player bar, the card's edit chip,
+ * the edit bar under the player, and what a send in progress and a finished
+ * one show. The notes and the request live in gif-edit.tsx; this file owns
+ * only the interaction.
  */
 import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react'
 import { GIF_FRAME_COUNT_MAX, GIF_FRAME_COUNT_MIN, STUDIO_ROUTE, studioModelForMode, studioModelOptionsForMode, type StudioConfigResponse } from '../shared.js'
@@ -12,6 +13,16 @@ import { useGifSnapshot, type GifPlayer, type GifPlayerSnapshot } from './gif-pl
 import { GIF_COMMENTS_MAX, GIF_COMMENT_MAX_CHARS, sheetPinPosition, sheetViewSize, type GifComment, type GifSheetPlan } from './gif-sheet.js'
 
 export type GifEditAvailability = 'ready' | 'frame-count' | 'unsupported' | 'decoding' | 'unloaded'
+
+/** A send in progress: the sheet and the model are being prepared, the model is redrawing, or the reply is in and the progress bar fills. */
+export type GifEditPhase = 'preparing' | 'redrawing' | 'finishing'
+
+/** An edit that came back while its editor was on screen. */
+export interface GifEditDone {
+  message: string
+  /** The channel answered with a still, which has no frames to leave notes on. */
+  still: boolean
+}
 
 /**
  * Whether the animation can be edited, and why not: only OpenAI-shaped
@@ -99,7 +110,9 @@ export interface GifCommentBarProps {
   current: number
   total: number
   count: number
-  sending: boolean
+  phase: GifEditPhase | undefined
+  /** Whole seconds since the send. */
+  seconds: number
   /** The answer to the request just sent. */
   error?: string | undefined
   /** What the error most likely means, when it came from the channel. */
@@ -107,16 +120,22 @@ export interface GifCommentBarProps {
   t: GifT
   onView(view: 'gif' | 'sheet'): void
   onClear(): void
-  onCancel(): void
   onSend(): void
   onFallback(): void
 }
 
-/** The edit bar under the player: what to do, the count, the view switch and the actions. */
-export function GifCommentBar({ view, current, total, count, sending, error, errorHint, t, onView, onClear, onCancel, onSend, onFallback }: GifCommentBarProps) {
+/**
+ * The edit bar under the player: what to do, the count, the view switch and
+ * the actions. While a send runs it says what is happening and counts the
+ * seconds. It has no cancel of its own: the player bar's switch leaves
+ * editing, and the overlay on the picture stops a send.
+ */
+export function GifCommentBar({ view, current, total, count, phase, seconds, error, errorHint, t, onView, onClear, onSend, onFallback }: GifCommentBarProps) {
+  const sending = phase !== undefined
   const fallback = <button type="button" className="dsh-ig-gif-edit-ghost" disabled={sending} onClick={onFallback}>{t('gifEditFallbackRegenerate')}</button>
+  const hint = phase === 'preparing' ? t('gifEditPreparingHint') : sending ? t('gifEditRedrawingHint') : view === 'sheet' ? t('gifEditSheetHint') : t('gifEditHint')
   return <div className="dsh-ig-gif-edit" onClick={event => { event.stopPropagation() }}>
-    <p className="dsh-ig-gif-edit-hint">{view === 'sheet' ? t('gifEditSheetHint') : t('gifEditHint')}</p>
+    <p className="dsh-ig-gif-edit-hint">{hint}</p>
     <div className="dsh-ig-gif-edit-row">
       <span className="dsh-ig-gif-edit-counter">{view === 'sheet' ? t('gifSheetComments', { total: String(total), count: String(count) }) : t('gifFrameComments', { current: String(current), count: String(count) })}</span>
       <div className="dsh-ig-gif-view" role="group" aria-label={t('gifEditView')}>
@@ -124,10 +143,45 @@ export function GifCommentBar({ view, current, total, count, sending, error, err
         <button type="button" aria-pressed={view === 'sheet'} onClick={() => { onView('sheet') }}>{t('gifSheetView')}</button>
       </div>
       <button type="button" className="dsh-ig-gif-edit-ghost" disabled={sending || count === 0} onClick={onClear}>{t('gifCommentsClear')}</button>
-      <button type="button" className="dsh-ig-gif-edit-ghost" onClick={onCancel}>{t('gifEditCancel')}</button>
-      <button type="button" className="dsh-ig-gif-edit-send" disabled={sending || count === 0 || total === 0} onClick={onSend}>{sending ? t('gifSending') : t('gifSend', { count: String(count) })}</button>
+      <button type="button" className={sending ? 'dsh-ig-gif-edit-send is-busy' : 'dsh-ig-gif-edit-send'} disabled={sending || count === 0 || total === 0} onClick={onSend}>
+        {sending ? <><span className="dsh-ig-gif-edit-spinner" aria-hidden="true" />{phase === 'preparing' ? t('gifEditPreparing') : t('gifEditingSeconds', { seconds: String(seconds) })}</> : t('gifSend', { count: String(count) })}
+      </button>
     </div>
     {error !== undefined ? <div className="dsh-ig-gif-edit-error" role="alert"><strong>{t('gifEditFailed')}</strong>{errorHint !== undefined ? <span>{errorHint}</span> : null}<span>{error}</span>{fallback}</div> : null}
+  </div>
+}
+
+/**
+ * Over the picture while a send runs, until its new version is filed; its
+ * cancel is the one way to stop a send in the preview (the card has its own
+ * once the preview is closed). It names the step but never a frame
+ * (a note may ask to change every frame after it) and shows no number: the
+ * redraw reports no progress, so the bar is an estimate that only the reply
+ * fills.
+ */
+export function GifEditOverlay({ phase, progress, t, onCancel }: { phase: GifEditPhase; progress: number; t: GifT; onCancel(): void }) {
+  const finishing = phase === 'finishing'
+  return <div className={finishing ? 'dsh-ig-gif-edit-busy is-finishing' : 'dsh-ig-gif-edit-busy'} onClick={event => { event.stopPropagation() }}>
+    <span className="dsh-ig-gif-edit-busy-spinner" aria-hidden="true" />
+    <span className="dsh-ig-gif-edit-busy-text" role="status">{phase === 'preparing' ? t('gifEditPreparing') : t('gifEditRedrawing')}</span>
+    {phase === 'preparing' ? null : <span className="dsh-ig-gif-edit-busy-track" aria-hidden="true"><span className="dsh-ig-gif-edit-busy-fill" style={{ transform: `scaleX(${String(progress)})` }} /></span>}
+    {finishing ? null : <button type="button" className="dsh-ig-gif-edit-ghost" onClick={onCancel}>{t('gifEditCancelSend')}</button>}
+  </div>
+}
+
+/**
+ * Where the edit bar was, once an edit came back while it was watched: what
+ * came of it, going on from the new version, or closing the preview. A new
+ * animation takes notes once its frames are decoded; a still takes none.
+ */
+export function GifEditDoneBar({ done, availability, t, onContinue, onFinish }: { done: GifEditDone; availability: GifEditAvailability | undefined; t: GifT; onContinue?: (() => void) | undefined; onFinish(): void }) {
+  const ready = availability === 'ready' && onContinue !== undefined
+  return <div className="dsh-ig-gif-edit is-done" onClick={event => { event.stopPropagation() }}>
+    <p className="dsh-ig-gif-edit-done-text" role="status">{done.message}</p>
+    <div className="dsh-ig-gif-edit-row is-end">
+      {done.still ? null : <button type="button" className="dsh-ig-gif-edit-ghost" disabled={!ready} title={availability === undefined || availability === 'ready' ? undefined : t(UNAVAILABLE_TITLE[availability])} onClick={onContinue}>{t('gifEditContinue')}</button>}
+      <button type="button" className="dsh-ig-gif-edit-send" onClick={onFinish}>{t('gifEditFinish')}</button>
+    </div>
   </div>
 }
 
