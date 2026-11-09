@@ -17,7 +17,7 @@ import { DICT, usePluginLanguage, type DictKey } from './plugin-i18n.js'
 import { CLOUD_IMAGE_PROVIDERS, STUDIO_ROUTE, type ImageProvider, type StudioGenerateResponse } from '../shared.js'
 import { conversationRegenerateRequest, gifOutputRequest } from './conversation-regenerate.js'
 import { GifCardOverlay, GifToolbarDownload, useGifCard } from './gif-card.js'
-import { GIF_EDIT_SENT_TOAST_MS, GifCardEditChip, GifEditDoneDock, GifEditLightbox, GifEditNotice, useGifEdit } from './gif-edit.js'
+import { GIF_EDIT_PREFETCH_WAIT_MS, GIF_EDIT_SENT_TOAST_MS, GifCardEditChip, GifEditDoneDock, GifEditLightbox, GifEditNotice, useGifEdit, waitAtMost } from './gif-edit.js'
 import { GifStage } from './gif-player.js'
 import { startGalleryImageDrag } from './tl/gallery-image-transfer.js'
 
@@ -192,13 +192,18 @@ function ImageResultCard({
     busy: { running: isRegenerating, setRunning: setIsRegenerating, controller: regenerateControllerRef },
     addRevision: async revision => {
       // The new version's picture is fetched (and cached) alongside, so a preview still open switches straight to it rather than showing the old one while it loads.
-      const [savedOk] = await Promise.all([persistGalleryRecord(revisionGalleryRecord(revision)), fetchAttachmentBlob(revision.attachment).catch(() => undefined)])
+      const [savedOk] = await Promise.all([
+        persistGalleryRecord(revisionGalleryRecord(revision)),
+        waitAtMost(fetchAttachmentBlob(revision.attachment).catch(() => undefined), GIF_EDIT_PREFETCH_WAIT_MS),
+      ])
       const chain = appendConversationImageRevision(String(originId), revision)
       // Filed under the image it was made from; a card handed another image meanwhile keeps that image's versions.
       if (originRef.current === originId) setRevisionChain(chain)
       return savedOk
     },
     onSent: message => {
+      // Said of the image the edit was made on; a card handed another image meanwhile has nothing to report.
+      if (originRef.current !== originId) return
       setPreviewOpen(false)
       setToast(message)
       setTimeout(() => { setToast(undefined) }, GIF_EDIT_SENT_TOAST_MS)
@@ -451,9 +456,10 @@ function ImageResultCard({
         <div className="dsh-ig-regenerate-overlay">
           <div className="dsh-ig-regenerate-spinner" />
           <span className="dsh-ig-regenerate-overlay-text">{t('regenerating')}</span>
-          <button type="button" className="dsh-ig-regenerate-overlay-cancel" onClick={cancelRegenerate}>
+          {/* Once an edit's reply is in it is filed whatever happens, as in the preview's overlay: a cancel would only free the card while it is still being filed. */}
+          {edit.finishing ? null : <button type="button" className="dsh-ig-regenerate-overlay-cancel" onClick={cancelRegenerate}>
             {t('cancel')}
-          </button>
+          </button>}
         </div>
       ) : null}
       <div className={gifPopupOpen || toast !== undefined ? 'dsh-ig-toolbar is-pinned' : 'dsh-ig-toolbar'}>

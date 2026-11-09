@@ -5,10 +5,12 @@ import { STUDIO_ROUTE } from '../src/shared.js'
 import type { GifCard } from '../src/client/gif-card.js'
 import {
   GIF_EDIT_FINISH_MS,
+  GIF_EDIT_PREFETCH_WAIT_MS,
   GifEditDoneDock,
   createGifEditStatus,
   gifEditProgressAt,
   useGifEdit,
+  waitAtMost,
   type GifEdit,
   type GifEditInput,
 } from '../src/client/gif-edit.js'
@@ -363,5 +365,24 @@ describe('finished edit in the plain preview', () => {
     expect(markup).toContain(GIF_TEXT.zh.gifEditStill)
     expect(markup).toContain('>完成</button>')
     expect(renderToStaticMarkup(createElement(GifEditDoneDock, { edit: edit(undefined), onFinish() {} }))).toBe('')
+  })
+})
+
+describe('filing the new version', () => {
+  it('waits for its picture only so long, leaving no timer behind when the picture is in time and ignoring one that comes late', async () => {
+    await expect(waitAtMost(Promise.resolve('picture'), GIF_EDIT_PREFETCH_WAIT_MS)).resolves.toBe('picture')
+    expect(vi.getTimerCount()).toBe(0)
+
+    let arrive: (picture: string) => void = () => {}
+    const settled = vi.fn()
+    void waitAtMost(new Promise<string>(resolve => { arrive = resolve }), GIF_EDIT_PREFETCH_WAIT_MS).then(settled)
+    await vi.advanceTimersByTimeAsync(GIF_EDIT_PREFETCH_WAIT_MS - 1)
+    expect(settled).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(settled).toHaveBeenCalledWith(undefined)
+    arrive('late')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(settled).toHaveBeenCalledTimes(1)
+    expect(vi.getTimerCount()).toBe(0)
   })
 })

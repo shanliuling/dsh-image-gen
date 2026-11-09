@@ -33,6 +33,16 @@ export const GIF_EDIT_FINISH_MS = 500
 /** How long the card says how an edit went when it came back unwatched: the user is busy elsewhere and may glance back late. */
 export const GIF_EDIT_SENT_TOAST_MS = 8_000
 
+/** How long filing a new version waits for its picture: a fetch that stalls must not hold the version, or the overlay, back. */
+export const GIF_EDIT_PREFETCH_WAIT_MS = 3_000
+
+/** Settles as `promise` does, or with undefined once `ms` have passed, whichever is first. */
+export function waitAtMost<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<undefined>(resolve => { timer = setTimeout(() => { resolve(undefined) }, ms) })
+  return Promise.race([promise, timeout]).finally(() => { clearTimeout(timer) })
+}
+
 /**
  * The redraw's estimated share after waiting this long. The channel reports
  * no progress, so the estimate rises quickly at first, slows down, and never
@@ -175,6 +185,8 @@ export interface GifEdit {
   busy: boolean
   /** The send in progress; the views that show its seconds subscribe to it. */
   status: GifEditStatusStore
+  /** The reply is in and its version is being filed: there is nothing left to cancel. */
+  finishing: boolean
   /** An edit that came back while its editor was on screen; the preview shows it in place of the edit bar. */
   done: GifEditDone | undefined
   dismissDone(): void
@@ -220,6 +232,8 @@ export function useGifEdit({ gif, image, versionKey, busy, addRevision, onSent, 
   const [status] = useState(createGifEditStatus)
   const readDone = () => status.getSnapshot().done
   const done = useSyncExternalStore(status.subscribe, readDone, readDone)
+  const readFinishing = () => status.getSnapshot().phase === 'finishing'
+  const finishing = useSyncExternalStore(status.subscribe, readFinishing, readFinishing)
   const [error, setError] = useState<{ message: string; fromChannel: boolean }>()
   const [notice, setNotice] = useState<string>()
   const [editRequested, setEditRequested] = useState(false)
@@ -320,6 +334,7 @@ export function useGifEdit({ gif, image, versionKey, busy, addRevision, onSent, 
     setComments,
     busy: busy.running,
     status,
+    finishing,
     done,
     dismissDone: () => { status.dismiss() },
     error,
