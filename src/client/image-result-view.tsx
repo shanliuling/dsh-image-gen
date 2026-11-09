@@ -92,6 +92,8 @@ function ImageResultCard({
   const [revisionChain, setRevisionChain] = useState<ConversationImageRevisionChain>(() =>
     loadConversationImageRevisionChain(String(originId ?? ''))
   )
+  const originRef = useRef(originId)
+  originRef.current = originId
   const selectedRevision = revisionChain.revisions[revisionChain.currentIndex - 1]
   const activeAttachment = selectedRevision?.attachment ?? attachment
   // The animation follows the version on display: a still revision of a GIF
@@ -191,7 +193,9 @@ function ImageResultCard({
     addRevision: async revision => {
       // The new version's picture is fetched (and cached) alongside, so a preview still open switches straight to it rather than showing the old one while it loads.
       const [savedOk] = await Promise.all([persistGalleryRecord(revisionGalleryRecord(revision)), fetchAttachmentBlob(revision.attachment).catch(() => undefined)])
-      setRevisionChain(appendConversationImageRevision(String(originId), revision))
+      const chain = appendConversationImageRevision(String(originId), revision)
+      // Filed under the image it was made from; a card handed another image meanwhile keeps that image's versions.
+      if (originRef.current === originId) setRevisionChain(chain)
       return savedOk
     },
     onSent: message => {
