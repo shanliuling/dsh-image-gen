@@ -227,7 +227,7 @@ describe('ptc dispatch image results (#38)', () => {
         content: [
           {
             type: 'text',
-            text: 'Generated one SVG document with openai-compat/relay (svg). The .svg file is saved at out/image-1.svg. An SVG is a vector document, so it has no entry in the conversation image card; use the saved file or the markup below.',
+            text: 'Generated one SVG document with openai-compat/relay (svg). The .svg file is saved at out/image-1.svg. An SVG is a vector document, so the conversation card renders it directly from this markup instead of a bitmap attachment; the markup is below.',
           },
           { type: 'text', text: markup },
         ],

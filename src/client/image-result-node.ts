@@ -219,7 +219,7 @@ const PTC_IMAGE_TOOL_NAMES: ReadonlySet<string> = new Set(['generate_image', 'ge
  */
 const PTC_SUMMARY_PATTERN = /^(?:Generated|Edited) one image with ([^/\s]+)\/(\S+) \((.+)\)\. Attachment ID: /
 /** The vector summary the tools render for output_format=svg (index.ts svgRender). */
-const PTC_SVG_SUMMARY_PATTERN = /^(?:Generated|Edited) one SVG document with ([^/\s]+)\/(\S+) \((.+)\)\./
+const PTC_SVG_SUMMARY_PATTERN = /^(?:Generated|Edited) one SVG document with ([^/\s]+)\/(\S+) \(([^)]+)\)\.?/
 /** The vault reference the tools append for an animated result (index.ts originalNote). */
 const ORIGINAL_NOTE_PATTERN = / Original animation \(for the result card only\): vault ([a-f0-9]{64}), (\d+) bytes, (image\/[a-z]+)\./
 const PTC_SAVED_TO_PATTERN = / It was also saved to the workspace as (.+)\. (?:(?:Saving it to the workspace failed)|(?:It has no local file path)|(?:Respond to the user))/
