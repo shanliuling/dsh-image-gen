@@ -988,11 +988,23 @@ describe('GIF output through the conversation tools', () => {
     expect(await readFile(String(value.savedTo), 'utf8')).toBe(svg)
     expect(value.notice).toContain('do not apply to an SVG')
     expect(ctx.attachments.saveImage).not.toHaveBeenCalled()
-    expect(renderText(tools, 'generate_image', { prompt: 'icon', output_format: 'svg' }, value)).toContain('no entry in the conversation image card')
+    expect(renderText(tools, 'generate_image', { prompt: 'icon', output_format: 'svg' }, value)).toContain('the conversation card renders it directly from this markup')
     const content = toolByName(tools, 'generate_image').output.render({ prompt: 'icon', output_format: 'svg' }, value as never)
     expect(content.map(block => block.type)).toEqual(['text', 'text'])
     expect(content[1]).toEqual({ type: 'text', text: svg })
     await rm(workspace, { recursive: true, force: true })
+  })
+
+  it('reports a raster result when the relay ignores output_format=svg', async () => {
+    const { ctx, tools } = harnessContext()
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d])
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: [{ b64_json: Buffer.from(png).toString('base64') }] }), { headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    apply(ctx, { ...compatConfig })
+    const value = await toolByName(tools, 'generate_image').execute({ prompt: 'icon', output_format: 'svg' }, exec()) as { svg?: string; output: string; notice?: string }
+    expect(value.svg).toBeUndefined()
+    expect(value.output).toBe('auto')
+    expect(value.notice).toContain('returned a PNG raster image')
   })
 
   it('checks an official GIF frame size by the per-frame contract and forwards the GIF fields', async () => {

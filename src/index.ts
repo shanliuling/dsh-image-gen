@@ -547,9 +547,16 @@ export function apply(ctx: Context, config: Config = {}): void {
     if (active.provider === 'openai' && quality !== undefined && !officialQualityOptions(active.model).some(option => option.value === quality)) throw new Error('该 OpenAI 模型不支持所选生成质量')
     const extraBody = channelExtraBody !== undefined ? { ...channelExtraBody, ...outputFields } : Object.keys(outputFields).length === 0 ? undefined : outputFields
     const generated = await runCloud(signal => generateOpenAICompatibleImage({ provider: active.provider, apiKey: credential, baseURL: active.baseURL, model: active.model, prompt: args.prompt, ...(size === undefined ? {} : { size }), maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal, ...(quality === undefined ? {} : { quality }), ...(extraBody === undefined ? {} : { extraBody }), ...(arkOptions === undefined ? {} : { arkOptions }) }), gifRequested)
-    const output = svgRequested ? 'svg' : size ?? 'auto'
+    // Report what the provider actually delivered: a relay that ignores
+    // output_format returns a bitmap, and the card must not claim 'svg'.
+    const deliveredSvg = generated.mediaType === 'image/svg+xml'
+    const output = deliveredSvg ? 'svg' : size ?? 'auto'
     const value = await saveGenerated(ctx, generated, active.provider, active.model, quality === undefined ? output : `${output}, quality=${quality}`, current(), exec, knownWorkspaceRoots)
     if (sizeNotice !== undefined) value.notice = value.notice === undefined ? sizeNotice : `${value.notice} ${sizeNotice}`
+    const svgFallback = svgRequested && !deliveredSvg
+      ? `Note for the user: an SVG was requested, but the provider returned a ${generated.mediaType.replace('image/', '').toUpperCase()} raster image; the result is a bitmap, not a vector document.`
+      : undefined
+    if (svgFallback !== undefined) value.notice = value.notice === undefined ? svgFallback : `${value.notice} ${svgFallback}`
     return active.provider === 'openai-compat' ? { ...value, channel: resolveOpenAICompatChannel(requestConfig, args.channel).id } : value
   }
 
