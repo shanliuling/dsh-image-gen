@@ -18,6 +18,7 @@ import {
   DEFAULT_OPENAI_MODEL,
   DEFAULT_SEEDREAM_BASE_URL,
   DEFAULT_SEEDREAM_MODEL,
+  currentSeedreamModel,
   DEFAULT_SUBSCRIPTION_MODELS,
   DEFAULT_XAI_BASE_URL,
   DEFAULT_XAI_MODEL,
@@ -89,6 +90,10 @@ export type ImageSize = typeof IMAGE_SIZES[number]
 
 /** Bundle configuration from the profile patch and the Web settings page. */
 export interface Config {
+  /** Opt in to public HTTPS:443 result downloads with pinned DNS and no redirects. */
+  strictImageDownloads?: boolean
+  /** Refuse web requests when the host connection admission service is absent. */
+  requireHostAdmission?: boolean
   provider?: ImageProvider
   cloudTimeoutMs?: number
   googleModel?: string
@@ -192,7 +197,7 @@ export interface Config {
   requestCacheMaxBytes?: number
   /** Override the request-image cache root (empty keeps the DSH_HOME default). */
   requestCacheDir?: string
-  /** Keep the pre-normalization bytes when the attachment layer changes an import. */
+  /** Keep the pre-normalization bytes when the attachment layer changes an import or normalizes a generated GIF to a still. */
   vaultEnabled?: boolean
   /** Override the raw-image vault root (empty keeps the DSH_HOME default). */
   vaultDir?: string
@@ -218,6 +223,8 @@ function volatile<T extends z>(schema: T): T {
 export const Config = z.object({
   provider: volatile(z.union(IMAGE_PROVIDERS).default('google')),
   cloudTimeoutMs: volatile(z.number().min(5_000).max(3_600_000).default(DEFAULT_CLOUD_TIMEOUT_MS)),
+  strictImageDownloads: volatile(z.boolean().default(false)),
+  requireHostAdmission: volatile(z.boolean().default(false)),
   googleModel: volatile(z.string().default(DEFAULT_GOOGLE_MODEL)),
   googleEndpoint: volatile(z.string().default(DEFAULT_GOOGLE_ENDPOINT)),
   googleNative: volatile(z.boolean().default(false)),
@@ -312,7 +319,7 @@ export function resolveProvider(config: Config):
       return {
         provider: 'seedream',
         apiKeyEnv: SEEDREAM_API_KEY_ENV,
-        model: config.seedreamModel ?? DEFAULT_SEEDREAM_MODEL,
+        model: currentSeedreamModel(config.seedreamModel),
         baseURL: config.seedreamBaseURL ?? DEFAULT_SEEDREAM_BASE_URL,
         imageSize: '2K',
         arkOptions: {

@@ -44,4 +44,9 @@ describe('redactSecrets', () => {
   it('ignores secrets too short to be distinguishable', () => {
     expect(redactSecrets('the key abc was rejected', 'abc')).toBe('the key abc was rejected')
   })
+  it('redacts URL userinfo but leaves ordinary URLs, paths and emails readable', () => {
+    expect(redactSecrets('GET https://user:password@relay.example/v1 failed')).toBe('GET https://[REDACTED]@relay.example/v1 failed')
+    expect(redactSecrets('from //token@cdn.example/a.png')).toBe('from //[REDACTED]@cdn.example/a.png')
+    expect(redactSecrets('https://cdn.example/@user/a.png and mail me@example.com')).toBe('https://cdn.example/@user/a.png and mail me@example.com')
+  })
 })

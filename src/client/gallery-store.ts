@@ -49,7 +49,7 @@ export interface GalleryItem {
   sessionId?: string | undefined
   /** Attachment ids of the source images this image was edited from; used by the canvas to rebuild edit chains. Optional so records written by older versions stay readable. */
   sourceAttachmentIds?: string[] | undefined
-  /** Raw pre-normalization bytes, present only when the attachment layer changed the import. */
+  /** Raw pre-normalization bytes: an import the attachment layer changed, or a generated GIF it normalized to a still. */
   original?: { key: string; bytes: number; mediaType: ImageMediaType } | undefined
 }
 
@@ -165,13 +165,12 @@ async function loadTombstones(db: IDBDatabase): Promise<Set<string>> {
   })
 }
 
-/** Tombstones younger than this still protect multi-window deletes. */
+/** Age at which timestamp metadata can be compacted; deleted IDs never expire. */
 export const TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60 * 1000
 
 /**
- * Drop tombstones older than the retention window so the table (and the set
- * consulted on every save) does not grow without bound. Returns the number of
- * removed entries.
+ * Compact old tombstones to permanent IDs. Removing an ID would let an old
+ * conversation silently reinsert a deleted image. No IDs are removed.
  */
 export async function pruneTombstones(maxAgeMs = TOMBSTONE_TTL_MS): Promise<number> {
   try {
@@ -188,12 +187,12 @@ export async function pruneTombstones(maxAgeMs = TOMBSTONE_TTL_MS): Promise<numb
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(TOMBSTONE_STORE, 'readwrite')
       const store = tx.objectStore(TOMBSTONE_STORE)
-      for (const record of doomed) store.delete(String(record.id))
+      for (const record of doomed) store.put({ id: String(record.id) })
       tx.oncomplete = () => resolve()
       tx.onerror = () => reject(tx.error)
     })
     tombstonesCache = null
-    return doomed.length
+    return 0
   } catch {
     return 0
   }
@@ -239,34 +238,52 @@ export async function saveGalleryItem(
       return true
     }
     await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction(STORE_NAME, 'readwrite')
+      // The deletion check and the write share one transaction, including
+      // tombstones created in another tab after our in-memory cache was read.
+      const tx = db.transaction([STORE_NAME, TOMBSTONE_STORE], 'readwrite')
+      tx.oncomplete = () => resolve()
+      tx.onerror = () => reject(tx.error)
+      tx.onabort = () => reject(tx.error ?? new Error('IndexedDB transaction aborted'))
       const store = tx.objectStore(STORE_NAME)
-      const getReq = store.get(item.id)
+      const check = tx.objectStore(TOMBSTONE_STORE).get(item.id)
+      check.onerror = () => reject(check.error)
+      check.onsuccess = () => {
+        if (check.result !== undefined) { tombstones.add(item.id); return }
+        const getReq = store.get(item.id)
 
-      getReq.onsuccess = () => {
-        const existing = getReq.result as GalleryItem | undefined
-        const fav = item.isFavorite !== undefined ? item.isFavorite : existing?.isFavorite
-        const userTags = item.tags !== undefined ? item.tags : existing?.tags
-        const savedPath = item.savedTo !== undefined ? item.savedTo : existing?.savedTo
-        const record: GalleryItem = {
-          ...existing,
-          ...item,
-          // Preserve original generation timestamp if already recorded
-          createdAt: existing?.createdAt ?? item.createdAt ?? Date.now(),
-          ...(fav !== undefined ? { isFavorite: fav } : {}),
-          ...(userTags !== undefined ? { tags: userTags } : {}),
-          ...(savedPath !== undefined ? { savedTo: savedPath } : {}),
+        getReq.onsuccess = () => {
+          const existing = getReq.result as GalleryItem | undefined
+          const fav = item.isFavorite !== undefined ? item.isFavorite : existing?.isFavorite
+          const userTags = item.tags !== undefined ? item.tags : existing?.tags
+          const savedPath = item.savedTo !== undefined ? item.savedTo : existing?.savedTo
+          const record: GalleryItem = {
+            ...existing,
+            ...item,
+            // Preserve original generation timestamp if already recorded
+            createdAt: existing?.createdAt ?? item.createdAt ?? Date.now(),
+            ...(fav !== undefined ? { isFavorite: fav } : {}),
+            ...(userTags !== undefined ? { tags: userTags } : {}),
+            ...(savedPath !== undefined ? { savedTo: savedPath } : {}),
+          }
+          const putReq = store.put(record)
+          putReq.onerror = () => reject(putReq.error)
         }
-        const putReq = store.put(record)
-        putReq.onsuccess = () => resolve()
-        putReq.onerror = () => reject(putReq.error)
+        getReq.onerror = () => reject(getReq.error)
       }
-      getReq.onerror = () => reject(getReq.error)
     })
     notifyListeners()
     return true
   } catch (err) {
     console.warn('[dsh-image-gen] Failed to save gallery item to IndexedDB:', err)
+    return false
+  }
+}
+
+/** Whether this id was deleted from the gallery, so a re-rendered card must not resurrect what the record referenced either. */
+export async function isGalleryItemTombstoned(id: string): Promise<boolean> {
+  try {
+    return (await loadTombstones(await getDB())).has(id)
+  } catch {
     return false
   }
 }

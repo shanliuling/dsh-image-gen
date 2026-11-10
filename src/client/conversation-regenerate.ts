@@ -1,9 +1,16 @@
 import {
   CLOUD_IMAGE_PROVIDERS,
+  GIF_FRAME_COUNT_MAX,
+  GIF_FRAME_COUNT_MIN,
+  GIF_FRAME_DURATION_MS_MAX,
+  GIF_FRAME_DURATION_MS_MIN,
+  GIF_SHEET_MAX_EDGE,
   type CloudImageProvider,
+  type GifOutputRequest,
   type StudioGenerateRequest,
   type StudioWatermark,
 } from '../shared.js'
+import { gifFrameDurationMs, type GifInfo } from '../gif-info.js'
 import { officialSizeTable } from '../openai-output.js'
 
 export interface RegeneratableImage {
@@ -48,7 +55,8 @@ function outputSettings(provider: CloudImageProvider, output?: string | undefine
     }
   }
   if (provider === 'seedream') {
-    return { ratio: 'auto', quality: normalized === '1K' || normalized === '4K' ? normalized : '2K' }
+    // 1K/1.5K/2K on Seedream 5.0 pro/flash, 2K/3K/4K on the earlier models.
+    return { ratio: 'auto', quality: ['1K', '1.5K', '2K', '3K', '4K'].includes(normalized) ? normalized : '2K' }
   }
   if (provider === 'openai' || provider === 'openai-compat' || provider === 'xai' || provider === 'zhipu') {
     const [size, qualityPart] = normalized.split(',').map(value => value.trim())
@@ -78,4 +86,22 @@ function ratioFromSize(size: string, separator: 'x' | '*'): string {
 
 function isRatio(value: string | undefined): value is string {
   return value === '1:1' || value === '3:2' || value === '2:3' || value === '4:3' || value === '3:4' || value === '16:9' || value === '9:16'
+}
+
+/**
+ * Ask for a GIF again, keeping whichever of the current animation's frame
+ * count, frame delay and frame size the provider contract accepts; an imported
+ * GIF outside the contract on one of them falls back to the provider default
+ * for that field alone.
+ */
+export function gifOutputRequest(info: Pick<GifInfo, 'frames' | 'delaysMs' | 'width' | 'height'> | undefined): GifOutputRequest {
+  if (info === undefined) return { format: 'gif' }
+  const frameDurationMs = gifFrameDurationMs(info.delaysMs)
+  const frameSize = (edge: number) => edge > 0 && edge % 16 === 0 && edge <= GIF_SHEET_MAX_EDGE
+  return {
+    format: 'gif',
+    ...(info.frames >= GIF_FRAME_COUNT_MIN && info.frames <= GIF_FRAME_COUNT_MAX ? { frameCount: info.frames } : {}),
+    ...(frameDurationMs >= GIF_FRAME_DURATION_MS_MIN && frameDurationMs <= GIF_FRAME_DURATION_MS_MAX ? { frameDurationMs } : {}),
+    ...(frameSize(info.width) && frameSize(info.height) ? { size: `${String(info.width)}x${String(info.height)}` } : {}),
+  }
 }

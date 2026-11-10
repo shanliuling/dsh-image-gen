@@ -65,7 +65,7 @@ describe('subscription manager edit wire protocol', () => {
     expect(url).toBe('https://chatgpt.com/backend-api/codex/images/edits')
     const body = JSON.parse(String(init.body)) as { model: string; prompt: string; images: Array<{ image_url: string }> }
     expect(body.prompt).toBe('make it blue')
-    expect(body.model).toBe('gpt-image-2.5-flare')
+    expect(body.model).toBe('gpt-image-2.6-flare')
     expect(body.images).toHaveLength(1)
     expect(body.images[0]!.image_url).toBe(`data:image/png;base64,${Buffer.from(reference.data).toString('base64')}`)
     const headers = init.headers as Record<string, string>

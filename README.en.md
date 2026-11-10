@@ -10,7 +10,7 @@
 
 ### Draw by talking, right inside DeepSeek Harness
 
-<p><b>Batch generation from one message · A canvas the AI can actually read · Agent-picked prompts from 500+ examples · Subscription sign-in, no API key</b></p>
+<p><b>Batch generation from one message · Animated GIFs · A canvas the AI can actually read · Agent-picked prompts from 500+ examples · Subscription sign-in, no API key</b></p>
 
 <p>
   <a href="https://www.npmjs.com/package/dsh-image-gen"><img src="https://img.shields.io/npm/v/dsh-image-gen?style=flat-square&color=4f6ef7" alt="npm version" /></a>
@@ -77,12 +77,22 @@ No parameters to learn, no pages to switch. Just say it in a DSH chat:
 | "Turn the sword I circled into an axe, keep everything else" | 🎯 **Edit what you circle**: only the marked area changes |
 | "Keep this character exactly the same, but put them in a snowy scene" | 🎭 **Identity consistency**: edits keep the same person or object instead of a lookalike |
 | "Same prompt, one from GPT and one from Gemini, side by side" | ⚖️ **Multi-model comparison**: runs several models concurrently and lays the results out on one canvas |
+| "Turn this character into a looping GIF of them waving" | 🎞️ **Animated GIFs**: generates a looping animation that plays in the card, with speed control and per-frame edit notes |
 
 <img src="docs/assets/readme/workflow-overview-en.webp" alt="dsh-image-gen complete AI image creation workflow" width="100%" />
 
 ---
 
 ## Quick Start
+
+### Hardened downloads (opt-in)
+
+Two optional settings harden the paths that leave this machine, both off by default:
+
+- `strictImageDownloads`: result URLs must be public HTTPS on port 443. DNS answers are validated and pinned for the request, redirects from provider results are never followed, and responses respect the image byte limit.
+- `requireHostAdmission`: the plugin's web routes refuse requests with 503 whenever the host's connection admission service is absent or fails, instead of serving them unguarded.
+
+They stay off by default because a TUN proxy or a custom corporate resolver can intentionally answer with private-range addresses; enabling either setting assumes your egress is direct.
 
 ### 1. Install the plugin
 
@@ -122,7 +132,7 @@ After restarting DSH, click the **Plugins** icon in the left sidebar, then click
 
 > DSH 0.1.5 and earlier have no Plugins panel; the entry there is **Settings → Plugins → Plugin Configuration → Image Generation**. The same plugin build supports both.
 
-Choose a Provider, enter your API key, and adjust the model, Endpoint / Base URL, and workspace-save options as needed. Once the key is stored, click **Test connection** to verify it, or **Fetch models** to pull every image-capable model the provider offers—no manual lookups needed. For ComfyUI, enter an address reachable by the DSH Host and import an **API Format Workflow JSON** file.
+Choose a Provider, enter your API key, and adjust the model, Endpoint / Base URL, and workspace-save options as needed. Once the key is stored, click **Test connection** to verify it, or **Fetch models** to pull every image-capable model the provider offers—no manual lookups needed. For ComfyUI, enter an address reachable by the DSH Host and import an **API Format Workflow JSON** file. With several workflows imported, switch between them from the image button next to the chat input.
 
 Already paying for ChatGPT, Grok, or Google? No API key needed: expand the matching subscription Provider row, click **Sign in** and complete the authorization in your browser, then start generating (and editing) right away.
 
@@ -229,6 +239,16 @@ Sketch on an infinite canvas, lay out references, circle what should change, the
 
 <br />
 
+### 🎞️ Animated GIFs: generate, play, edit by frame
+
+With a GIF-capable model such as GPT Image 2.6, just ask for a "GIF" or "animation" in chat to get a looping animation, including animating the character from a reference image. Frame count and timing can be set with `frame_count` (2–16) and `frame_duration_ms` (20–2000 ms).
+
+- When a result is a GIF, the chat card plays it: set the speed (0.2×–2×) from its corner, and the toolbar's download menu saves the GIF at the current or the original speed, or the frame on screen as PNG. The enlarged view adds a play button and a frame timeline (hover to preview a frame, click to stop on it) next to the speed. In the Gallery, GIF tiles carry a badge and play on hover, and the enlarged view plays and downloads them the same way. The GIF file can be dragged straight out, and regenerating keeps it a GIF (the clipboard only takes still images, so copying gives a single frame).
+- A GIF card's **Edit** chip (or **Edit frames** in the enlarged view) takes notes on frames: click a spot on the picture to leave a note, which shows only on its own frame, or switch to **All frames** to see them together; send once to redraw the whole animation from your notes, kept as a new version that plays (OpenAI and compatible channels only, and the relay must support image editing; otherwise one click turns the notes into a plain regeneration).
+- Supported channels: official OpenAI and OpenAI-compatible relays (the model and relay must support GIF). The Codex images endpoint behind the ChatGPT subscription does not offer GIF output upstream yet.
+
+<br />
+
 ### ✨ 500+ prompt inspirations, and the Agent finds them for you
 
 Ships with a hand-drawn style cookbook (styles / layouts / theme colors) and the awesome-gpt-image-2 example set: 500+ ready-to-reuse prompts.
@@ -305,6 +325,7 @@ Bring private image generation on your local GPU directly into Agent conversatio
 
 - Import and manage multiple named workflows with prompt presets and common placeholders.
 - Let the Agent select a workflow by name for text-to-image, image-to-image, or batch generation in chat.
+- Placeholders: `{{prompt}}`, `{{seed}}`; with `{{width}}`/`{{height}}` the size or aspect ratio the Agent asks for takes effect (1024×1024 by default); for editing put `{{image}}` in a LoadImage input, one per reference image, filled in node order.
 
 > ComfyUI is not yet integrated into Studio or multi-model comparison.
 
@@ -322,23 +343,24 @@ Bring private image generation on your local GPU directly into Agent conversatio
 
 ## Provider Support
 
-| Provider | Chat generation | Chat batch | Chat editing | Studio | Multi-model comparison |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **Google Gemini** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ |
-| **OpenAI Images** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ |
-| **OpenAI Compatible (relay)** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ |
-| **ByteDance Seedream / Volcengine Ark** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ |
-| **Aliyun DashScope / Qwen Image** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ |
-| **xAI Grok Imagine** | ✅ | ✅ | ⚠️ Limited | ✅ | ✅ |
-| **Zhipu GLM-Image** | ✅ | ✅ | — | ✅ | ✅ |
-| **Local ComfyUI** | ✅ | ✅ | ✅ Single | — | — |
-| **ChatGPT subscription (key-free)** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ |
-| **Grok subscription (key-free)** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ |
-| **Google subscription (key-free)** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ |
+| Provider | Chat generation | Chat batch | Chat editing | Studio | Multi-model comparison | GIF |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
+| **Google Gemini** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ | — |
+| **OpenAI Images** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ | ✅ |
+| **OpenAI Compatible (relay)** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ | ✅ |
+| **ByteDance Seedream / Volcengine Ark** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ | — |
+| **Aliyun DashScope / Qwen Image** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ | — |
+| **xAI Grok Imagine** | ✅ | ✅ | ⚠️ Limited | ✅ | ✅ | — |
+| **Zhipu GLM-Image** | ✅ | ✅ | — | ✅ | ✅ | — |
+| **Local ComfyUI** | ✅ | ✅ | ✅ Multiple | — | — | — |
+| **ChatGPT subscription (key-free)** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ | — |
+| **Grok subscription (key-free)** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ | — |
+| **Google subscription (key-free)** | ✅ | ✅ | ✅ Multiple | ✅ | ✅ | — |
 
 > Studio and multi-model comparison currently support cloud Providers only (subscription channels included). Multi-model comparison uses the model configured for each Provider in Settings.
 > Zhipu GLM-Image does not support image-to-image upstream. xAI image editing goes through the OpenAI-compatible protocol (multipart); some gateways may need further adaptation.
 > Subscription channels work through account sign-in (no API key). Edits ride each channel's edit endpoint (up to 5 reference images), with aspect ratio and quality selectable directly in Studio.
+> Chat generation and editing on OpenAI and compatible channels can produce an animated GIF directly, for example animating the character in a reference image (the model and relay must support it; editing also needs the relay to support image edits); frame count and timing options are in the [Provider configuration reference](docs/providers.en.md). The endpoint the ChatGPT subscription uses does not offer GIF output yet.
 
 📖 **For default models and endpoints, per-Provider aspect ratios and quality tiers, size tables, watermarks, relay edit formats, and other advanced settings, see the [Provider configuration reference](docs/providers.en.md).**
 
@@ -349,9 +371,12 @@ Bring private image generation on your local GPU directly into Agent conversatio
 - **BYOK:** API keys are stored through the DSH Credentials service and are never displayed in plaintext on the settings page.
 - **Subscription sign-in:** Subscription tokens are saved in DSH Credentials after your authorized sign-in, fully isolated from API keys; the browser side never touches a token.
 - **Cloud requests:** The prompt and reference images used for a request are sent to the selected Provider. Follow that Provider's terms of service.
+- **Provider image downloads:** Downloads use the host's existing network and proxy configuration without additional Fake-IP, private-address or loopback blocking. Complete SSRF target restrictions are not currently provided.
 - **Local ComfyUI:** Requests are sent to the configured ComfyUI address.
 - **Workspace files:** When workspace saving is enabled, chat results are written to disk; Studio saves only the candidates you select.
+- **GIF originals:** The original file of an animated result is also kept in the raw-image vault (`vaultEnabled` turns it off) so the card can play and export it; it is removed together with the gallery entry.
 - **Gallery and favorites:** Gallery metadata and favorite state are stored in the current browser's local storage.
+- **Deleted records:** Normal deletion retains a small image ID marker, including after 30 days, so reopening an old conversation does not silently restore the image to the gallery.
 - **Inspiration cache:** Example metadata ships with the plugin. Images load on demand and are cached locally, and the cache can be cleared at any time.
 
 ## FAQ
@@ -397,7 +422,7 @@ The configuration field is `googleNative: true`. It defaults to `false`, keeping
 <details>
 <summary><strong>Why is ComfyUI not available in Studio?</strong></summary>
 
-Studio and multi-model comparison currently support cloud Providers only; ComfyUI is not yet integrated. ComfyUI supports text-to-image, single-image editing, batch generation, and multiple named workflows through Agent chat.
+Studio and multi-model comparison currently support cloud Providers only; ComfyUI is not yet integrated. ComfyUI supports text-to-image, image editing (with several reference images), batch generation, and multiple named workflows through Agent chat.
 
 </details>
 

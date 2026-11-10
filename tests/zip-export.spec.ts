@@ -183,6 +183,41 @@ describe('zip export writer', () => {
 })
 
 describe('zip export route', () => {
+  it('caps real archive bytes even when an original is underdeclared', async () => {
+    const res = new FakeResponse()
+    await serveZip(formRequest([{ attachment: attachment('a', 1), originalKey: 'b'.repeat(64) }]), res as unknown as ServerResponse, {
+      readImage: vi.fn(), readVault: async () => ({ data: new Uint8Array(100), mediaType: 'image/png' }), maxArchiveBytes: 64,
+    })
+    expect(res.destroyed).toBeInstanceOf(Error)
+    expect(res.body().length).toBeLessThanOrEqual(64)
+    expect(res.writableFinished).toBe(false)
+  })
+
+  it('stops after a disconnect before the first attachment has been read', async () => {
+    const res = new FakeResponse()
+    let entered!: () => void, release!: () => void
+    const started = new Promise<void>(resolve => { entered = resolve })
+    const held = new Promise<void>(resolve => { release = resolve })
+    const readImage = vi.fn(async (ref: ImageAttachmentRef) => { entered(); await held; return { ref, data: Buffer.from('bytes') } })
+    const running = serveZip(formRequest([{ attachment: attachment('a', 1) }, { attachment: attachment('b', 1) }]), res as unknown as ServerResponse, { readImage })
+    await started
+    res.emit('close')
+    release()
+    await running
+    expect(readImage).toHaveBeenCalledTimes(1)
+    expect(res.body().length).toBe(0)
+    expect(res.writableFinished).toBe(false)
+  })
+
+  it('accepts 2000 ordinary imported refs whose encoded form exceeds 1 MiB', async () => {
+    const res = new FakeResponse()
+    const ref = { ...attachment('a', 1, 'image/jpeg'), name: 'fixture-portrait.png', originalDimensions: { width: 2400, height: 3600 } }
+    const items = Array.from({ length: 2000 }, () => ({ name: 'dsh-import-import-s.png', attachment: ref, originalKey: 'b'.repeat(64), originalMediaType: 'image/png' }))
+    expect(Buffer.byteLength(new URLSearchParams({ items: JSON.stringify(items) }).toString())).toBeGreaterThan(1024 * 1024)
+    await serveZip(formRequest(items), res as unknown as ServerResponse, { readImage: async ref => ({ ref, data: Buffer.from('x') }) })
+    expect(res.status).toBe(200)
+    expect(endOfCentralDirectory(res.body()).entries).toBe(2000)
+  })
   it('streams a ZIP of the requested attachments', async () => {
     const res = new FakeResponse()
     const readImage = vi.fn(async (ref: ImageAttachmentRef) => ({ ref, data: Buffer.from('bytes:' + ref.attachmentId) }))

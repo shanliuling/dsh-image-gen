@@ -40,7 +40,10 @@ export function previewUrlFor(ref: ImageAttachmentRef): string {
   return PREVIEW_ROUTE + '?ref=' + encodeImageRef(ref)
 }
 
-/** Content-addressed raw copy, served when the attachment layer normalized the import. */
+/** Content-addressed vault key: the sha256 of the original bytes, validated on both faces. */
+export const VAULT_KEY_PATTERN = /^[a-f0-9]{64}$/
+
+/** Content-addressed raw copy, served when the attachment layer normalized an import or a generated GIF. */
 export function vaultUrlFor(key: string, mediaType?: string): string {
   const base = VAULT_ROUTE + '?key=' + encodeURIComponent(key)
   return mediaType === undefined ? base : base + '&mediaType=' + encodeURIComponent(mediaType)
@@ -348,6 +351,23 @@ export const DEFAULT_CLOUD_TIMEOUT_MS = 150_000
  * studio route so neither drifts from the other. */
 export const SUBSCRIPTION_TIMEOUT_MS = 300_000
 
+/** OpenAI Images GIF output contract: frame count, per-frame delay, and the
+ * longest edge of the sheet all frames are tiled into. */
+export const GIF_FRAME_COUNT_MIN = 2
+export const GIF_FRAME_COUNT_MAX = 16
+export const GIF_FRAME_DURATION_MS_MIN = 20
+export const GIF_FRAME_DURATION_MS_MAX = 2000
+export const GIF_SHEET_MAX_EDGE = 3840
+
+/** A GIF draws every frame in one image call, so it runs longer than a still; the host's HTTP client gives up on response headers after 300 s anyway. */
+export const DEFAULT_GIF_TIMEOUT_MS = 300_000
+
+/** The cloud timeout for a request: a GIF gets the longer GIF default while the cloud timeout is left at its default. */
+export function cloudTimeoutFor(configuredMs: number | undefined, gif: boolean): number {
+  const timeout = configuredMs ?? DEFAULT_CLOUD_TIMEOUT_MS
+  return gif && timeout === DEFAULT_CLOUD_TIMEOUT_MS ? DEFAULT_GIF_TIMEOUT_MS : timeout
+}
+
 /**
  * Credential references resolved through the DSH Credentials service (BYOK).
  * These are POSIX-style reference names, not environment variables: the host
@@ -503,6 +523,15 @@ export interface StudioAttachmentReference {
 
 export type StudioReference = StudioEncodedReference | StudioAttachmentReference
 
+/** Animated output for OpenAI-shaped providers; the frame ranges follow the GIF_FRAME_* constants. */
+export interface GifOutputRequest {
+  format: 'gif'
+  frameCount?: number
+  frameDurationMs?: number
+  /** Single-frame size (`WIDTHxHEIGHT`); absent leaves it to the provider, never to the still-image table. */
+  size?: string
+}
+
 /** One browser workbench generation or editing request. */
 export interface StudioGenerateRequest {
   mode: 'generate' | 'edit'
@@ -516,6 +545,8 @@ export interface StudioGenerateRequest {
   resolution?: string
   generationQuality?: string
   watermark?: StudioWatermark
+  /** Animated output; absent keeps the still-image request unchanged. */
+  output?: GifOutputRequest
   reference?: StudioReference
   references?: StudioReference[]
   count?: number | undefined
@@ -527,6 +558,8 @@ export interface StudioGeneratedItem {
   attachment: ImageAttachmentRef
   output: string
   savedTo?: string | undefined
+  /** Raw bytes kept in the vault when the attachment layer normalized an animated result. */
+  original?: { key: string; bytes: number; mediaType: ImageMediaType } | undefined
 }
 
 /** One completed workbench request. */
@@ -607,10 +640,28 @@ export function arkOutputBody(
 
 /** Default model names. */
 export const DEFAULT_GOOGLE_MODEL = 'gemini-3.1-flash-image'
-export const DEFAULT_OPENAI_MODEL = 'gpt-image-2'
-export const DEFAULT_SEEDREAM_MODEL = 'doubao-seedream-5-0-260128'
+export const DEFAULT_OPENAI_MODEL = 'gpt-image-2.6-flare'
+export const DEFAULT_SEEDREAM_MODEL = 'doubao-seedream-5-0-pro-260628'
+
+/**
+ * Seedream models Volcano Ark retires on 2026-11-24 (batch 10), mapped to the
+ * model that takes their requests. A saved settings value naming one of them
+ * (the plugin's own former default among them) would start failing that day.
+ */
+const RETIRED_SEEDREAM_MODELS: Readonly<Record<string, string>> = {
+  'doubao-seedream-5-0-260128': DEFAULT_SEEDREAM_MODEL,
+  'doubao-seedream-5-0-lite-260128': DEFAULT_SEEDREAM_MODEL,
+  'doubao-seedream-4-5-251128': DEFAULT_SEEDREAM_MODEL,
+}
+
+/** The Seedream model a request should use: a retired one is replaced, anything else is kept. */
+export function currentSeedreamModel(model: string | undefined): string {
+  const trimmed = model?.trim()
+  if (trimmed === undefined || trimmed.length === 0) return DEFAULT_SEEDREAM_MODEL
+  return RETIRED_SEEDREAM_MODELS[trimmed] ?? trimmed
+}
 export const DEFAULT_DASHSCOPE_MODEL = 'qwen-image-3.0'
-export const DEFAULT_XAI_MODEL = 'grok-imagine-image'
+export const DEFAULT_XAI_MODEL = 'grok-imagine-image-2.0'
 export const DEFAULT_ZHIPU_MODEL = 'glm-image'
 
 /** One named ComfyUI API-format workflow imported through settings. */
@@ -685,7 +736,7 @@ export function mergeComfyUIPrompt(preset: string | undefined, user: string): st
 
 /** Default models for the subscription channels; fixed by the bridge protocol. */
 export const DEFAULT_SUBSCRIPTION_MODELS: Record<SubscriptionProvider, string> = {
-  'chatgpt-sub': 'gpt-image-2.5-flare',
+  'chatgpt-sub': 'gpt-image-2.6-flare',
   'grok-sub': 'grok-imagine-image-2.0',
   'google-sub': 'gemini-3.1-flash-image',
 }
@@ -703,6 +754,20 @@ export const DEFAULT_MODELS: Record<ImageProvider, string> = {
   'chatgpt-sub': DEFAULT_SUBSCRIPTION_MODELS['chatgpt-sub'],
   'grok-sub': DEFAULT_SUBSCRIPTION_MODELS['grok-sub'],
   'google-sub': DEFAULT_SUBSCRIPTION_MODELS['google-sub'],
+}
+
+/**
+ * Official consoles where each API-key provider issues keys, linked next to
+ * the key field (#109). Relays (openai-compat), ComfyUI and the subscription
+ * channels have no single place to get one.
+ */
+export const API_KEY_CONSOLE_URLS: Partial<Record<ImageProvider, string>> = {
+  google: 'https://aistudio.google.com/apikey',
+  openai: 'https://platform.openai.com/api-keys',
+  seedream: 'https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey',
+  dashscope: 'https://bailian.console.aliyun.com/',
+  xai: 'https://console.x.ai/team/default/api-keys',
+  zhipu: 'https://bigmodel.cn/usercenter/proj-mgmt/apikeys',
 }
 
 export const DEFAULT_BASE_URLS: Record<ImageProvider, string> = {

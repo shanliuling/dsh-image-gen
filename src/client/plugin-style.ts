@@ -27,6 +27,7 @@ export const PLUGIN_STYLE = `
 .dsh-ig-btn-reset{appearance:none;border:0.5px solid var(--dsw-alias-border-l4,#d7dbe0);border-radius:var(--dsw-radius-md,6px);padding:5px 12px;background:var(--dsw-alias-bg-layer-3,#f9fafb);color:var(--dsw-alias-label-secondary,inherit);font:inherit;font-size:13px;cursor:pointer;white-space:nowrap;transition:background .15s,border-color .15s}
 .dsh-ig-btn-reset:hover{background:var(--dsw-alias-bg-layer-2,#edf0f3);border-color:var(--dsw-alias-label-dimmed,#9ca3af)}
 .dsh-ig-hint,.dsh-ig-status{margin:0;color:var(--dsw-alias-label-tertiary,#7b818b);font-size:12px;line-height:1.4}
+.dsh-ig-link{color:var(--dsw-alias-label-link,#2563eb);text-decoration:none;white-space:nowrap}.dsh-ig-link:hover{text-decoration:underline}
 .dsh-ig-hint-error{color:var(--dsw-alias-label-error,#d33)}
 .dsh-ig-status-error{color:var(--dsw-alias-label-error,#d33);font-weight:500}
 .dsh-ig-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:16px;padding-top:12px;border-top:1px solid var(--dsw-alias-border-l2,#eee)}
@@ -118,7 +119,7 @@ export const PLUGIN_STYLE = `
 .dsh-ig-regenerate-actions{display:flex;justify-content:flex-end;gap:9px;margin-top:16px}
 .dsh-ig-regenerate-actions button{height:35px;padding:0 14px;border-radius:7px;font:inherit;font-size:13px;font-weight:550;cursor:pointer}
 .dsh-ig-regenerate-cancel{border:1px solid var(--dsw-alias-border-l2,#d7dce5);background:transparent;color:inherit}
-.dsh-ig-regenerate-confirm{border:1px solid var(--dsw-alias-brand-primary,#3569ed);background:var(--dsw-alias-brand-primary,#3569ed);color:#fff}
+.dsh-ig-regenerate-confirm{border:1px solid var(--dsw-alias-brand-primary,#3569ed);background:var(--dsw-alias-brand-primary,#3569ed);color:var(--dsw-alias-label-primary-inverted,#fff)}
 .dsh-ig-regenerate-actions button:disabled{opacity:.5;cursor:default}
 @media(hover:none){.dsh-ig-container .dsh-ig-toolbar{opacity:1;pointer-events:auto}}
 @keyframes dsh-ig-fade{from{opacity:0}to{opacity:1}}
@@ -173,8 +174,9 @@ export const PLUGIN_STYLE = `
 .dsh-ig-gallery-card-meta{padding:10px 12px;display:flex;flex-direction:column;gap:5px;background:var(--dsw-alias-bg-layer-2,#ffffff);flex:1}
 .dsh-ig-card-badge-row{display:flex;align-items:center}
 .dsh-ig-card-badge{display:inline-block;padding:2px 6px;border-radius:4px;background:var(--dsw-alias-bg-layer-3,#f1f5f9);color:var(--dsw-alias-label-secondary,#475569);font-size:11px;font-weight:500;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.dsh-ig-gallery-card-prompt-line{font-size:12.5px;font-weight:500;color:var(--dsw-alias-label-primary,#1e293b);line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.dsh-ig-card-footer-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px}
+.dsh-ig-gallery-card-prompt-line{font-size:12.5px;font-weight:500;color:var(--dsw-alias-label-primary,#1e293b);line-height:1.4;min-height:1.4em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* An imported image has no prompt: its line keeps one row of height and the footer sits at the bottom, so mixed rows align (#113). */
+.dsh-ig-card-footer-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:auto;padding-top:2px}
 .dsh-ig-card-meta-text{font-size:11px;color:var(--dsw-alias-label-tertiary,#94a3b8);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dsh-ig-card-fav-btn{appearance:none;border:0;background:transparent;color:var(--dsw-alias-label-tertiary,#94a3b8);padding:2px;border-radius:4px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:color .15s,transform .15s;flex-shrink:0}
 .dsh-ig-card-fav-btn:hover{color:#ef4444;transform:scale(1.15)}

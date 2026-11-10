@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { createImageResultDefinition } from '../src/client/image-result-node.js'
+import { createImageResultDefinition, imageResultFromMeta, imageResultsFromMeta, originalFromMeta } from '../src/client/image-result-node.js'
 
 const attachment = {
   attachmentId: 'sha256:promoted-image',
@@ -249,5 +249,29 @@ describe('ptc dispatch image results (#38)', () => {
     expect(node).toMatchObject({
       data: { results: [{ prompt: 'a q-version comic', provider: '', model: '', output: '' }] },
     })
+  })
+})
+
+describe('original references in result metadata', () => {
+  const valid = { key: 'a'.repeat(64), bytes: 1234, mediaType: 'image/gif' }
+  const meta = (original: unknown) => ({ kind: 'dsh-image-gen', attachment, prompt: 'a gif', provider: 'openai-compat', model: 'relay', output: 'auto', original })
+
+  it('keeps a well-formed original reference', () => {
+    expect(imageResultFromMeta(meta(valid))).toMatchObject({ original: valid })
+    expect(originalFromMeta(valid)).toEqual(valid)
+  })
+
+  it('drops a malformed reference but keeps the image', () => {
+    for (const bad of [{ ...valid, key: 'A'.repeat(64) }, { ...valid, key: 'a'.repeat(63) }, { ...valid, bytes: 0 }, { ...valid, mediaType: 'text/plain' }, 'nope', null]) {
+      const result = imageResultFromMeta(meta(bad))
+      expect(result).toMatchObject({ prompt: 'a gif' })
+      expect(result).not.toHaveProperty('original')
+      expect(originalFromMeta(bad)).toBeUndefined()
+    }
+  })
+
+  it('reads the reference per item in a batch', () => {
+    const results = imageResultsFromMeta({ kind: 'dsh-image-gen-batch', images: [meta(valid), meta(undefined)] })
+    expect(results.map(result => result.original)).toEqual([valid, undefined])
   })
 })

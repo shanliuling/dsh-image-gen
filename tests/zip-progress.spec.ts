@@ -104,6 +104,19 @@ describe('zip progress jobs', () => {
     expect(sse.writableEnded).toBe(true)
   })
 
+  it('finishes an oversized form job using the token available before body parsing', async () => {
+    const token = 'oversized-form-job-1234'
+    const stream = Readable.from([Buffer.from('items=' + 'x'.repeat(200))]) as unknown as IncomingMessage
+    Object.assign(stream, { method: 'POST', url: '/plugins/dsh-image-gen/zip?token=' + token, headers: { host: '127.0.0.1:8765', 'content-type': 'application/x-www-form-urlencoded' } })
+    const res = new FakeResponse()
+    await serveZip(stream, res as unknown as ServerResponse, { maxBodyBytes: 64, readImage: vi.fn() })
+    expect(res.status).toBe(413)
+    const sse = new FakeResponse()
+    serveZipProgress(request('GET', '/plugins/dsh-image-gen/zip/progress?token=' + token), sse as unknown as ServerResponse)
+    expect(sse.body()).toContain('"state":"error"')
+    expect(sse.writableEnded).toBe(true)
+  })
+
   it('answers 404 for malformed tokens and waits for a valid one', async () => {
     const mod = await import('../src/zip-progress.js')
     const bad = new FakeResponse()

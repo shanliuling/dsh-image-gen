@@ -41,7 +41,7 @@ describe('gallery tombstone retention', () => {
     vi.resetModules()
   })
 
-  it('drops tombstones past the retention window and keeps recent ones', async () => {
+  it('keeps deleted IDs after maintenance so old sessions cannot resurrect them', async () => {
     const stores = installFakeIndexedDB()
     const store = await import('../src/client/gallery-store.js')
     const map = stores.get('gallery_tombstones')
@@ -49,9 +49,11 @@ describe('gallery tombstone retention', () => {
     map?.set('new', { id: 'new', deletedAt: Date.now() })
 
     const removed = await store.pruneTombstones(1_000)
-    expect(removed).toBe(1)
-    expect(map?.has('old')).toBe(false)
+    expect(removed).toBe(0)
+    expect(map?.has('old')).toBe(true)
     expect(map?.has('new')).toBe(true)
+    await store.saveGalleryItem({ id: 'old', attachment: { attachmentId: 'sha256:' + 'a'.repeat(64), mediaType: 'image/png', bytes: 1 }, provider: 'openai', prompt: '', model: '' })
+    expect(stores.get('gallery_history')?.has('old')).toBe(false)
   })
 
   it('keeps everything inside the window', async () => {

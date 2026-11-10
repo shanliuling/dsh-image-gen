@@ -15,8 +15,9 @@ import { copyImageBlob, createImageThumbnail, downloadBlobUrl } from './browser-
 import { startGalleryImageDrag } from './tl/gallery-image-transfer.js'
 import { GalleryCanvasButton } from './tl/gallery-canvas-button.js'
 import type { DictKey } from './gallery-i18n.js'
-import { fetchGalleryItemBlob, extensionFor, GALLERY_PREFETCH_ORIGINAL_MAX_BYTES } from './gallery-media.js'
+import { fetchGalleryItemBlob, galleryDownloadName, shouldPrefetchOriginal } from './gallery-media.js'
 import { formatCardMeta, formatRelativeTime } from './gallery-format.js'
+import { GalleryGifTile } from './gif-gallery.js'
 
 /** Stable dispatchers shared by every card, so memoized cards never re-render for selection changes. */
 export interface GalleryCardActions {
@@ -53,6 +54,7 @@ export const GalleryCard = memo(function GalleryCard({
   const [error, setError] = useState<string>()
   const [thumbFailed, setThumbFailed] = useState(false)
   const [thumbAttempt, setThumbAttempt] = useState(0)
+  const [hovered, setHovered] = useState(false)
 
   // The host renders a cached 320px variant, so tiles never fetch originals;
   // the in-page pipeline below only runs when that route is unavailable.
@@ -141,10 +143,11 @@ export const GalleryCard = memo(function GalleryCard({
   const downloadImage = async (e: MouseEvent) => {
     e.stopPropagation()
     try {
-      const objectUrl = URL.createObjectURL(await ensureOriginal())
+      const blob = await ensureOriginal()
+      const objectUrl = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = objectUrl
-      a.download = `dsh-${item.provider}-${item.id}.${extensionFor(item.original?.mediaType ?? item.attachment.mediaType)}`
+      a.download = galleryDownloadName(item, blob)
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)
@@ -169,13 +172,14 @@ export const GalleryCard = memo(function GalleryCard({
       className={`dsh-ig-gallery-card ${isSelected ? 'is-selected' : ''} ${isManageMode ? 'is-manage-mode' : ''}`}
       onClick={(e) => actions.click(item, index, e)}
       onPointerEnter={() => {
+        setHovered(true)
         // Native drag-out needs a decoded blob at dragstart, which cannot
         // await; prefetch on hover, but keep large raw originals out of it.
         if (blob !== undefined) return
-        if (item.original !== undefined && item.original.bytes > GALLERY_PREFETCH_ORIGINAL_MAX_BYTES) void ensureAttachment().catch(() => undefined)
-        else if (item.original !== undefined) void fetchGalleryItemBlob(item).then(setBlob).catch(() => undefined)
+        if (shouldPrefetchOriginal(item.original)) void fetchGalleryItemBlob(item).then(setBlob).catch(() => undefined)
         else void ensureAttachment().catch(() => undefined)
       }}
+      onPointerLeave={() => setHovered(false)}
     >
       {/* Upper media container */}
       <div className="dsh-ig-gallery-card-media">
@@ -214,6 +218,7 @@ export const GalleryCard = memo(function GalleryCard({
             }}
           />
         )}
+        <GalleryGifTile item={item} lang={lang} hovered={hovered} />
 
         {/* Hover quick action toolbar */}
         <div className="dsh-ig-card-toolbar">

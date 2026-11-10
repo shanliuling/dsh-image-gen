@@ -10,7 +10,7 @@
 
 ### 在 DeepSeek Harness 里，用说话的方式画图
 
-<p><b>对话批量生图 · 看得懂草图的 AI 画布 · Agent 自动套用 500+ Prompt 灵感 · 订阅账号免 Key</b></p>
+<p><b>对话批量生图 · GIF 动图 · 看得懂草图的 AI 画布 · Agent 自动套用 500+ Prompt 灵感 · 订阅账号免 Key</b></p>
 
 <p>
   <a href="https://www.npmjs.com/package/dsh-image-gen"><img src="https://img.shields.io/npm/v/dsh-image-gen?style=flat-square&color=4f6ef7" alt="npm version" /></a>
@@ -77,12 +77,22 @@ pnpm dsh plugin --profile web add dsh-image-gen@latest
 | 「把我圈出来的剑换成斧头，其他不变」                          | 🎯 **圈哪改哪**：只改你标出的局部                                              |
 | 「保持这个角色不变，换到雪地场景」                            | 🎭 **角色一致性**：图生图时保持同一个人物或物体，不会换成长得相似的另一个      |
 | 「同一个 Prompt，GPT 和 Gemini 各出一张对比」                 | ⚖️ **多模型对比**：并发调用多个模型，放在同一张画布上比较                      |
+| 「把这个角色做成一段挥手的 GIF 动图」                          | 🎞️ **GIF 动图**：直接生成循环动画，卡片里播放、调倍速，还能按帧写评论修改      |
 
 <img src="docs/assets/readme/workflow-overview.webp" alt="dsh-image-gen 完整 AI 图像创作工作流" width="100%" />
 
 ---
 
 ## 快速开始
+
+### 加固下载（可选）
+
+两条可选设置加固离开本机的网络路径，默认全部关闭：
+
+- `strictImageDownloads`：结果 URL 必须是公网 HTTPS 443。DNS 解析结果会校验并固定用于本次请求，不跟随 provider 结果中的重定向，响应遵守图片字节上限。
+- `requireHostAdmission`：宿主 connection admission 服务缺失或异常时，插件 Web 路由一律 503 拒绝，而不是裸奔。
+
+默认关闭是因为 TUN 代理或自定义企业解析器可能故意返回内网地址；开启任一设置即假定你的出口是直连。
 
 ### 1. 安装插件
 
@@ -122,7 +132,7 @@ pnpm dsh plugin --profile web add ./dsh-image-gen
 
 > DSH 0.1.5 及更早版本没有插件面板，入口仍为「设置 → 插件 → 插件配置 → 图像生成」；插件已同时兼容两种入口。
 
-选择 Provider，填写自己的 API Key，并按需调整模型、Endpoint / Base URL 与工作区保存选项。填好 Key 后可点击**「测试连接」**验证可用性，或点击**「拉取模型」**一键获取该厂商支持的全部生图模型，无需手动查文档。使用 ComfyUI 时，请填写 DSH Host 可访问的服务地址，并导入 **API Format Workflow JSON**。
+选择 Provider，填写自己的 API Key，并按需调整模型、Endpoint / Base URL 与工作区保存选项。填好 Key 后可点击**「测试连接」**验证可用性，或点击**「拉取模型」**一键获取该厂商支持的全部生图模型，无需手动查文档。使用 ComfyUI 时，请填写 DSH Host 可访问的服务地址，并导入 **API Format Workflow JSON**；导入多个工作流后，可在对话输入框旁的生图按钮里直接切换。
 
 已有 ChatGPT、Grok 或 Google 订阅？无需填写 API Key：展开对应的订阅 Provider 行，点击**「登录」**并在浏览器完成授权，即可直接开始文生图与图生图。
 
@@ -229,6 +239,16 @@ pnpm dsh plugin --profile web add ./dsh-image-gen
 
 <br />
 
+### 🎞️ GIF 动图：生成、播放、按帧修改
+
+使用 GPT Image 2.6 等支持动图的模型时，直接在对话里说「做成 GIF / 动图」即可得到循环动画，也可以把参考图里的角色做成动图。帧数与帧时长可用 `frame_count`（2–16）、`frame_duration_ms`（20–2000 ms）指定。
+
+- 生成结果是 GIF 时，对话卡片直接播放动画：左下角调倍速（0.2×–2×），工具栏的下载菜单可按当前倍速或原速下载 GIF、或下载当前帧（PNG）；点开大图有播放键、逐帧缩略图时间轴（悬停预览、点击停在这一帧）和倍速。图库里的 GIF 带角标、悬停即播放，大图同样可播放与下载。GIF 文件可直接拖出，重新生成仍得到 GIF（剪贴板只支持静态图，复制得到的是单帧）。
+- GIF 卡片右下角「编辑」（或大图播放条的「编辑帧」）可按帧写修改意见：在画面上点位置写评论，评论只显示在它所在的那一帧，也可切到「全部帧」一次看全；一次发送即按评论重绘整段，新结果作为新版本保留并会动（仅 OpenAI 与兼容渠道，且中转需支持图生图；不支持时可一键改为描述后重新生成）。
+- 支持渠道：OpenAI 官方与 OpenAI 兼容中转（需模型与中转支持 GIF）。ChatGPT 订阅使用的 Codex 图片接口目前上游未开放 GIF，暂不支持。
+
+<br />
+
 ### ✨ 500+ Prompt 灵感：Agent 会自己去找
 
 内置手绘风格手册（风格 / 排版 / 单色主题色）和 awesome-gpt-image-2 案例集，共 500+ 个可直接复用的 Prompt。
@@ -305,6 +325,7 @@ pnpm dsh plugin --profile web add ./dsh-image-gen
 
 - 导入并管理多个命名工作流，支持预设 Prompt 和常用占位符。
 - Agent 可按名称选择工作流，在对话中完成文生图、图生图和批量生图。
+- 占位符：`{{prompt}}`、`{{seed}}`；宽高写 `{{width}}`/`{{height}}` 后，Agent 传入的尺寸或比例才会生效（默认 1024×1024）；图生图在 LoadImage 写 `{{image}}`，多张参考图就写多个，按节点编号顺序对应。
 
 > ComfyUI 暂未接入 Studio 和多模型对比。
 
@@ -322,23 +343,24 @@ pnpm dsh plugin --profile web add ./dsh-image-gen
 
 ## Provider 支持情况
 
-| Provider                          | 对话生图 | 对话批量 | 对话编辑 | Studio | 多模型对比 |
-| :-------------------------------- | :------: | :------: | :------: | :----: | :--------: |
-| **Google Gemini**                 |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |
-| **OpenAI Images**                 |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |
-| **OpenAI Compatible（中转站）**   |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |
-| **ByteDance Seedream / 火山方舟** |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |
-| **Aliyun DashScope / Qwen Image** |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |
-| **xAI Grok Imagine**              |    ✅    |    ✅    | ⚠️ 有限  |   ✅   |     ✅     |
-| **智谱 GLM-Image**                |    ✅    |    ✅    |    —     |   ✅   |     ✅     |
-| **Local ComfyUI**                 |    ✅    |    ✅    | ✅ 单图  |   —    |     —      |
-| **ChatGPT 订阅（免 Key）**        |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |
-| **Grok 订阅（免 Key）**           |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |
-| **Google 订阅（免 Key）**         |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |
+| Provider                          | 对话生图 | 对话批量 | 对话编辑 | Studio | 多模型对比 | GIF |
+| :-------------------------------- | :------: | :------: | :------: | :----: | :--------: | :-: |
+| **Google Gemini**                 |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |  —  |
+| **OpenAI Images**                 |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     | ✅  |
+| **OpenAI Compatible（中转站）**   |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     | ✅  |
+| **ByteDance Seedream / 火山方舟** |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |  —  |
+| **Aliyun DashScope / Qwen Image** |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |  —  |
+| **xAI Grok Imagine**              |    ✅    |    ✅    | ⚠️ 有限  |   ✅   |     ✅     |  —  |
+| **智谱 GLM-Image**                |    ✅    |    ✅    |    —     |   ✅   |     ✅     |  —  |
+| **Local ComfyUI**                 |    ✅    |    ✅    | ✅ 多图  |   —    |     —      |  —  |
+| **ChatGPT 订阅（免 Key）**        |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |  —  |
+| **Grok 订阅（免 Key）**           |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |  —  |
+| **Google 订阅（免 Key）**         |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |  —  |
 
 > Studio 与多模型对比目前只支持云端 Provider（含订阅通道）；多模型对比调用的是各 Provider 在设置中已配置的模型。
 > 智谱 GLM-Image 上游本身不支持图生图；xAI 图生图走 OpenAI 兼容协议（multipart），部分网关可能需等待后续适配。
 > 订阅通道通过账号登录使用（免 API Key），图生图走各订阅渠道的编辑接口（最多 5 张参考图），比例与清晰度可在 Studio 中直接选择。
+> OpenAI 与兼容渠道的对话生图和图生图都可以直接要求输出 GIF 动图，例如把参考图里的角色做成动图（需模型与中转支持；图生图还要求中转支持改图接口），帧数、帧时长等参数见 [Provider 配置参考](docs/providers.md)。ChatGPT 订阅使用的接口暂不支持 GIF 输出。
 
 📖 **默认模型与 Endpoint、各 Provider 的比例 / 清晰度、尺寸表、水印、中转站编辑格式等高级配置，见 [Provider 配置参考](docs/providers.md)。**
 
@@ -349,9 +371,12 @@ pnpm dsh plugin --profile web add ./dsh-image-gen
 - **BYOK**：API Key 通过 DSH Credentials 服务保存，设置页不会回显 Key 明文。
 - **订阅登录**：订阅账号令牌经你授权登录后保存于 DSH Credentials，与 API Key 完全隔离，浏览器侧不接触令牌。
 - **云端请求**：Prompt 与本次使用的参考图会发送给所选 Provider，请遵守对应服务条款。
+- **上游图片下载**：沿用宿主已有的网络和代理配置，不额外拦截 Fake-IP、内网或回环地址。当前未提供完整的 SSRF 目标限制。
 - **本地 ComfyUI**：请求发送到用户配置的 ComfyUI 地址。
 - **工作区文件**：开启工作区保存后，对话结果会落盘；Studio 仅保存用户选中的候选图。
+- **GIF 原图**：动图结果的原始文件另存于原图保险库（`vaultEnabled` 可关闭），供卡片播放与导出，随图库删除一并清理。
 - **图库与收藏**：图库元数据和收藏状态保存在当前浏览器本地存储中。
+- **删除记录**：普通删除会保留轻量的图片 ID 标记，超过 30 天也不会因重新打开旧会话而自动恢复到图库。
 - **灵感缓存**：案例元数据随插件提供，图片按需加载并缓存在本机，可随时清理。
 
 ## 常见问题
@@ -397,7 +422,7 @@ dsh --profile web --dump-config
 <details>
 <summary><strong>为什么 ComfyUI 没有出现在 Studio 中？</strong></summary>
 
-当前 Studio 与多模型对比仅支持云端 Provider，暂未接入 ComfyUI。ComfyUI 已支持在 Agent 对话中进行文生图、单图编辑、批量生图以及多个命名工作流。
+当前 Studio 与多模型对比仅支持云端 Provider，暂未接入 ComfyUI。ComfyUI 已支持在 Agent 对话中进行文生图、图生图（支持多张参考图）、批量生图以及多个命名工作流。
 
 </details>
 

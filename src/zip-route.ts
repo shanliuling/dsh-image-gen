@@ -14,10 +14,12 @@ export interface ZipRouteDeps {
   /** Hard cap on how many attachments one archive may contain. */
   maxEntries?: number
   maxBodyBytes?: number
+  /** Real output budget, including raw originals and ZIP bookkeeping. */
+  maxArchiveBytes?: number
 }
 
 const DEFAULT_MAX_ENTRIES = 2000
-const DEFAULT_MAX_BODY_BYTES = 1024 * 1024
+const DEFAULT_MAX_BODY_BYTES = 4 * 1024 * 1024
 /** Sanity ceiling: ZIP64 removed the 4 GiB cap, not an accidental 2000 × 40 GiB. */
 const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024 * 1024
 const IMAGE_EXTENSIONS: Record<string, string> = {
@@ -48,27 +50,25 @@ export async function serveZip(req: IncomingMessage, res: ServerResponse, deps: 
   }
   if (!sameOrigin(req)) return jsonError(res, 403, 'origin-rejected')
 
+  const queryToken = new URL(req.url ?? '/', 'http://x').searchParams.get('token') ?? ''
+  let jobToken = isValidZipToken(queryToken) ? queryToken : ''
+  const fail = (status: number, code: string): void => {
+    if (jobToken !== '') { createZipJob(jobToken, 0); finishZipJob(jobToken, 'error') }
+    jsonError(res, status, code)
+  }
+
   let body: string
   try {
     body = await readBody(req, deps.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES)
   } catch {
-    return jsonError(res, 413, 'request-too-large')
+    return fail(413, 'request-too-large')
   }
 
   const params = new URLSearchParams(body)
   const tokenParam = params.get('token') ?? ''
-  const jobToken = isValidZipToken(tokenParam) ? tokenParam : ''
+  if (jobToken === '' && isValidZipToken(tokenParam)) jobToken = tokenParam
   // Finish the matching SSE job before answering an error: otherwise the
   // progress stream keeps a placeholder alive and the button never recovers.
-  const fail = (status: number, code: string): void => {
-    if (jobToken !== '') {
-      // The SSE stream may not have connected yet; create the job first so a
-      // late subscriber still sees the terminal state instead of a placeholder.
-      createZipJob(jobToken, 0)
-      finishZipJob(jobToken, 'error')
-    }
-    jsonError(res, status, code)
-  }
   const rawItems = params.get('items')
   if (rawItems === null) return fail(400, 'invalid-request')
   let parsed: unknown
@@ -100,7 +100,8 @@ export async function serveZip(req: IncomingMessage, res: ServerResponse, deps: 
 
   let declaredBytes = 0
   for (const item of items) declaredBytes += item.attachment.bytes
-  if (declaredBytes > MAX_ARCHIVE_BYTES) return fail(413, 'archive-too-large')
+  const maxArchiveBytes = deps.maxArchiveBytes ?? MAX_ARCHIVE_BYTES
+  if (declaredBytes > maxArchiveBytes) return fail(413, 'archive-too-large')
 
   if (jobToken !== '') createZipJob(jobToken, items.length)
 
@@ -112,7 +113,7 @@ export async function serveZip(req: IncomingMessage, res: ServerResponse, deps: 
     'x-content-type-options': 'nosniff',
   })
 
-  const zip = new ZipStreamWriter(res)
+  const zip = new ZipStreamWriter(res, { maxBytes: maxArchiveBytes })
   const skipped: string[] = []
   const onClose = (): void => {
     // Request close fires when the POST body is consumed, not when the download
@@ -123,17 +124,24 @@ export async function serveZip(req: IncomingMessage, res: ServerResponse, deps: 
   }
   res.on('close', onClose)
 
+  const stopped = (): boolean => {
+    if (zip.isClosed) return true
+    if (jobToken !== '' && isZipJobCancelled(jobToken)) {
+      finishZipJob(jobToken, 'cancelled')
+      res.destroy()
+      return true
+    }
+    return false
+  }
+
   try {
     for (let index = 0; index < items.length; index += 1) {
-      if (jobToken !== '' && isZipJobCancelled(jobToken)) {
-        finishZipJob(jobToken, 'cancelled')
-        res.destroy()
-        return
-      }
+      if (stopped()) return
       const item = items[index]!
       let original: { data: Uint8Array; mediaType: ImageMediaType } | undefined
       if (item.originalKey !== undefined && deps.readVault !== undefined) {
         try { original = await deps.readVault(item.originalKey, item.originalMediaType) } catch { original = undefined }
+        if (stopped()) return
       }
       const mediaType = original?.mediaType ?? item.attachment.mediaType
       const extension = IMAGE_EXTENSIONS[mediaType] ?? 'png'
@@ -148,30 +156,30 @@ export async function serveZip(req: IncomingMessage, res: ServerResponse, deps: 
           await zip.add(entryName, Buffer.from(original.data))
         } else {
           const stored = await deps.readImage(item.attachment)
+          if (stopped()) return
           await zip.add(entryName, Buffer.from(stored.data))
         }
       } catch (err) {
-        if (zip.bytesWritten > 0 && isClosed(zip, err)) break
+        if (isClosed(zip, err)) return
+        if (err instanceof ZipTooLargeError) throw err
         skipped.push(String(item.attachment.attachmentId) + '\t' + (err instanceof Error ? err.message : 'unavailable'))
       }
       if (jobToken !== '') updateZipJob(jobToken, index + 1)
     }
     if (skipped.length > 0) {
+      if (stopped()) return
       await zip.add('skipped.txt', Buffer.from(skipped.join('\n') + '\n', 'utf8'))
     }
     // Cancellation can arrive while the last attachment is being read or
     // written; do not let that export finish as a success.
-    if (jobToken !== '' && isZipJobCancelled(jobToken)) {
-      finishZipJob(jobToken, 'cancelled')
-      res.destroy()
-      return
-    }
+    if (stopped()) return
     await zip.finish()
     // res.end() only means the data was handed to the socket; wait for the
     // actual flush before reporting a completed archive.
     await waitForResponseFinish(res)
     if (jobToken !== '') finishZipJob(jobToken, 'done')
   } catch (err) {
+    if (isClosed(zip, err)) return
     if (jobToken !== '') finishZipJob(jobToken, 'error')
     if (!res.headersSent) {
       jsonError(res, err instanceof ZipTooLargeError ? 413 : 500, err instanceof ZipTooLargeError ? 'archive-too-large' : 'zip-failed')
@@ -206,7 +214,7 @@ function replaceExtension(name: string, extension: string): string {
 }
 
 function isClosed(zip: ZipStreamWriter, err: unknown): boolean {
-  return zip.bytesWritten > 0 && err instanceof Error && err.message === 'client closed the download'
+  return zip.isClosed || err instanceof Error && err.message === 'client closed the download'
 }
 
 function sameOrigin(req: IncomingMessage): boolean {

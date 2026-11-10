@@ -46,13 +46,16 @@ import { evictAttachmentCache, fetchAttachmentBlob } from './image-cache.js'
 import { shouldShowBatchBar } from './gallery-batch-bar.js'
 import { mergeGalleryItems } from './gallery-merge.js'
 import { copyImageBlob, createZipBlob, downloadBlobUrl, type ZipFileInput } from './browser-image-utils.js'
-import { conversationRegenerateRequest } from './conversation-regenerate.js'
+import { conversationRegenerateRequest, gifOutputRequest } from './conversation-regenerate.js'
+import { readGifInfo } from '../gif-info.js'
+import { imageVersionKey, originalFromMeta } from './image-result-node.js'
 import { STUDIO_ROUTE, type StudioWorkspaceInfo, type StudioGenerateResponse } from '../shared.js'
 
 import { DICT, type DictKey } from './gallery-i18n.js'
-import { canUseServerZip, deleteVaultOriginals, extensionFor, fetchGalleryItemBlob, formatStorageBytes, imageMediaTypeOf, postZipDownload, syncVaultRefs, vaultKeysOf, type GalleryStorageStats } from './gallery-media.js'
+import { canUseServerZip, deleteVaultOriginals, extensionFor, fetchGalleryItemBlob, formatStorageBytes, galleryDownloadName, imageMediaTypeOf, persistGalleryRecord, postZipDownload, syncVaultRefs, vaultKeysOf, vaultProfileId, type GalleryStorageStats } from './gallery-media.js'
 import { formatCardMeta, formatRelativeTime, getItemRatio } from './gallery-format.js'
 import { GalleryCard, type GalleryCardActions } from './gallery-card.js'
+import { GalleryGifBar, GalleryGifDownload, GalleryGifStage, useGalleryGifPreview } from './gif-gallery.js'
 
 const GALLERY_RENDER_BATCH = 120
 /** Host-provided locale service; `active` may be missing before the locale loads. */
@@ -238,6 +241,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
   }, [locale])
 
   const dict = lang === 'en' ? DICT.en : DICT.zh
+  const gifPreview = useGalleryGifPreview(previewItem, lang)
   // Stable identity: memoized cards only re-render when their own state changes.
   const t = useMemo(() => {
     return (key: DictKey, params?: Record<string, string>): string => {
@@ -281,9 +285,11 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
         const name = entry.file.name.length > 0 ? entry.file.name : `image.${extensionFor(entry.mediaType)}`
         form.append('images', entry.file, name)
       }
+      const profileId = vaultProfileId()
       const response = await fetch(IMPORT_ROUTE, {
         method: 'POST',
         credentials: 'same-origin',
+        ...(profileId === undefined ? {} : { headers: { 'x-dsh-vault-profile': profileId } }),
         body: form,
       })
       if (!response.ok) throw new Error(`HTTP ${String(response.status)}`)
@@ -375,11 +381,13 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
         setItems(prev => mergeGalleryItems(prev, res))
         if (!pruned) {
           // One sweep per mount drops thumbnails left behind by older deletions
-          // and tombstones past the multi-window retention window.
+          // and compact old deletion metadata without forgetting deleted IDs.
           pruned = true
           void pruneGalleryThumbs(res.map(item => String(item.attachment.attachmentId)))
           void pruneTombstones()
-          syncVaultRefs(vaultKeysOf(res))
+          void syncVaultRefs(vaultKeysOf(res)).catch((err: unknown) => {
+            console.warn('[dsh-image-gen] Failed to sync original references:', err)
+          })
         }
       }).catch((err: unknown) => {
         console.warn('[dsh-image-gen] Failed to read gallery items:', err)
@@ -603,6 +611,10 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
       if (activeWorkspace?.path) {
         request.workspaceRoot = activeWorkspace.path
       }
+      // An animated item asks for an animation again, with the frame facts of the file it has.
+      if (previewItem.original?.mediaType === 'image/gif' || previewItem.attachment.mediaType === 'image/gif') {
+        request.output = gifOutputRequest(readGifInfo(new Uint8Array(await (await fetchGalleryItemBlob(previewItem)).arrayBuffer())))
+      }
 
       const response = await fetch(STUDIO_ROUTE, {
         method: 'POST',
@@ -623,8 +635,9 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
         )
       }
 
+      const original = originalFromMeta(payload.original)
       const newItem: GalleryItem = {
-        id: String(payload.attachment.attachmentId),
+        id: imageVersionKey(String(payload.attachment.attachmentId), original),
         attachment: payload.attachment,
         prompt: payload.prompt,
         provider: payload.provider,
@@ -641,9 +654,10 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
         ...(activeWorkspace?.path ? { workspacePath: activeWorkspace.path } : {}),
         ...(activeWorkspace?.workspaceId ? { workspaceId: activeWorkspace.workspaceId } : {}),
         ...(currentSessionId ? { sessionId: currentSessionId } : {}),
+        ...(original === undefined ? {} : { original }),
       }
 
-      const savedOk = await saveGalleryItem(newItem)
+      const savedOk = await persistGalleryRecord(newItem)
 
       if (activeTab !== 'gallery') {
         setActiveTab('gallery')
@@ -972,7 +986,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
         // size cap, and a direct anchor would save the 404 JSON as an image.
         const blob = await fetchGalleryItemBlob(single)
         const objectUrl = URL.createObjectURL(blob)
-        downloadBlobUrl(objectUrl, `dsh-${single.provider}-${single.id}.${extensionFor(single.original?.mediaType ?? single.attachment.mediaType)}`)
+        downloadBlobUrl(objectUrl, galleryDownloadName(single, blob))
         URL.revokeObjectURL(objectUrl)
         showToast(t('batchDownloadSingleToast'))
         return
@@ -1790,7 +1804,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
             {/* Render the image first: the GET route paints progressively, and
                 gating it on previewLoading left the spinner on screen forever
                 because the <img> never mounted to fire onLoad. */}
-            {previewUrl ? (
+            {gifPreview !== undefined ? <GalleryGifStage preview={gifPreview} poster={previewUrl ?? undefined} /> : previewUrl ? (
               <img
                 className="dsh-ig-lightbox-img"
                 src={previewUrl}
@@ -1832,6 +1846,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
             ) : null}
           </div>
 
+          {gifPreview !== undefined ? <GalleryGifBar preview={gifPreview} /> : null}
           {/* Bottom Floating Pill Bar: Prompt & Actions */}
           <div
             className="dsh-ig-lightbox-bottombar"
@@ -1874,12 +1889,11 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
                 <span>{t('copyImg')}</span>
               </button>
 
-              <button
+              {gifPreview !== undefined ? <GalleryGifDownload preview={gifPreview} /> : <button
                 type="button"
                 className="dsh-ig-lightbox-btn"
                 title={t('download')}
                 onClick={async () => {
-                  const extension = extensionFor(previewItem.original?.mediaType ?? previewItem.attachment.mediaType)
                   // The lightbox shows a 1600 px variant; downloads keep the
                   // original bytes and fall back to the attachment when the vault
                   // copy was evicted.
@@ -1888,7 +1902,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
                       ? await fetchOriginalBlob(previewItem)
                       : previewBlob ?? await fetchAttachmentBlob(previewItem.attachment)
                     const objectUrl = URL.createObjectURL(blob)
-                    downloadBlobUrl(objectUrl, `dsh-${previewItem.provider}-${previewItem.id}.${extension}`)
+                    downloadBlobUrl(objectUrl, galleryDownloadName(previewItem, blob))
                     URL.revokeObjectURL(objectUrl)
                   } catch {
                     showToast(t('batchDownloadFailed'))
@@ -1897,7 +1911,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
               >
                 <Download size={14} />
                 <span>{t('download')}</span>
-              </button>
+              </button>}
 
               <button
                 type="button"

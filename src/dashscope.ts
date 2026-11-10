@@ -1,6 +1,6 @@
-import { downloadPublicImage } from './public-image-download.js'
 /** DashScope Qwen Image generation and editing adapter. */
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
+import { downloadPublicImage } from './public-image-download.js'
 import { guardedFetch, readResponseBody } from './fetch-diagnostics.js'
 import { redactSecrets } from './redact.js'
 import { detectImageMediaType } from './reference-image.js'
@@ -13,6 +13,7 @@ export interface DashScopeImageOptions {
   size?: string
   watermark?: boolean
   maxBytes: number
+  strictImageDownloads?: boolean
   signal?: AbortSignal
 }
 
@@ -145,9 +146,30 @@ async function downloadImageBlob(
   imageUrl: string,
   options: DashScopeImageOptions,
 ): Promise<{ data: Uint8Array; mediaType: ImageAttachmentRef['mediaType'] }> {
-  const { data, contentType } = await downloadPublicImage(imageUrl, options)
-  const mediaType = detectImageMediaType(data) ?? imageMediaType(contentType)
-  if (mediaType === undefined) throw new Error(`DashScope image download returned an unsupported content type: ${contentType ?? 'none'}`)
+  if (options.strictImageDownloads === true) {
+    const { data, contentType } = await downloadPublicImage(imageUrl, options)
+    const mediaType = detectImageMediaType(data) ?? imageMediaType(contentType)
+    if (mediaType === undefined) throw new Error('DashScope image download returned an unsupported content type')
+    return { data, mediaType }
+  }
+  const imageResponse = await guardedFetch('DashScope image download', options.signal, () => fetch(imageUrl, {
+    ...(options.signal ? { signal: options.signal } : {}),
+  }), options.apiKey)
+  if (!imageResponse.ok) {
+    throw new Error(`Failed to fetch DashScope image from URL (${String(imageResponse.status)})`)
+  }
+  const buffer = await readResponseBody(imageResponse, () => imageResponse.arrayBuffer())
+  if (buffer.byteLength > options.maxBytes) {
+    throw new Error(`DashScope generated image (${String(buffer.byteLength)} bytes) exceeds the ${String(options.maxBytes)} byte limit`)
+  }
+  // Sniff first: the OSS CDN can answer a generic content-type (or none) while
+  // the bytes stay PNG/WebP, and a mis-declared type fails the host attachment
+  // service with IMAGE_TYPE_MISMATCH (#61).
+  const data = new Uint8Array(buffer)
+  const mediaType = detectImageMediaType(data) ?? imageMediaType(imageResponse.headers.get('content-type'))
+  if (mediaType === undefined) {
+    throw new Error(`DashScope image download returned an unsupported content type: ${imageResponse.headers.get('content-type') ?? 'none'}`)
+  }
   return { data, mediaType }
 }
 

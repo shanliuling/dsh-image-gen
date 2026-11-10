@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { apply } from '../src/index.js'
 import { SETTINGS_HEALTH_ROUTE } from '../src/shared.js'
+import { withWebAdmission } from '../src/web-route.js'
 
 function harness(rejection: 401 | 403 | undefined) {
   const routes: WebRoute[] = []
@@ -52,8 +53,16 @@ function response(): ServerResponse {
 }
 
 describe('plugin web route admission', () => {
-  it('applies host authentication to every registered route before dispatch', async () => {
-    const { routes, requestRejection } = harness(401)
+  it('keeps legacy host dispatch when no admission service is available', async () => {
+    const handler = vi.fn()
+    const route = withWebAdmission({ kind: 'exact', path: '/legacy-host', handler }, () => undefined)
+    const res = response()
+    await route.handler(request(), res)
+    expect(handler).toHaveBeenCalledOnce()
+    expect(res.statusCode).toBe(200)
+  })
+  it.each([401, 403] as const)('applies host rejection %i to every registered route before dispatch', async rejection => {
+    const { routes, requestRejection } = harness(rejection)
     expect(routes.length).toBeGreaterThan(8)
     const statuses: Array<{ path: string; status: number }> = []
     for (const route of routes) {
@@ -61,7 +70,7 @@ describe('plugin web route admission', () => {
       await route.handler(request(), res)
       statuses.push({ path: route.path, status: res.statusCode })
     }
-    expect(statuses).toEqual(routes.map(route => ({ path: route.path, status: 401 })))
+    expect(statuses).toEqual(routes.map(route => ({ path: route.path, status: rejection })))
     expect(requestRejection).toHaveBeenCalledTimes(routes.length)
   })
 

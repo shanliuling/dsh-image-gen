@@ -1,5 +1,10 @@
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { STUDIO_PROVIDERS, STUDIO_WATERMARK_VALUES, type StudioProvider, type StudioWatermark } from '../shared.js'
+import { imageVersionKey, originalFromMeta, type ImageResultPresentation } from './image-result-node.js'
+
+function revisionKey(revision: Pick<ConversationImageRevision, 'attachment' | 'original'>): string {
+  return imageVersionKey(String(revision.attachment.attachmentId), revision.original)
+}
 
 /** One regenerated version displayed in place of an original conversation image. */
 export interface ConversationImageRevision {
@@ -15,6 +20,8 @@ export interface ConversationImageRevision {
   resolution?: string
   generationQuality?: string
   watermark?: StudioWatermark
+  /** Raw animated bytes in the vault; the card plays this version from them. */
+  original?: ImageResultPresentation['original']
 }
 
 export interface ConversationImageRevisionChain {
@@ -36,7 +43,11 @@ export function loadConversationImageRevisionChain(originId: string): Conversati
     const value = JSON.parse(raw) as unknown
     if (!isChain(value, originId)) return empty()
     const currentIndex = Math.min(value.currentIndex, value.revisions.length)
-    return { originId, currentIndex, revisions: value.revisions }
+    // A corrupt vault reference costs only the animation, never the version.
+    return { originId, currentIndex, revisions: value.revisions.map(({ original, ...revision }) => {
+      const checked = originalFromMeta(original)
+      return checked === undefined ? revision : { ...revision, original: checked }
+    }) }
   } catch {
     return empty()
   }
@@ -48,7 +59,9 @@ export function appendConversationImageRevision(
   revision: ConversationImageRevision,
 ): ConversationImageRevisionChain {
   const current = loadConversationImageRevisionChain(originId)
-  const withoutDuplicate = current.revisions.filter(item => item.attachment.attachmentId !== revision.attachment.attachmentId)
+  // Animations sharing a first-frame still are still different versions.
+  const key = revisionKey(revision)
+  const withoutDuplicate = current.revisions.filter(item => revisionKey(item) !== key)
   const revisions = [...withoutDuplicate, revision].slice(-MAX_REVISIONS)
   const next = { originId, currentIndex: revisions.length, revisions }
   persist(next)

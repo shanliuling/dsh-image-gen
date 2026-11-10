@@ -2,6 +2,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { apply } from '../src/index.js'
 import { SubscriptionManager } from '../src/subscription.js'
+import { imageToolContext } from '../src/image-tool-context.js'
 
 function harness() {
   const tools: any[] = []
@@ -57,6 +58,16 @@ describe('image tool defaults and placeholders', () => {
     h.credentialListeners.get('credentials/reference-updated')!()
     await vi.waitFor(() => { expect(context!.text()).toContain(': none.') })
     expect(context!.text()).not.toContain('offline-test-key')
+  })
+  it('lists the ComfyUI workflow names the workflow argument accepts', () => {
+    expect(imageToolContext({ provider: 'openai' } as never)).not.toContain('ComfyUI workflows')
+    const workflows = [{ name: '人像 "8步"', json: '{}' }, { name: 'landscape', json: '{}' }]
+    const text = imageToolContext({ provider: 'comfyui', comfyuiWorkflows: workflows, comfyuiActiveWorkflow: 'landscape' } as never)
+    expect(text).toContain('ComfyUI workflows available for the workflow argument (provider=comfyui): "人像 \\"8步\\"", "landscape"; active: "landscape"')
+    const many = Array.from({ length: 23 }, (_, index) => ({ name: `wf-${String(index)}`, json: '{}' }))
+    const capped = imageToolContext({ provider: 'comfyui', comfyuiWorkflows: many } as never)
+    expect(capped).toContain('"wf-19" (+3 more); active: "wf-0"')
+    expect(capped).not.toContain('"wf-20"')
   })
   it('requires an explicit user request before model arguments are supplied', () => {
     const h = harness()

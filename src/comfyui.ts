@@ -1,6 +1,6 @@
 /** ComfyUI text-to-image and image-to-image adapters using an imported API-format workflow. */
 import type { ImageMediaType } from '@deepseek-ai/dsh-attachment'
-import { prepareComfyUIWorkflow, randomSeed } from './comfyui-workflow.js'
+import { prepareComfyUIWorkflow, randomSeed, type ComfyUISize } from './comfyui-workflow.js'
 import { redactSecrets } from './redact.js'
 import { detectImageMediaType } from './reference-image.js'
 
@@ -32,9 +32,11 @@ export async function generateComfyUIImage(input: ComfyUIJobInput & {
   workflowJson: string
   prompt: string
   maxBytes: number
+  /** Frame size for {{width}} / {{height}}; the default applies when omitted. */
+  size?: ComfyUISize
 }): Promise<GeneratedComfyUIImage> {
   const seed = randomSeed()
-  const workflow = prepareComfyUIWorkflow(input.workflowJson, input.prompt, seed)
+  const workflow = prepareComfyUIWorkflow(input.workflowJson, input.prompt, seed, undefined, input.size)
   const output = await runJob(input, async (baseURL, signal) => {
     const promptId = await submitWorkflow(baseURL, workflow, signal)
     const result = await waitForOutput(baseURL, promptId, signal)
@@ -43,17 +45,23 @@ export async function generateComfyUIImage(input: ComfyUIJobInput & {
   return { ...output, seed }
 }
 
-/** Upload one source image, run the workflow, and return its first final image. */
+/**
+ * Upload the source images, run the workflow, and return its first final
+ * image. The images fill the workflow's {{image}} inputs in node order.
+ */
 export async function editComfyUIImage(input: ComfyUIJobInput & {
   workflowJson: string
   prompt: string
-  sourceImage: ComfyUISourceImage
+  sourceImages: readonly ComfyUISourceImage[]
   maxBytes: number
+  size?: ComfyUISize
 }): Promise<GeneratedComfyUIImage> {
   const seed = randomSeed()
   const output = await runJob(input, async (baseURL, signal) => {
-    const imageName = await uploadSourceImage(baseURL, input.sourceImage, signal)
-    const workflow = prepareComfyUIWorkflow(input.workflowJson, input.prompt, seed, imageName)
+    const imageNames: string[] = []
+    // Sequential so ComfyUI's input folder sees them in order and a failure stops early.
+    for (const image of input.sourceImages) imageNames.push(await uploadSourceImage(baseURL, image, signal))
+    const workflow = prepareComfyUIWorkflow(input.workflowJson, input.prompt, seed, imageNames, input.size)
     const promptId = await submitWorkflow(baseURL, workflow, signal)
     const result = await waitForOutput(baseURL, promptId, signal)
     return await downloadOutput(baseURL, result, input.maxBytes, signal)

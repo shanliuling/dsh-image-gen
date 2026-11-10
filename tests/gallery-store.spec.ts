@@ -23,7 +23,7 @@ function createFakeIndexedDB() {
     get: (id: string) => {
       const request: FakeRequest = {
         onsuccess: null, onerror: null,
-        result: name === 'gallery_tombstones' ? undefined : records.get(id),
+        result: name === 'gallery_tombstones' ? (tombstoneIds.has(id) ? { id } : undefined) : records.get(id),
         error: undefined,
       }
       schedule(request)
@@ -44,7 +44,11 @@ function createFakeIndexedDB() {
 
   const db = {
     objectStoreNames: { contains: () => true },
-    transaction: (name: string) => ({ objectStore: () => objectStore(name) }),
+    transaction: (_names: string | string[]) => {
+      const tx = { objectStore: (name: string) => objectStore(name), oncomplete: null as (() => void) | null, onerror: null, onabort: null }
+      setTimeout(() => tx.oncomplete?.(), 0)
+      return tx
+    },
     onversionchange: null,
   }
 
@@ -79,6 +83,15 @@ beforeEach(() => { vi.resetModules() })
 afterEach(() => { vi.unstubAllGlobals() })
 
 describe('saveGalleryItem failure signalling', () => {
+  it('honors a deletion written by another tab after this tab cached the tombstones', async () => {
+    const fake = createFakeIndexedDB()
+    vi.stubGlobal('indexedDB', fake.indexedDB)
+    const store = await loadStore()
+    await store.saveGalleryItem(item('first'))
+    fake.tombstoneIds.add('deleted-elsewhere')
+    await store.saveGalleryItem(item('deleted-elsewhere'))
+    expect(fake.records.has('deleted-elsewhere')).toBe(false)
+  })
   it('resolves to false when IndexedDB cannot open, instead of swallowing the failure', async () => {
     const fake = createFakeIndexedDB()
     fake.state.failOpens = true

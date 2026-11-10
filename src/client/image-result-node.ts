@@ -1,5 +1,6 @@
 /** Modern DSH conversation node that keeps image artifacts outside Tool process folding. */
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
+import { VAULT_KEY_PATTERN } from '../shared.js'
 
 export const IMAGE_RESULT_NODE_KIND = 'dsh-image-result'
 
@@ -15,6 +16,8 @@ export interface ImageResultPresentation {
   readonly seed?: number
   /** Attachment ids of the edit sources when this image came from edit_image; used to rebuild canvas edit chains. */
   readonly sourceAttachmentIds?: readonly string[]
+  /** Raw bytes in the vault when the attachment is a normalized copy; today only an animated GIF. */
+  readonly original?: { readonly key: string; readonly bytes: number; readonly mediaType: ImageMediaType }
 }
 
 interface ImageResultState {
@@ -147,6 +150,7 @@ export function imageResultFromMeta(value: unknown): ImageResultPresentation | u
   if (meta?.kind !== 'dsh-image-gen') return undefined
   const attachment = imageAttachment(meta.attachment)
   if (attachment === undefined) return undefined
+  const original = originalFromMeta(meta.original)
   return {
     attachment,
     prompt: stringValue(meta.prompt, 'Generated Image'),
@@ -156,6 +160,7 @@ export function imageResultFromMeta(value: unknown): ImageResultPresentation | u
     output: stringValue(meta.output, ''),
     ...(typeof meta.savedTo === 'string' ? { savedTo: meta.savedTo } : {}),
     ...(typeof meta.seed === 'number' ? { seed: meta.seed } : {}),
+    ...(original === undefined ? {} : { original }),
   }
 }
 
@@ -186,6 +191,8 @@ const PTC_IMAGE_TOOL_NAMES: ReadonlySet<string> = new Set(['generate_image', 'ge
  * template rather than parsed out of natural language.
  */
 const PTC_SUMMARY_PATTERN = /^(?:Generated|Edited) one image with ([^/\s]+)\/(\S+) \((.+)\)\. Attachment ID: /
+/** The vault reference the tools append for an animated result (index.ts originalNote). */
+const ORIGINAL_NOTE_PATTERN = / Original animation \(for the result card only\): vault ([a-f0-9]{64}), (\d+) bytes, (image\/[a-z]+)\./
 const PTC_SAVED_TO_PATTERN = / It was also saved to the workspace as (.+)\. (?:(?:Saving it to the workspace failed)|(?:It has no local file path)|(?:Respond to the user))/
 
 /**
@@ -223,6 +230,8 @@ export function imageResultsFromPtcDispatch(event: EventLike): readonly ImageRes
     if (attachment === undefined) continue
     const summary = PTC_SUMMARY_PATTERN.exec(summaryText)
     const savedTo = PTC_SAVED_TO_PATTERN.exec(summaryText)?.[1]
+    const originalMatch = ORIGINAL_NOTE_PATTERN.exec(summaryText)
+    const original = originalMatch === null ? undefined : originalFromMeta({ key: originalMatch[1], bytes: Number(originalMatch[2]), mediaType: originalMatch[3] })
     const promptMarker = '\nImage prompt: '
     const promptAt = data.name === 'generate_images' ? summaryText.indexOf(promptMarker) : -1
     results.push({
@@ -233,6 +242,7 @@ export function imageResultsFromPtcDispatch(event: EventLike): readonly ImageRes
       output: summary?.[3] ?? '',
       ...(savedTo !== undefined ? { savedTo } : {}),
       ...(sourceIds !== undefined ? { sourceAttachmentIds: sourceIds } : {}),
+      ...(original === undefined ? {} : { original }),
     })
   }
   return results
@@ -281,6 +291,27 @@ function positiveInteger(value: unknown): value is number {
 
 function stringValue(value: unknown, fallback: string): string {
   return typeof value === 'string' ? value : fallback
+}
+
+/**
+ * The identity of one image version. A still is its attachment; an animated
+ * result is also its vault original, because the host normalizes a GIF to a
+ * still of its first frame and two animations that differ only after that
+ * frame share one attachment. Keying versions, gallery records and frame notes
+ * by the attachment alone would merge such animations into one.
+ */
+export function imageVersionKey(attachmentId: string, original: { readonly key: string } | undefined): string {
+  return original === undefined ? attachmentId : `${attachmentId}#gif:${original.key}`
+}
+
+/** Parse a vault reference; anything malformed drops the reference, never the image that carries it. */
+export function originalFromMeta(value: unknown): ImageResultPresentation['original'] {
+  const candidate = record(value)
+  if (candidate === undefined
+    || typeof candidate.key !== 'string' || !VAULT_KEY_PATTERN.test(candidate.key)
+    || !positiveInteger(candidate.bytes)
+    || !isImageMediaType(candidate.mediaType)) return undefined
+  return { key: candidate.key, bytes: candidate.bytes, mediaType: candidate.mediaType }
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {

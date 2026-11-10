@@ -1,9 +1,16 @@
-import type { GalleryItem } from './gallery-store.js'
+import { isGalleryItemTombstoned, saveGalleryItem, type GalleryItem } from './gallery-store.js'
 import { VAULT_DELETE_ROUTE, VAULT_REFS_ROUTE, ZIP_ROUTE, vaultUrlFor } from '../shared.js'
 import { fetchAttachmentBlob } from './image-cache.js'
 
 /** Hover prefetch stops pulling raw originals above this size; drag-out then uses the attachment. */
-export const GALLERY_PREFETCH_ORIGINAL_MAX_BYTES = 4 * 1024 * 1024
+const GALLERY_PREFETCH_ORIGINAL_MAX_BYTES = 4 * 1024 * 1024
+/** A GIF original is the only copy that animates, so it is worth prefetching further than a still. */
+const GALLERY_PREFETCH_GIF_MAX_BYTES = 16 * 1024 * 1024
+
+export function shouldPrefetchOriginal(original: GalleryItem['original']): boolean {
+  if (original === undefined) return false
+  return original.bytes <= (original.mediaType === 'image/gif' ? GALLERY_PREFETCH_GIF_MAX_BYTES : GALLERY_PREFETCH_ORIGINAL_MAX_BYTES)
+}
 
 /** Drop vault files the gallery no longer references; failures are non-fatal. */
 const VAULT_PROFILE_KEY = 'dsh-ig-vault-profile-v1'
@@ -28,13 +35,15 @@ export function vaultProfileId(): string | undefined {
 /** Sync this profile's references; the server never deletes originals here. */
 export function syncVaultRefs(keys: string[]): Promise<void> {
   const profileId = vaultProfileId()
-  if (profileId === undefined) return Promise.resolve()
+  if (profileId === undefined) return keys.length === 0 ? Promise.resolve() : Promise.reject(new Error('Original reference storage unavailable'))
   return fetch(VAULT_REFS_ROUTE, {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ profileId, keys }),
-  }).then(() => undefined).catch(() => undefined)
+  }).then(response => {
+    if (!response.ok) throw Object.assign(new Error('Original reference sync failed (HTTP ' + String(response.status) + ')'), { status: response.status })
+  })
 }
 
 /** Manual gallery deletion: remove originals only after the server checks every profile. */
@@ -53,6 +62,30 @@ export function deleteVaultOriginals(deleteKeys: string[], remainingKeys: string
       confirm: true,
     }),
   }).catch(() => undefined)
+}
+
+export type GalleryRecord = Parameters<typeof saveGalleryItem>[0]
+
+/**
+ * Persist a gallery record and, when it carries an animated original, claim
+ * that original for this browser profile at once. Every profile that renders
+ * the card writes the record; without an immediate claim another profile
+ * could delete the file first and leave this one syncing a dangling key (410)
+ * until the record is removed. A deleted (tombstoned) record is neither
+ * written nor claimed, or re-opening the conversation would keep the file
+ * alive after every gallery dropped it. Only a vault that says the file is
+ * gone (410) drops the reference from the record; a registry it cannot write
+ * (409) or a transient failure keeps it, and the next mount claims again.
+ */
+export async function persistGalleryRecord(record: GalleryRecord): Promise<boolean> {
+  const saved = await saveGalleryItem(record)
+  if (!saved || record.original === undefined || await isGalleryItemTombstoned(record.id)) return saved
+  try {
+    await syncVaultRefs([record.original.key])
+  } catch (error) {
+    if ((error as { status?: unknown }).status === 410) await saveGalleryItem({ ...record, original: undefined })
+  }
+  return saved
 }
 
 export function vaultKeysOf(items: readonly GalleryItem[]): string[] {
@@ -123,6 +156,11 @@ export function extensionFor(mediaType: string): string {
   return 'png'
 }
 
+/** Download names must follow the resolved bytes, including vault fallbacks. */
+export function galleryDownloadName(item: GalleryItem, blob: Blob): string {
+  return `dsh-${item.provider}-${item.id}.${extensionFor(blob.type || item.attachment.mediaType)}`
+}
+
 /**
  * Ask the host to stream the archive through a hidden form post.
  * A real form navigation would replace the SPA, so the response lands in an
@@ -131,7 +169,13 @@ export function extensionFor(mediaType: string): string {
 export function postZipDownload(items: GalleryItem[], token: string): void {
   const payload = items.map(item => ({
     name: `dsh-${item.provider}-${item.id.slice(0, 8)}.${extensionFor(item.original?.mediaType ?? item.attachment.mediaType)}`,
-    attachment: item.attachment,
+    attachment: {
+      attachmentId: item.attachment.attachmentId,
+      mediaType: item.attachment.mediaType,
+      bytes: item.attachment.bytes,
+      width: item.attachment.width,
+      height: item.attachment.height,
+    },
     ...(item.original === undefined ? {} : { originalKey: item.original.key, originalMediaType: item.original.mediaType }),
   }))
   const sink = document.createElement('iframe')
@@ -142,7 +186,7 @@ export function postZipDownload(items: GalleryItem[], token: string): void {
   document.body.appendChild(sink)
   const form = document.createElement('form')
   form.method = 'POST'
-  form.action = ZIP_ROUTE
+  form.action = ZIP_ROUTE + (token === '' ? '' : '?token=' + encodeURIComponent(token))
   form.target = sink.name
   form.style.display = 'none'
   const field = document.createElement('input')

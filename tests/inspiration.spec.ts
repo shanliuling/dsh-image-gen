@@ -208,7 +208,7 @@ describe('inspiration HTTP route', () => {
 
     // Start slow in-flight fetch
     const slowReq = fetch(`${url}/image/awesome-gpt-image-2/${item.id}`, { headers: { origin: url } })
-    await new Promise(r => setTimeout(r, 20))
+    await vi.waitFor(() => expect(resolveSlowFetch).toBeTypeOf('function'))
 
     // User triggers clear cache while request is in flight
     await fetch(`${url}/cache/clear`, { method: 'POST', headers: { origin: url } })

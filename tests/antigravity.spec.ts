@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SubscriptionBlob } from '../src/subscription/blob.js'
 import { SubscriptionManager } from '../src/subscription/manager.js'
-import { antigravityResolveProject, setAntigravityVersionForTest } from '../src/subscription/vendors/antigravity.js'
+import { antigravityGenerateImage, antigravityResolveProject, compareVersions, getAntigravityVersion, initAntigravityVersion, MIN_ANTIGRAVITY_VERSION, setAntigravityVersionForTest } from '../src/subscription/vendors/antigravity.js'
 
 const blob: SubscriptionBlob = {
   accessToken: 'google-access-secret', refreshToken: 'google-refresh-secret',
@@ -25,7 +25,7 @@ const manager = () => new SubscriptionManager({
 } as never)
 
 describe('Antigravity discovery and failure diagnostics', () => {
-  beforeEach(() => { setAntigravityVersionForTest('2.0.6') })
+  beforeEach(() => { setAntigravityVersionForTest('3.4.5') })
   afterEach(() => { vi.unstubAllGlobals(); setAntigravityVersionForTest(undefined) })
 
   it.each([
@@ -179,7 +179,7 @@ describe('Antigravity discovery and failure diagnostics', () => {
     const originalHeaders = new Headers(original.init.headers)
     const retryHeaders = new Headers(retry.init.headers)
     expect(originalHeaders.get('User-Agent')).toBe('google-api-nodejs-client/9.15.1')
-    expect(retryHeaders.get('User-Agent')).toContain('Antigravity/2.0.6')
+    expect(retryHeaders.get('User-Agent')).toContain('Antigravity/3.4.5')
     originalHeaders.delete('User-Agent')
     retryHeaders.delete('User-Agent')
     expect([...retryHeaders]).toEqual([...originalHeaders])
@@ -233,7 +233,7 @@ describe('Antigravity discovery and failure diagnostics', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
     const error = await manager().generate({ vendor: 'antigravity', prompt: 'a blue cup' }).catch(value => value as Error)
-    expect(error.message).toContain('[Antigravity/2.0.6]')
+    expect(error.message).toContain('[Antigravity/3.4.5]')
     expect(error.message).toContain('HTTP 403')
     expect(error.message).toContain('HTTP 500')
     expect(error.message).toContain('[redacted]')
@@ -288,5 +288,32 @@ describe('Antigravity discovery and failure diagnostics', () => {
     vi.stubGlobal('fetch', fetchMock)
     await expect(antigravityResolveProject(blob, controller.signal)).rejects.toThrow('cancelled during version discovery')
     expect(fetchMock).toHaveBeenCalledTimes(5)
+  })
+
+  it('never sends a client version below the floor the backend still serves (#123)', async () => {
+    expect(compareVersions('2.0.6', MIN_ANTIGRAVITY_VERSION)).toBeLessThan(0)
+    expect(compareVersions('3.10.0', '3.9.9')).toBeGreaterThan(0)
+    setAntigravityVersionForTest(undefined)
+    expect(getAntigravityVersion()).toBe(MIN_ANTIGRAVITY_VERSION)
+    // A stale version from the updater is ignored; the changelog's newer one is used.
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(url.includes('auto-updater') ? 'Auto updater is running. Fixed Version: 2.0.6' : 'Antigravity 3.2.1 release notes')))
+    await initAntigravityVersion()
+    expect(getAntigravityVersion()).toBe('3.2.1')
+    // Both stale: the floor, never 2.0.6.
+    setAntigravityVersionForTest(undefined)
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('Fixed Version: 2.0.6')))
+    await initAntigravityVersion()
+    expect(getAntigravityVersion()).toBe(MIN_ANTIGRAVITY_VERSION)
+    // A cached stale version cannot pull the header down either.
+    setAntigravityVersionForTest('2.0.6')
+    expect(getAntigravityVersion()).toBe(MIN_ANTIGRAVITY_VERSION)
+  })
+
+  it('reports the text an endpoint returned instead of an image', async () => {
+    const notice = 'This version of Antigravity is no longer supported. Please download and install the latest version.'
+    const sse = `data: ${JSON.stringify({ response: { candidates: [{ content: { parts: [{ text: notice }] } }] } })}\n\n`
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(sse, { headers: { 'content-type': 'text/event-stream' } })))
+    const error = await antigravityGenerateImage({ blob, projectId: 'p', prompt: 'a sailboat' } as never).catch((cause: unknown) => cause as Error)
+    expect(error.message).toContain('returned text instead of an image: This version of Antigravity is no longer supported')
   })
 })

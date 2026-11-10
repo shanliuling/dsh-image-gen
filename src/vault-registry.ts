@@ -2,7 +2,9 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, realpath, rename, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, resolve } from 'node:path'
-import { deleteVaultKeys, isValidVaultKey, listVaultKeys, type VaultConfig } from './vault-store.js'
+import { deleteVaultKeys, isValidVaultKey, listVaultKeys, saveOriginal, type SavedOriginal, type VaultConfig } from './vault-store.js'
+import { readGifInfo } from './gif-info.js'
+import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 
 export interface VaultRegistryProfile {
   keys: string[]
@@ -95,7 +97,11 @@ async function writeVaultProfile(dir: string, profileId: string, keys: readonly 
   if (loaded.status === 'corrupt' || !isValidVaultProfileId(profileId) || profileId === 'legacy-vault' || !keys.every(isValidVaultKey)) return undefined
   const registry: VaultRegistry = loaded.registry ?? { version: 1, profiles: {} }
   const accepted = Array.from(new Set(keys))
-  const previous = new Set(registry.profiles[profileId]?.keys ?? [])
+  const previousProfile = registry.profiles[profileId]
+  const previous = new Set(previousProfile?.keys ?? [])
+  // Every card claims its original on mount; a claim that adds and releases
+  // nothing is already on disk, so the registry is not rewritten for it.
+  if (loaded.status === 'ok' && previousProfile !== undefined && accepted.length === previous.size && accepted.every(key => previous.has(key))) return registry
   let existing: string[] | undefined
   if (loaded.status === 'missing' || accepted.some(key => !previous.has(key))) {
     existing = await listVaultKeys({ enabled: true, dir })
@@ -107,17 +113,15 @@ async function writeVaultProfile(dir: string, profileId: string, keys: readonly 
   if (loaded.status === 'missing') {
     const legacy = existing!.filter(key => !accepted.includes(key))
     if (legacy.length > 0) registry.profiles['legacy-vault'] = { keys: legacy, updatedAt: 0 }
-  } else {
-    const legacy = registry.profiles['legacy-vault']
-    if (legacy !== undefined) {
-      const acceptedSet = new Set(accepted)
-      legacy.keys = legacy.keys.filter(key => !acceptedSet.has(key))
-      if (legacy.keys.length === 0) delete registry.profiles['legacy-vault']
-    }
   }
   Object.defineProperty(registry.profiles, profileId, {
     value: { keys: accepted, updatedAt: Date.now() }, enumerable: true, writable: true, configurable: true,
   })
+  await persistRegistry(dir, registry)
+  return registry
+}
+
+async function persistRegistry(dir: string, registry: VaultRegistry): Promise<void> {
   await mkdir(dir, { recursive: true })
   const target = registryPath(dir)
   const temporary = target + '.tmp-' + randomUUID()
@@ -126,9 +130,87 @@ async function writeVaultProfile(dir: string, profileId: string, keys: readonly 
     // Never unlink the previous registry to work around a failed replacement:
     // retaining the old references is safer than leaving a missing registry.
     await rename(temporary, target)
-    return registry
   } finally {
     await unlink(temporary).catch(() => undefined)
+  }
+}
+
+/** Store and claim an import in the same transaction used by explicit deletion. */
+export function saveImportedOriginal(
+  config: VaultConfig, input: { data: Uint8Array; mediaType: ImageMediaType }, profileId?: string,
+): Promise<SavedOriginal | undefined> {
+  if (!config.enabled) return Promise.resolve(undefined)
+  return inVaultTransaction(config.dir, async () => {
+    if (profileId !== undefined && (!isValidVaultProfileId(profileId) || profileId === 'legacy-vault')) throw new Error('invalid-vault-profile')
+    const loaded = await loadVaultRegistry(config.dir)
+    if (loaded.status === 'corrupt') throw new Error('registry-unavailable')
+    const registry: VaultRegistry = loaded.registry ?? { version: 1, profiles: {} }
+    if (loaded.status === 'missing') {
+      const legacy = await listVaultKeys(config)
+      if (legacy.length > 0) registry.profiles['legacy-vault'] = { keys: legacy, updatedAt: 0 }
+    }
+    const saved = await saveOriginal(config, input)
+    if (saved === undefined) return undefined
+    // Old clients cannot acknowledge ownership; retain their imports as legacy
+    // rather than exposing them to a different browser's manual deletion.
+    const owner = profileId ?? 'legacy-vault'
+    Object.defineProperty(registry.profiles, owner, {
+      value: { keys: [...new Set([...(registry.profiles[owner]?.keys ?? []), saved.key])], updatedAt: Date.now() },
+      enumerable: true, configurable: true, writable: true,
+    })
+    await persistRegistry(config.dir, registry)
+    return saved
+  })
+}
+
+/**
+ * Store a generated original without claiming it: the browser profiles that
+ * render its card claim it one by one, so it is owned by whoever has seen it.
+ * The registry is created here, with the same legacy sweep an import does,
+ * because the first single-key claim would otherwise create it and sweep every
+ * other unclaimed generated file into the legacy profile, where the gallery
+ * could never delete it. A corrupt registry is left alone: it already blocks
+ * every sync and deletion, while the file is still worth keeping for playback.
+ */
+export function saveGeneratedOriginal(
+  config: VaultConfig, input: { data: Uint8Array; mediaType: ImageMediaType },
+): Promise<SavedOriginal | undefined> {
+  if (!config.enabled) return Promise.resolve(undefined)
+  return inVaultTransaction(config.dir, async () => {
+    const loaded = await loadVaultRegistry(config.dir)
+    if (loaded.status === 'missing') {
+      const legacy = await listVaultKeys(config)
+      const registry: VaultRegistry = { version: 1, profiles: {} }
+      if (legacy.length > 0) registry.profiles['legacy-vault'] = { keys: legacy, updatedAt: 0 }
+      await persistRegistry(config.dir, registry)
+    }
+    return saveOriginal(config, input)
+  })
+}
+
+/**
+ * Keep the raw bytes of a generated GIF when the attachment layer normalized
+ * it (a GIF is the only type where normalization drops the animation; a still
+ * image loses at most some compression, and its workspace file keeps the
+ * original). A single-frame GIF is a still image as well, as the tool result
+ * already tells the model, and keeps nothing. The image is already paid for,
+ * so a vault failure is reported through `warn` and the result stays usable
+ * without the original.
+ */
+export async function keepGifOriginal(
+  config: VaultConfig,
+  generated: { data: Uint8Array; mediaType: ImageMediaType },
+  attachment: ImageAttachmentRef,
+  warn: (message: string) => void,
+): Promise<SavedOriginal | undefined> {
+  if (generated.mediaType !== 'image/gif') return undefined
+  if (attachment.mediaType === 'image/gif' && attachment.bytes === generated.data.byteLength) return undefined
+  if ((readGifInfo(generated.data)?.frames ?? 0) < 2) return undefined
+  try {
+    return await saveGeneratedOriginal(config, { data: generated.data, mediaType: 'image/gif' })
+  } catch (error) {
+    warn(`dsh-image-gen: failed to keep the original GIF: ${error instanceof Error ? error.message : String(error)}`)
+    return undefined
   }
 }
 
@@ -138,14 +220,25 @@ async function writeVaultProfile(dir: string, profileId: string, keys: readonly 
  * On first creation, pre-existing vault files that the syncing profile does
  * not already reference are placed in a reserved legacy profile, so a browser
  * that has not opened yet cannot lose an original. Once a profile syncs a
- * legacy key it takes over protection through the normal union.
+ * legacy key, the unknown legacy owners remain protected too.
+ *
+ * A refused claim is told apart: `'missing-original'` when a key of this
+ * request is not on disk (the only refusal a client should drop its reference
+ * for), undefined when the registry itself cannot be written.
  */
 export function updateVaultRegistry(
   dir: string,
   profileId: string,
   keys: readonly string[],
-): Promise<VaultRegistry | undefined> {
-  return inVaultTransaction(dir, async () => writeVaultProfile(dir, profileId, keys, await loadVaultRegistry(dir)))
+): Promise<VaultRegistry | 'missing-original' | undefined> {
+  return inVaultTransaction(dir, async () => {
+    const loaded = await loadVaultRegistry(dir)
+    const registry = await writeVaultProfile(dir, profileId, [...(loaded.registry?.profiles[profileId]?.keys ?? []), ...keys], loaded)
+    // A corrupt registry cannot vouch for any file, so it is never a verdict on one.
+    if (registry !== undefined || loaded.status === 'corrupt') return registry
+    const available = new Set(await listVaultKeys({ enabled: true, dir }))
+    return keys.some(key => !available.has(key)) ? 'missing-original' : undefined
+  })
     .catch(() => undefined)
 }
 
@@ -157,7 +250,11 @@ export function deleteUnreferencedOriginals(
     const loaded = await loadVaultRegistry(config.dir)
     if (loaded.status !== 'ok' || loaded.registry === undefined) return undefined
     const previouslyOwned = new Set(loaded.registry.profiles[profileId]?.keys ?? [])
-    const registry = await writeVaultProfile(config.dir, profileId, keys, loaded)
+    // A stale snapshot must not remove imports claimed after that snapshot was
+    // read. Only explicitly deleted keys may release this profile's ownership.
+    const removedKeys = new Set(deleteKeys)
+    const remaining = [...previouslyOwned].filter(key => !removedKeys.has(key))
+    const registry = await writeVaultProfile(config.dir, profileId, [...remaining, ...keys], loaded)
     if (registry === undefined) return undefined
     const referenced = new Set(unionVaultKeys(registry))
     const deletable = deleteKeys.filter(key => previouslyOwned.has(key) && !referenced.has(key))

@@ -1,6 +1,6 @@
-import { downloadPublicImage } from './public-image-download.js'
 /** Volcengine Ark Seedream image-editing adapter. */
 import type { ImageMediaType } from '@deepseek-ai/dsh-attachment'
+import { downloadPublicImage } from './public-image-download.js'
 import type { GeneratedCompatibleImage } from './openai-compatible.js'
 import { guardedFetch, readResponseBody } from './fetch-diagnostics.js'
 import { redactSecrets } from './redact.js'
@@ -18,6 +18,7 @@ export async function editSeedreamImage(input: {
   sourceImages: Array<{ data: Uint8Array; mediaType: ImageMediaType }>
   size?: string
   maxBytes: number
+  strictImageDownloads?: boolean
   signal: AbortSignal
   /**
    * Ark output controls. The edit path is the only one Ark lets request a
@@ -82,12 +83,25 @@ function firstImage(value: unknown): { b64_json?: string; url?: string; mime_typ
       : undefined
 }
 
-async function downloadImage(url: string | undefined, input: { maxBytes: number; signal: AbortSignal; apiKey: string }): Promise<GeneratedCompatibleImage> {
+async function downloadImage(url: string | undefined, input: { maxBytes: number; signal: AbortSignal; apiKey: string; strictImageDownloads?: boolean }): Promise<GeneratedCompatibleImage> {
   if (url === undefined) throw new Error('seedream image editing returned no image data')
-  const { data, contentType } = await downloadPublicImage(url, input)
-  const mediaType = imageMediaType(contentType)
-  if (mediaType === undefined) throw new Error('seedream image download returned unsupported content type')
-  return { data, mediaType }
+  if (input.strictImageDownloads === true) {
+    const { data, contentType } = await downloadPublicImage(url, input)
+    const mediaType = imageMediaType(contentType)
+    if (mediaType === undefined) throw new Error('seedream image download returned unsupported content type')
+    return { data, mediaType }
+  }
+  const response = await guardedFetch('seedream image download', input.signal, () => fetch(url, { redirect: 'follow', signal: input.signal }), input.apiKey)
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined)
+    throw new Error(`seedream image download failed (${response.status})`)
+  }
+  const mediaType = imageMediaType(response.headers.get('content-type'))
+  if (mediaType === undefined) {
+    await response.body?.cancel().catch(() => undefined)
+    throw new Error('seedream image download returned unsupported content type')
+  }
+  return { data: await readBoundedBytes(response, input.maxBytes), mediaType }
 }
 
 function decodeBase64(value: string): Uint8Array {
@@ -108,7 +122,7 @@ async function readBoundedText(response: Response, maxBytes: number): Promise<st
 async function readBoundedBytes(response: Response, maxBytes: number): Promise<Uint8Array> {
   if (response.body === null) return new Uint8Array()
   const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let bytes = 0
-  try { for (;;) { const next = await readResponseBody(response, () => reader.read()); if (next.done) break; bytes += next.value.byteLength; if (bytes > maxBytes) throw new Error(`Image response exceeded the ${String(maxBytes)} byte limit`); chunks.push(next.value) } } finally { reader.releaseLock() }
+  try { for (;;) { const next = await readResponseBody(response, () => reader.read()); if (next.done) break; bytes += next.value.byteLength; if (bytes > maxBytes) throw new Error(`Image response exceeded the ${String(maxBytes)} byte limit`); chunks.push(next.value) } } catch (error) { await reader.cancel().catch(() => undefined); throw error } finally { reader.releaseLock() }
   const joined = new Uint8Array(bytes); let offset = 0
   for (const chunk of chunks) { joined.set(chunk, offset); offset += chunk.byteLength }
   return joined

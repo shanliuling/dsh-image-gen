@@ -1,6 +1,6 @@
-import { downloadPublicImage } from './public-image-download.js'
 /** OpenAI Images API and compatible response adapter. */
 import type { ImageMediaType } from '@deepseek-ai/dsh-attachment'
+import { downloadPublicImage } from './public-image-download.js'
 import { guardedFetch, readResponseBody } from './fetch-diagnostics.js'
 import { redactSecrets } from './redact.js'
 import { detectImageMediaType } from './reference-image.js'
@@ -35,6 +35,7 @@ export async function generateOpenAICompatibleImage(input: {
   quality?: string
   /** Extra JSON fields merged last into the generations body (xAI aspect_ratio/resolution). */
   extraBody?: Readonly<Record<string, unknown>>
+  strictImageDownloads?: boolean
   maxBytes: number
   signal: AbortSignal
   /** Ark-only output controls; ignored by every other provider. */
@@ -68,6 +69,7 @@ export async function editOpenAICompatibleImage(input: {
   prompt: string
   sourceImages: CompatibleReferenceImage[]
   size?: string
+  strictImageDownloads?: boolean
   maxBytes: number
   signal: AbortSignal
   /**
@@ -225,21 +227,43 @@ export async function editOpenAICompatibleImage(input: {
   }), input.apiKey)
 
   let response = await sendEdit(buildEditForm(responseFormat !== 'url'))
-  // Request-shape rejection happens before generation, so the retry costs one
-  // empty round-trip rather than a second billed edit.
+  // Retry only an error about response_format. Invalid dimensions and other
+  // 400/422 errors need to reach the user without a duplicate edit request.
   if (responseFormat === 'auto' && !explicitResponseFormat && (response.status === 400 || response.status === 422)) {
+    const text = await readBoundedText(response, ERROR_LIMIT)
+    if (!rejectsResponseFormat(text)) throw new Error(`openai image request failed (${response.status}): ${redactSecrets(text, input.apiKey).slice(0, ERROR_LIMIT)}`)
     input.onResponseFormatRetry?.(response.status)
-    // Release the rejected response before reusing the connection.
-    await response.body?.cancel().catch(() => undefined)
     response = await sendEdit(buildEditForm(false))
   }
   return parseImageResponse(response, 'openai', input)
 }
 
+function rejectsResponseFormat(text: string): boolean {
+  let message = text
+  try {
+    const body = JSON.parse(text) as { error?: unknown; message?: unknown; detail?: unknown } | string
+    if (typeof body === 'string') message = body
+    else if (body !== null && typeof body === 'object') {
+      const error = typeof body.error === 'object' && body.error !== null ? body.error as { param?: unknown; message?: unknown; code?: unknown } : undefined
+      if (typeof error?.param === 'string') return error.param === 'response_format'
+      if (Array.isArray(body.detail)) {
+        // FastAPI lists validation errors by parameter path. Do not retry if
+        // any other parameter is invalid as well.
+        return body.detail.length > 0 && body.detail.every((entry: unknown) => {
+          const loc = entry !== null && typeof entry === 'object' ? (entry as { loc?: unknown }).loc : undefined
+          return Array.isArray(loc) && loc.includes('response_format')
+        })
+      }
+      message = [typeof body.error === 'string' ? body.error : undefined, error?.message, error?.code, body.message, body.detail].filter(value => typeof value === 'string').join(' ')
+    }
+  } catch { /* Some relays return plain-text validation errors. */ }
+  return /(?:response[_ -]?format|b64_json)/i.test(message) && /(?:unsupported|not\s+(?:support|allowed|permitted|accepted|implemented)|unknown|unrecognized|unexpected|invalid|extra\s+(?:field|input)|不支持|不允许|未知|无效|未识别)/i.test(message)
+}
+
 async function parseImageResponse(
   response: Response,
   provider: string,
-  input: { baseURL: string; maxBytes: number; signal: AbortSignal; apiKey?: string },
+  input: { baseURL: string; maxBytes: number; signal: AbortSignal; apiKey?: string; strictImageDownloads?: boolean },
 ): Promise<GeneratedCompatibleImage> {
   const text = await readBoundedText(response, Math.ceil(input.maxBytes * 1.4) + ERROR_LIMIT)
   if (!response.ok) throw new Error(`${provider} image request failed (${response.status}): ${redactSecrets(text, input.apiKey).slice(0, ERROR_LIMIT)}`)
@@ -286,34 +310,37 @@ function firstImage(value: unknown): { b64_json?: string; url?: string; mime_typ
 async function downloadImage(
   url: string | undefined,
   provider: string,
-  input: { baseURL: string; maxBytes: number; signal: AbortSignal; apiKey?: string },
+  input: { baseURL: string; maxBytes: number; signal: AbortSignal; apiKey?: string; strictImageDownloads?: boolean },
 ): Promise<GeneratedCompatibleImage> {
   if (url === undefined) throw new Error(`${provider} image request returned no image data`)
   if (url.startsWith('data:')) {
-    if (url.length > input.maxBytes * 2 + 1024) throw new Error('Image data URL exceeds the byte limit')
     const parsed = parseDataUrl(url)
     if (parsed === undefined) throw new Error(`${provider} image request returned invalid data URL`)
     const data = decodeBase64(parsed.base64, provider)
-    if (data.byteLength > input.maxBytes) throw new Error('Image data URL exceeds the byte limit')
     return { data, mediaType: detectImageMediaType(data) ?? imageMediaType(parsed.mediaType) ?? 'image/png' }
   }
   // Relative URLs are legal for self-hosted gateways (SGLang returns
   // "/v1/images/<id>/content"): resolve them against the configured base URL,
   // then fall back to the origin path for relays whose real route drops /v1.
   const candidates = imageDownloadCandidates(url, input.baseURL, provider)
+  let response: Response | undefined
   let failure: unknown
   for (const candidate of candidates) {
     try {
-      const { data, contentType } = await requestImageCandidate(candidate, provider, input)
-      const mediaType = detectImageMediaType(data) ?? imageMediaType(contentType)
-      if (mediaType === undefined) throw new Error(`${provider} image download returned unsupported content type`)
-      return { data, mediaType }
-    } catch (error) {
-      const status = error instanceof Error ? /^Image download HTTP (\d+)$/.exec(error.message)?.[1] : undefined
-      failure = status === undefined ? error : new Error(`${provider} image download failed (${status})`)
+      response = await requestImageCandidate(candidate, provider, input)
+      if (response.ok) break
+      failure = new Error(`${provider} image download failed (${response.status})`)
+      await response.body?.cancel().catch(() => undefined)
+      response = undefined
+    } catch (err) {
+      failure = err
     }
   }
-  throw failure instanceof Error ? failure : new Error(`${provider} image download failed`)
+  if (response === undefined) throw failure instanceof Error ? failure : new Error(`${provider} image download failed`)
+  const data = await readBoundedBytes(response, input.maxBytes)
+  const mediaType = detectImageMediaType(data) ?? imageMediaType(response.headers.get('content-type'))
+  if (mediaType === undefined) throw new Error(`${provider} image download returned unsupported content type`)
+  return { data, mediaType }
 }
 
 function imageDownloadCandidates(url: string, baseURL: string, provider: string): string[] {
@@ -338,20 +365,34 @@ function imageDownloadCandidates(url: string, baseURL: string, provider: string)
 async function requestImageCandidate(
   candidate: string,
   provider: string,
-  input: { baseURL: string; maxBytes: number; signal: AbortSignal; apiKey?: string },
-): Promise<{ data: Uint8Array; contentType: string | undefined }> {
+  input: { baseURL: string; maxBytes: number; signal: AbortSignal; apiKey?: string; strictImageDownloads?: boolean },
+): Promise<Response> {
   const sameOrigin = new URL(candidate).origin === new URL(input.baseURL).origin
-  const options = { maxBytes: input.maxBytes, signal: input.signal }
-  try {
-    return await downloadPublicImage(candidate, {
-      ...options,
-      ...(sameOrigin && input.apiKey !== undefined ? { authorization: 'Bearer ' + input.apiKey } : {}),
-    })
-  } catch (error) {
-    // Preserve authenticated same-origin assets and the existing public-asset retry.
-    if (input.apiKey === undefined || !sameOrigin) throw error
-    return downloadPublicImage(candidate, options)
+  if (input.strictImageDownloads === true) {
+    const options = { maxBytes: input.maxBytes, signal: input.signal }
+    let result
+    try {
+      result = await downloadPublicImage(candidate, {
+        ...options,
+        ...(sameOrigin && input.apiKey !== undefined ? { authorization: 'Bearer ' + input.apiKey } : {}),
+      })
+    } catch (error) {
+      if (!sameOrigin || input.apiKey === undefined) throw error
+      result = await downloadPublicImage(candidate, options)
+    }
+    return new Response(result.data as BodyInit, { headers: result.contentType === undefined ? {} : { 'content-type': result.contentType } })
   }
+  let response = await guardedFetch(provider + ' image download', input.signal, () => fetch(candidate, {
+    redirect: 'follow', signal: input.signal,
+    ...(input.apiKey === undefined || !sameOrigin ? {} : { headers: { authorization: 'Bearer ' + input.apiKey } }),
+  }), input.apiKey)
+  // Some same-origin relays reject Authorization on public image URLs, so the
+  // legacy retry remains available without ever sending the key to another origin.
+  if (!response.ok && input.apiKey !== undefined && sameOrigin) {
+    await response.body?.cancel().catch(() => undefined)
+    response = await guardedFetch(provider + ' image download', input.signal, () => fetch(candidate, { redirect: 'follow', signal: input.signal }), input.apiKey)
+  }
+  return response
 }
 
 function parseDataUrl(value: string): { mediaType: string; base64: string } | undefined {
@@ -387,7 +428,7 @@ async function readBoundedText(response: Response, maxBytes: number): Promise<st
 async function readBoundedBytes(response: Response, maxBytes: number): Promise<Uint8Array> {
   if (response.body === null) return new Uint8Array()
   const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let bytes = 0
-  try { for (;;) { const next = await readResponseBody(response, () => reader.read()); if (next.done) break; bytes += next.value.byteLength; if (bytes > maxBytes) throw new Error(`Image response exceeded the ${String(maxBytes)} byte limit`); chunks.push(next.value) } } finally { reader.releaseLock() }
+  try { for (;;) { const next = await readResponseBody(response, () => reader.read()); if (next.done) break; bytes += next.value.byteLength; if (bytes > maxBytes) throw new Error(`Image response exceeded the ${String(maxBytes)} byte limit`); chunks.push(next.value) } } catch (error) { await reader.cancel().catch(() => undefined); throw error } finally { reader.releaseLock() }
   const joined = new Uint8Array(bytes); let offset = 0
   for (const chunk of chunks) { joined.set(chunk, offset); offset += chunk.byteLength }
   return joined

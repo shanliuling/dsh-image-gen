@@ -21,8 +21,10 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import type {} from '@deepseek-ai/dsh-client-ui-tool/client'
 import {
+  currentSeedreamModel,
   CLOUD_CREDENTIAL_REFS,
   CLOUD_IMAGE_PROVIDERS,
+  API_KEY_CONSOLE_URLS,
   DEFAULT_BASE_URLS,
   DEFAULT_CLOUD_TIMEOUT_MS,
   DEFAULT_COMFYUI_TIMEOUT_MS,
@@ -59,6 +61,7 @@ import { GeneratedImageCard, GeneratedImagesCard, PromotedImageResultNode, type 
 export { GeneratedImageCard, GeneratedImagesCard, PromotedImageResultNode } from './image-result-view.js'
 import { DICT, type DictKey } from './plugin-i18n.js'
 import { PLUGIN_STYLE } from './plugin-style.js'
+import { GIF_STYLE } from './gif-style.js'
 import { createCanvasSessionSelection, startConversationLandings, type CanvasSessions, type CanvasSessionSelection } from './tl/conversation-landings.js'
 import { STUDIO_STYLE } from './studio-style.js'
 import { TL_CSS } from './tl/tl-css.js'
@@ -260,7 +263,7 @@ export function apply(ctx: Context): void {
   ctx.effect(() => {
     const style = document.createElement('style')
     style.dataset.plugin = 'dsh-image-gen'
-    style.textContent = `${PLUGIN_STYLE}\n${STUDIO_STYLE}\n${INSPIRATION_STYLE}\n${PROVIDER_PILL_STYLE}\n${TL_CSS}\n${TL_THEME_CSS}`
+    style.textContent = `${PLUGIN_STYLE}\n${GIF_STYLE}\n${STUDIO_STYLE}\n${INSPIRATION_STYLE}\n${PROVIDER_PILL_STYLE}\n${TL_CSS}\n${TL_THEME_CSS}`
     document.head.appendChild(style)
     return () => {
       style.remove()
@@ -1392,6 +1395,12 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
               {keyUnavailable ? t('credentialsUnavailable')
                 : keyReadOnly ? t('keyReadOnly', { source: row.keyInfo?.source ?? '' })
                 : t('apiKeyHint', { key: keyRef })}
+              {channel === undefined && API_KEY_CONSOLE_URLS[provider] !== undefined ? (
+                <>
+                  {' '}
+                  <a className="dsh-ig-link" href={API_KEY_CONSOLE_URLS[provider]} target="_blank" rel="noopener noreferrer">{t('getApiKey')}</a>
+                </>
+              ) : null}
             </span>
           </label>
           <label className="dsh-ig-field">
@@ -1877,6 +1886,8 @@ function modelOf(provider: Provider, value: ImageSettings | undefined): string {
     : isSubscriptionProvider(provider)
       ? DEFAULT_MODELS[provider]
       : value?.[CLOUD_MODEL_FIELDS[provider as CloudImageProvider]]
+  // A retired Seedream model runs on its replacement; show that one (saving rewrites it).
+  if (provider === 'seedream') return currentSeedreamModel(typeof stored === 'string' ? stored : undefined)
   return typeof stored === 'string' && stored.length > 0 ? stored : DEFAULT_MODELS[provider]
 }
 

@@ -1,4 +1,3 @@
-import './fixtures/mock-public-image-download.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { editOpenAICompatibleImage, generateOpenAICompatibleImage } from '../src/openai-compatible.js'
 
@@ -78,6 +77,38 @@ describe('OpenAI-compatible images', () => {
 
     const form = fetchMock.mock.calls[0]?.[1]?.body as FormData
     expect(form.getAll('response_format')).toEqual(['url'])
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([400, 422])('does not retry an unrelated %i edit rejection', async status => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { param: 'size', message: 'invalid size' } }), { status }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ b64_json: Buffer.from('image').toString('base64') }] })))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(editOpenAICompatibleImage({
+      apiKey: 'key', baseURL: 'https://relay.example/v1', model: 'image-model', prompt: 'edit',
+      sourceImages: [{ data: new Uint8Array([1]), mediaType: 'image/png' }],
+      size: 'invalid', maxBytes: 1024, signal, editResponseFormat: 'auto',
+    })).rejects.toThrow('invalid size')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    { error: 'unsupported response_format' },
+    { detail: "response_format b64_json is not permitted" },
+    { error: { message: '不支持 response_format 参数' } },
+    { detail: [{ loc: ['body', 'response_format'], msg: 'Extra inputs are not permitted', type: 'extra_forbidden' }] },
+  ])('still falls back for an explicit format rejection: %j', async error => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(error, { status: 422 })).mockResolvedValueOnce(Response.json({ data: [{ b64_json: Buffer.from('edited image').toString('base64') }] }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(editOpenAICompatibleImage({ apiKey: 'key', baseURL: 'https://relay.example/v1', model: 'image-model', prompt: 'edit', sourceImages: [{ data: new Uint8Array([1]), mediaType: 'image/png' }], maxBytes: 1024, signal, editResponseFormat: 'auto' })).resolves.toBeDefined()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not retry a validation list that also contains an invalid size', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json({ detail: [{ loc: ['body', 'response_format'], msg: 'Extra inputs are not permitted' }, { loc: ['body', 'size'], msg: 'invalid size' }] }, { status: 422 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(editOpenAICompatibleImage({ apiKey: 'key', baseURL: 'https://relay.example/v1', model: 'image-model', prompt: 'edit', sourceImages: [{ data: new Uint8Array([1]), mediaType: 'image/png' }], maxBytes: 1024, signal, editResponseFormat: 'auto' })).rejects.toThrow('invalid size')
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 

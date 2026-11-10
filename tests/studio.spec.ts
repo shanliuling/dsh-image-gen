@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { EventEmitter } from 'node:events'
 import { Readable } from 'node:stream'
 import type { AddressInfo } from 'node:net'
 import { DEFAULT_GOOGLE_MODEL, DEFAULT_OPENAI_MODEL, DEFAULT_SEEDREAM_MODEL, DEFAULT_DASHSCOPE_MODEL, DEFAULT_XAI_MODEL, DEFAULT_ZHIPU_MODEL } from '../src/config.js'
-import { generateFromStudio, runPool, studioProfile, describeStudio, openAIRequestSize } from '../src/studio.js'
+import { channelSelectsGif, generateFromStudio, runPool, studioProfile, describeStudio, openAIRequestSize, withGenerationModel } from '../src/studio.js'
 import { parseStudioGenerateRequest, serveStudio } from '../src/studio-route.js'
 import { SUBSCRIPTION_PROVIDERS, DEFAULT_SUBSCRIPTION_MODELS, SUBSCRIPTION_TIMEOUT_MS, STUDIO_PROVIDERS, CLOUD_IMAGE_PROVIDERS, studioModelOptionsForMode, type StudioProvider, type SubscriptionProvider } from '../src/shared.js'
 import { SUBSCRIPTION_CAPABILITIES } from '../src/capabilities.js'
@@ -17,12 +21,14 @@ import {
   MAX_CACHE_COUNT,
 } from '../src/client/image-cache.js'
 import { formatRelativeTime, downloadBlobUrl } from '../src/client/browser-image-utils.js'
-import { conversationRegenerateRequest } from '../src/client/conversation-regenerate.js'
+import { conversationRegenerateRequest, gifOutputRequest } from '../src/client/conversation-regenerate.js'
+import { gifBytes } from './gif-fixture.js'
 import {
   appendConversationImageRevision,
   loadConversationImageRevisionChain,
   selectConversationImageRevision,
 } from '../src/client/conversation-image-revisions.js'
+import { imageVersionKey } from '../src/client/image-result-node.js'
 import { buildComparisonTargets, comparisonOptionUnion, initialComparisonProviders } from '../src/client/multi-model-compare.js'
 
 describe('multi-model comparison planning', () => {
@@ -63,7 +69,8 @@ describe('multi-model comparison planning', () => {
       // openai speaks 16:9 now but tops out at low/medium/high, so only the
       // quality falls back to its default.
       { provider: 'openai', ratio: '16:9', quality: 'auto', adjusted: true },
-      { provider: 'seedream', ratio: '16:9', quality: '4K', adjusted: false },
+      // Seedream 5.0 pro tops out at 2K.
+      { provider: 'seedream', ratio: '16:9', quality: '2K', adjusted: true },
     ])
   })
 
@@ -82,7 +89,7 @@ describe('multi-model comparison planning', () => {
     ])
     // dashscope is signed out above, so its `standard` tier stays out of the union.
     expect(comparisonOptionUnion(unionProfiles, 'qualityOptions').map(option => option.value)).toEqual([
-      'auto', '1K', '2K', '3K', '4K', 'low', 'medium', 'high', 'xhigh', 'max',
+      'auto', '1K', '1.5K', '2K', '4K', 'low', 'medium', 'high', 'xhigh', 'max',
     ])
   })
 })
@@ -101,10 +108,14 @@ describe('image workbench provider capabilities', () => {
 
     const seedream = studioProfile({}, 'seedream', true)
     expect(seedream).toMatchObject({ model: DEFAULT_SEEDREAM_MODEL, defaultRatio: 'auto', defaultQuality: '2K', configured: true })
-    // Seedream 5.0 dropped the 1K tier and gained 3K; picking 1K used to be a
-    // guaranteed upstream error.
+    // Seedream 5.0 pro (the default since 5.0/5.0 lite retire on 2026-11-24)
+    // takes 1K/1.5K/2K; the earlier models keep 2K/3K/4K, where 1K used to be
+    // a guaranteed upstream error.
     expect(seedream.ratioOptions.map(o => o.value)).toEqual(['auto', '1:1', '4:3', '3:4', '16:9', '9:16', '3:2', '2:3', '21:9'])
-    expect(seedream.qualityOptions.map(o => o.value)).toEqual(['2K', '3K', '4K'])
+    expect(seedream.qualityOptions.map(o => o.value)).toEqual(['1K', '1.5K', '2K'])
+    expect(studioProfile({ seedreamModel: 'doubao-seedream-4-0-250828' }, 'seedream', true).qualityOptions.map(o => o.value)).toEqual(['2K', '3K', '4K'])
+    // A saved retired model, the former default among them, runs on its replacement.
+    expect(studioProfile({ seedreamModel: 'doubao-seedream-5-0-260128' }, 'seedream', true).model).toBe(DEFAULT_SEEDREAM_MODEL)
 
     const dashscope = studioProfile({}, 'dashscope', true)
     expect(dashscope).toMatchObject({ model: DEFAULT_DASHSCOPE_MODEL, defaultRatio: '1:1', defaultQuality: 'standard', configured: true })
@@ -625,6 +636,61 @@ describe('conversation and gallery image regeneration', () => {
     expect(loadConversationImageRevisionChain(originId).revisions).toEqual([revision])
     expect(selectConversationImageRevision(originId, 0).currentIndex).toBe(0)
     expect(loadConversationImageRevisionChain(originId).currentIndex).toBe(0)
+    vi.unstubAllGlobals()
+  })
+
+  it('asks for a GIF again with whichever frame facts of the current animation are within the contract', () => {
+    const delays = (frames: number, ms: number) => Array.from({ length: frames }, () => ms)
+    expect(gifOutputRequest({ frames: 8, delaysMs: delays(8, 120), width: 1024, height: 512 })).toEqual({ format: 'gif', frameCount: 8, frameDurationMs: 120, size: '1024x512' })
+    expect(gifOutputRequest({ frames: 17, delaysMs: delays(17, 120), width: 512, height: 512 })).toEqual({ format: 'gif', frameDurationMs: 120, size: '512x512' })
+    // An imported GIF whose frame size breaks the contract keeps the provider's default size, like its frame count.
+    expect(gifOutputRequest({ frames: 4, delaysMs: [0, 0, 0, 0], width: 300, height: 200 })).toEqual({ format: 'gif', frameCount: 4 })
+    expect(gifOutputRequest({ frames: 4, delaysMs: delays(4, 100), width: 4096, height: 16 })).toEqual({ format: 'gif', frameCount: 4, frameDurationMs: 100 })
+    expect(gifOutputRequest(undefined)).toEqual({ format: 'gif' })
+  })
+
+  it('keeps a valid original on a stored revision and drops a corrupt one without losing the revision', () => {
+    const values = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => { values.set(key, value) },
+    })
+    const originId = 'sha256:gif-origin'
+    const original = { key: 'a'.repeat(64), bytes: 10, mediaType: 'image/gif' as const }
+    const revision = {
+      attachment: { attachmentId: 'sha256:gif-revision' as any, mediaType: 'image/webp' as const, bytes: 8, width: 32, height: 32 },
+      prompt: 'a revised gif', provider: 'openai-compat' as const, model: 'relay', output: 'auto', createdAt: 123, ratio: '1:1', quality: 'standard', original,
+    }
+    appendConversationImageRevision(originId, revision)
+    expect(loadConversationImageRevisionChain(originId).revisions[0]).toEqual(revision)
+    const [storageKey] = [...values.keys()]
+    values.set(storageKey!, JSON.stringify({ originId, currentIndex: 1, revisions: [{ ...revision, original: { ...original, key: 'not-a-key' } }] }))
+    const loaded = loadConversationImageRevisionChain(originId)
+    expect(loaded.revisions).toHaveLength(1)
+    expect(loaded.revisions[0]).not.toHaveProperty('original')
+    vi.unstubAllGlobals()
+  })
+
+  it('keeps two animations that share a first-frame still as separate versions', () => {
+    const values = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => { values.set(key, value) },
+    })
+    const originId = 'sha256:gif-origin-shared'
+    // The host normalized both GIFs to the same first-frame still.
+    const still = { attachmentId: 'sha256:same-first-frame' as any, mediaType: 'image/webp' as const, bytes: 8, width: 32, height: 32 }
+    const base = { attachment: still, prompt: 'a gif', provider: 'openai-compat' as const, model: 'relay', output: 'auto', createdAt: 1, ratio: '1:1', quality: 'standard' }
+    const first = { ...base, original: { key: 'a'.repeat(64), bytes: 10, mediaType: 'image/gif' as const } }
+    const second = { ...base, createdAt: 2, original: { key: 'b'.repeat(64), bytes: 12, mediaType: 'image/gif' as const } }
+    appendConversationImageRevision(originId, first)
+    const chain = appendConversationImageRevision(originId, second)
+    expect(chain.revisions.map(revision => revision.original?.key)).toEqual(['a'.repeat(64), 'b'.repeat(64)])
+    // The same animation appended again is still one version.
+    expect(appendConversationImageRevision(originId, { ...first, createdAt: 3 }).revisions).toHaveLength(2)
+    // A still keeps its attachment as its identity.
+    expect(imageVersionKey('sha256:x', undefined)).toBe('sha256:x')
+    expect(imageVersionKey('sha256:x', first.original)).not.toBe(imageVersionKey('sha256:x', second.original))
     vi.unstubAllGlobals()
   })
 })
@@ -1208,6 +1274,16 @@ describe('openai-compat model choices', () => {
     expect(studioModelOptionsForMode(editing, 'edit').map(option => option.value)).toEqual(['image-edit'])
     expect(studioModelOptionsForMode(editing, 'generate').map(option => option.value)).toEqual(['image-2.5', 'image-2'])
   })
+
+  it('regenerates an edit result with the generation model instead of rejecting the editing model', () => {
+    const editing = studioProfile({ ...config, openaiCompatEditModel: 'image-edit' }, 'openai-compat', true)
+    const request = { mode: 'generate' as const, provider: 'openai-compat' as const, model: 'image-edit', prompt: 'again', ratio: '1:1', quality: 'standard' }
+    expect(withGenerationModel(editing, request).model).toBe('image-2')
+    // An edit keeps its editing model, and an unknown model is left for the stale-workbench check.
+    expect(withGenerationModel(editing, { ...request, mode: 'edit' }).model).toBe('image-edit')
+    expect(withGenerationModel(editing, { ...request, model: 'gone' }).model).toBe('gone')
+    expect(withGenerationModel(studioProfile(config, 'openai-compat', true), request).model).toBe('image-edit')
+  })
 })
 
 describe('openai-compat named channels', () => {
@@ -1435,17 +1511,38 @@ describe('workbench watermark request mapping', () => {
   })
 })
 
+describe('channel-selected GIF', () => {
+  it('counts a generation on an OpenAI-compatible channel whose extras select GIF, and nothing else', () => {
+    const gifChannel = { id: 'gif-relay', label: 'GIF relay', keyRef: '', baseURL: 'https://gif.example/v1', model: 'gif-model', extraBody: { output_format: 'gif' } }
+    const config = { openaiCompatExtraBody: { output_format: 'gif' }, openaiCompatChannels: [gifChannel, { ...gifChannel, id: 'still-relay', extraBody: {} }] }
+    expect(channelSelectsGif(config, { provider: 'openai-compat', mode: 'generate' })).toBe(true)
+    expect(channelSelectsGif(config, { provider: 'openai-compat', mode: 'generate', channel: 'gif-relay' })).toBe(true)
+    expect(channelSelectsGif(config, { provider: 'openai-compat', mode: 'generate', channel: 'still-relay' })).toBe(false)
+    // The channel's text-to-image extras never reach an edit, as in the request itself.
+    expect(channelSelectsGif(config, { provider: 'openai-compat', mode: 'edit', channel: 'gif-relay' })).toBe(false)
+    expect(channelSelectsGif(config, { provider: 'openai', mode: 'generate' })).toBe(false)
+    expect(channelSelectsGif({}, { provider: 'openai-compat', mode: 'generate' })).toBe(false)
+  })
+})
+
 describe('streaming generation heartbeat', () => {
   it.each([
     ...CLOUD_IMAGE_PROVIDERS.map(provider => ({ provider, timeoutMs: 240_000, expectedMs: 240_000 })),
     { provider: 'google' as const, timeoutMs: 5_000, expectedMs: 5_000 },
     { provider: 'google' as const, timeoutMs: undefined, expectedMs: 150_000 },
     ...SUBSCRIPTION_PROVIDERS.map(provider => ({ provider, timeoutMs: 5_000, expectedMs: 300_000 })),
-  ])('uses the generation timeout budget for $provider ($timeoutMs)', async ({ provider, timeoutMs, expectedMs }) => {
+    // A GIF waits longer while the cloud timeout is left at its default; a configured one is kept.
+    { provider: 'openai-compat' as const, timeoutMs: undefined, gif: true, expectedMs: 300_000 },
+    { provider: 'openai-compat' as const, timeoutMs: 240_000, gif: true, expectedMs: 240_000 },
+    // A channel whose extras select GIF counts as a GIF request without `output`.
+    { provider: 'openai-compat' as const, timeoutMs: undefined, channelGif: true, expectedMs: 300_000 },
+    { provider: 'openai-compat' as const, timeoutMs: 240_000, channelGif: true, expectedMs: 240_000 },
+  ])('uses the generation timeout budget for $provider ($timeoutMs, gif: $gif, channel GIF: $channelGif)', async ({ provider, timeoutMs, gif, channelGif, expectedMs }) => {
     vi.useFakeTimers()
     try {
       const req = Object.assign(Readable.from([JSON.stringify({
         mode: 'generate', provider, model: 'test-model', prompt: 'lake', ratio: '1:1', quality: '1K',
+        ...(gif === true ? { output: { format: 'gif' } } : {}),
       })]), { method: 'POST', headers: { 'content-type': 'application/json' } }) as unknown as IncomingMessage
       const res = Object.assign(new EventEmitter(), {
         writeHead: vi.fn(), write: vi.fn(), end: vi.fn(),
@@ -1465,6 +1562,7 @@ describe('streaming generation heartbeat', () => {
         },
         maxBodyBytes: 1024,
         ...(timeoutMs === undefined ? {} : { timeoutMs }),
+        ...(channelGif === true ? { channelSelectsGif: () => true } : {}),
       })
       await generating
       await vi.advanceTimersByTimeAsync(expectedMs - 1)
@@ -1548,5 +1646,182 @@ describe('streaming generation heartbeat', () => {
     } finally {
       await new Promise<void>(resolve => server.close(() => resolve()))
     }
+  })
+})
+
+describe('workbench GIF output and originals', () => {
+  const signal = new AbortController().signal
+  const dirs: string[] = []
+  afterEach(async () => {
+    vi.unstubAllGlobals()
+    for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true })
+  })
+  const relay = { openaiCompatModel: 'relay-image', openaiCompatBaseURL: 'https://relay.example/v1', saveToWorkspace: false }
+  const request = { mode: 'generate' as const, provider: 'openai-compat' as const, model: 'relay-image', prompt: 'wave', ratio: '1:1', quality: 'standard' }
+  const gif = { format: 'gif' as const, frameCount: 8, frameDurationMs: 120 }
+  const setup = (body: unknown = { data: [{ b64_json: TINY_PNG }] }) => {
+    const ctx = studioCtx()
+    ctx.credentials.resolve.mockResolvedValue({ value: 'test-key' })
+    ctx.attachments.imageLimits.mediaTypes.push('image/gif')
+    const fetch = vi.fn(async (_url: unknown, _init?: RequestInit) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetch)
+    return { ctx, fetch }
+  }
+  const bodyOf = (fetch: ReturnType<typeof vi.fn>, index = 0) => JSON.parse(String((fetch.mock.calls[index] as [unknown, RequestInit] | undefined)?.[1]?.body))
+
+  it('parses the GIF output shape and rejects other formats or non-numeric frame parameters', () => {
+    expect(parseStudioGenerateRequest({ ...request, output: gif })).toMatchObject({ output: gif })
+    expect(parseStudioGenerateRequest({ ...request, output: { format: 'gif' } })).toMatchObject({ output: { format: 'gif' } })
+    expect(parseStudioGenerateRequest(request)).not.toHaveProperty('output')
+    expect(() => parseStudioGenerateRequest({ ...request, output: { format: 'png' } })).toThrow('gif')
+    expect(() => parseStudioGenerateRequest({ ...request, output: { format: 'gif', frameCount: '8' } })).toThrow('帧')
+    expect(() => parseStudioGenerateRequest({ ...request, output: 'gif' })).toThrow()
+    expect(parseStudioGenerateRequest({ ...request, output: { format: 'gif', size: '512x512' } })).toMatchObject({ output: { format: 'gif', size: '512x512' } })
+    expect(() => parseStudioGenerateRequest({ ...request, output: { format: 'gif', size: 512 } })).toThrow('尺寸')
+  })
+
+  it('sends the frame size the card or the relay table chose, never the still-image default', async () => {
+    const { ctx, fetch } = setup()
+    await generateFromStudio(ctx, relay, { ...request, output: { format: 'gif', size: '1024x512' } }, signal)
+    expect(bodyOf(fetch)).toEqual({ model: 'relay-image', prompt: 'wave', size: '1024x512', output_format: 'gif' })
+    const tabled = { ...relay, openaiCompatSizes: { '1:1': { '512': '512x512' }, '16:9': { '1K': '1024x576' } } }
+    const result = await generateFromStudio(ctx, tabled, { ...request, quality: '512', output: { format: 'gif' } }, signal)
+    expect(bodyOf(fetch, 1)).toEqual({ model: 'relay-image', prompt: 'wave', size: '512x512', output_format: 'gif' })
+    expect(result.output).toBe('512x512')
+    // A ratio the table does not list (a card remembering a GIF that had no size) sends none rather than the legacy default.
+    await generateFromStudio(ctx, tabled, { ...request, ratio: '3:2', output: { format: 'gif' } }, signal)
+    expect(bodyOf(fetch, 2)).toEqual({ model: 'relay-image', prompt: 'wave', output_format: 'gif' })
+    const official = (size: string) => generateFromStudio(ctx, { saveToWorkspace: false }, { mode: 'generate', provider: 'openai', model: DEFAULT_OPENAI_MODEL, prompt: 'wave', ratio: '1:1', quality: 'auto', output: { format: 'gif', size } }, signal)
+    await expect(official('100x100')).rejects.toThrow('16')
+    expect(fetch).toHaveBeenCalledTimes(3)
+    await official('512x512')
+    expect(bodyOf(fetch, 3)).toEqual({ model: DEFAULT_OPENAI_MODEL, prompt: 'wave', size: '512x512', output_format: 'gif' })
+  })
+
+  it('sends the GIF fields after the channel extras and leaves the frame size to the provider', async () => {
+    const { ctx, fetch } = setup()
+    await generateFromStudio(ctx, { ...relay, openaiCompatExtraBody: { watermark: false, frame_count: 4 } }, { ...request, output: gif }, signal)
+    expect(bodyOf(fetch)).toEqual({ model: 'relay-image', prompt: 'wave', watermark: false, output_format: 'gif', frame_count: 8, frame_duration_ms: 120 })
+    // A channel whose extras already select GIF is a GIF request even without `output`, and a call may tune the frames alone.
+    await generateFromStudio(ctx, { ...relay, openaiCompatExtraBody: { output_format: 'gif' } }, request, signal)
+    expect(bodyOf(fetch, 1)).toEqual({ model: 'relay-image', prompt: 'wave', output_format: 'gif' })
+    await generateFromStudio(ctx, { ...relay, openaiCompatExtraBody: { output_format: 'gif' } }, { ...request, output: { format: 'gif', frameCount: 4 } }, signal)
+    expect(bodyOf(fetch, 2)).toEqual({ model: 'relay-image', prompt: 'wave', output_format: 'gif', frame_count: 4 })
+    await generateFromStudio(ctx, relay, request, signal)
+    expect(bodyOf(fetch, 3)).toEqual({ model: 'relay-image', prompt: 'wave', size: '1024x1024' })
+    const official = await generateFromStudio(ctx, { saveToWorkspace: false }, { mode: 'generate', provider: 'openai', model: DEFAULT_OPENAI_MODEL, prompt: 'wave', ratio: '1:1', quality: 'auto', output: { format: 'gif', frameCount: 4 } }, signal)
+    expect(bodyOf(fetch, 4)).toEqual({ model: DEFAULT_OPENAI_MODEL, prompt: 'wave', output_format: 'gif', frame_count: 4 })
+    expect(official.output).toBe('1:1, auto')
+  })
+
+  it('accepts a GIF request on a channel with a size table whatever ratio and tier the card remembered', async () => {
+    const { ctx, fetch } = setup()
+    const tabled = { ...relay, openaiCompatSizes: { '16:9': { '2K': '2048x1152' } } }
+    await generateFromStudio(ctx, tabled, { ...request, output: { format: 'gif' } }, signal)
+    expect(bodyOf(fetch)).toEqual({ model: 'relay-image', prompt: 'wave', output_format: 'gif' })
+    await expect(generateFromStudio(ctx, tabled, request, signal)).rejects.toThrow('比例')
+    expect(fetch).toHaveBeenCalledTimes(1)
+    // A channel whose extras select GIF makes the same request a GIF, checked as one.
+    await generateFromStudio(ctx, { ...tabled, openaiCompatExtraBody: { output_format: 'gif' } }, request, signal)
+    expect(bodyOf(fetch, 1)).toEqual({ model: 'relay-image', prompt: 'wave', output_format: 'gif' })
+  })
+
+  it('still checks the OpenAI quality of a GIF request, which is sent as is, before spending it', async () => {
+    const { ctx, fetch } = setup()
+    const official = (quality: string) => generateFromStudio(ctx, { saveToWorkspace: false }, { mode: 'generate', provider: 'openai', model: DEFAULT_OPENAI_MODEL, prompt: 'wave', ratio: '1:1', quality, output: { format: 'gif' } }, signal)
+    await expect(official('ultra')).rejects.toThrow('清晰度')
+    expect(fetch).not.toHaveBeenCalled()
+    await official('high')
+    expect(bodyOf(fetch)).toEqual({ model: DEFAULT_OPENAI_MODEL, prompt: 'wave', quality: 'high', output_format: 'gif' })
+  })
+
+  it('sends no frame size when the remembered tier sits below the floor of its ratio, instead of a tier error a GIF card cannot act on', async () => {
+    const { ctx, fetch } = setup()
+    const tabled = { ...relay, openaiCompatSizes: { '1:1': { '2K': '2048x2048' } } }
+    await generateFromStudio(ctx, tabled, { ...request, quality: '1K', output: { format: 'gif' } }, signal)
+    expect(bodyOf(fetch)).toEqual({ model: 'relay-image', prompt: 'wave', output_format: 'gif' })
+    // The still-image path keeps rejecting the same tier: the table never upscales.
+    await expect(generateFromStudio(ctx, tabled, { ...request, quality: '1K' }, signal)).rejects.toThrow('清晰度')
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects out-of-range frame parameters and GIF output on providers without the contract before fetching', async () => {
+    const { ctx, fetch } = setup()
+    await expect(generateFromStudio(ctx, relay, { ...request, output: { format: 'gif', frameCount: 17 } }, signal)).rejects.toThrow('2 到 16')
+    await expect(generateFromStudio(ctx, { saveToWorkspace: false }, { mode: 'generate', provider: 'google', model: DEFAULT_GOOGLE_MODEL, prompt: 'wave', ratio: '1:1', quality: '1K', output: { format: 'gif' } }, signal)).rejects.toThrow('GIF')
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('keeps the raw GIF when the host normalizes it and reports it at the top level and per item', async () => {
+    const bytes = gifBytes(3)
+    const { ctx } = setup({ data: [{ b64_json: Buffer.from(bytes).toString('base64') }] })
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-studio-vault-'))
+    dirs.push(dir)
+    const original = { key: createHash('sha256').update(bytes).digest('hex'), bytes: bytes.byteLength, mediaType: 'image/gif' }
+    const single = await generateFromStudio(ctx, { ...relay, vaultDir: dir }, { ...request, output: { format: 'gif' } }, signal)
+    expect(single.original).toEqual(original)
+    expect(single.items?.map(item => item.original)).toEqual([original])
+    const batch = await generateFromStudio(ctx, { ...relay, vaultDir: dir }, { ...request, output: { format: 'gif' }, count: 2 }, signal)
+    expect(batch.original).toEqual(original)
+    expect(batch.items?.map(item => item.original)).toEqual([original, original])
+    const off = await generateFromStudio(ctx, { ...relay, vaultDir: dir, vaultEnabled: false }, { ...request, output: { format: 'gif' } }, signal)
+    expect(off).not.toHaveProperty('original')
+    expect(off.items?.[0]).not.toHaveProperty('original')
+  })
+
+  it('takes exactly one reference for a GIF edit and leaves still edits their five', () => {
+    const ref = { mediaType: 'image/png' as const, data: TINY_PNG }
+    const edit = { ...request, mode: 'edit' as const }
+    expect(parseStudioGenerateRequest({ ...edit, output: gif, references: [ref] })).toMatchObject({ mode: 'edit', output: gif, references: [ref] })
+    expect(() => parseStudioGenerateRequest({ ...edit, output: gif, references: [ref, ref] })).toThrow('拼图')
+    expect(parseStudioGenerateRequest({ ...edit, references: [ref, ref] }).references).toHaveLength(2)
+    expect(parseStudioGenerateRequest({ ...request, output: gif, references: [ref, ref] }).references).toHaveLength(2)
+  })
+
+  it('sends a GIF edit as the multipart form: the sheet, the regular fields, then each GIF field once', async () => {
+    const { ctx, fetch } = setup()
+    const sheet = { mediaType: 'image/png' as const, data: TINY_PNG, name: 'gif-frames-sheet.png' }
+    const edit = { ...request, mode: 'edit' as const, prompt: 'Re-animate the GIF with these changes.', references: [sheet] }
+    // The channel's generation extras (its own frame_count) never enter an edit; the request's output does.
+    await generateFromStudio(ctx, { ...relay, openaiCompatExtraBody: { output_format: 'gif', frame_count: 4 } }, { ...edit, output: { ...gif, size: '512x512' } }, signal)
+    const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toBe('https://relay.example/v1/images/edits')
+    const form = init.body as FormData
+    expect([...form.keys()]).toEqual(['image', 'prompt', 'model', 'size', 'output_format', 'frame_count', 'frame_duration_ms'])
+    expect(form.get('image')).toBeInstanceOf(Blob)
+    expect(form.get('prompt')).toBe(edit.prompt)
+    expect(form.get('size')).toBe('512x512')
+    expect(form.get('output_format')).toBe('gif')
+    expect(form.get('frame_count')).toBe('8')
+    expect(form.get('frame_duration_ms')).toBe('120')
+    // Without a frame size the edit sends none, never the still-image default.
+    await generateFromStudio(ctx, relay, { ...edit, output: { format: 'gif' } }, signal)
+    const bare = (fetch.mock.calls[1] as unknown as [string, RequestInit])[1].body as FormData
+    expect([...bare.keys()]).toEqual(['image', 'prompt', 'model', 'output_format'])
+    // A still edit on the same channel is untouched.
+    await generateFromStudio(ctx, relay, edit, signal)
+    const still = (fetch.mock.calls[2] as unknown as [string, RequestInit])[1].body as FormData
+    expect([...still.keys()]).toEqual(['image', 'prompt', 'model', 'size'])
+    expect(still.get('size')).toBe('1024x1024')
+  })
+
+  it('checks the frame size of an official GIF edit by the GIF rule, not the still-image table', async () => {
+    const { ctx, fetch } = setup()
+    const official = (size: string) => generateFromStudio(ctx, { saveToWorkspace: false }, { mode: 'edit', provider: 'openai', model: DEFAULT_OPENAI_MODEL, prompt: 'wave', ratio: '1:1', quality: 'auto', output: { format: 'gif', frameCount: 8, size }, reference: { mediaType: 'image/png', data: TINY_PNG } }, signal)
+    await expect(official('1000x1000')).rejects.toThrow('16')
+    expect(fetch).not.toHaveBeenCalled()
+    await official('768x768')
+    const form = (fetch.mock.calls[0] as unknown as [string, RequestInit])[1].body as FormData
+    expect([...form.keys()]).toEqual(['image', 'prompt', 'model', 'size', 'output_format', 'frame_count'])
+    expect(form.get('size')).toBe('768x768')
+  })
+
+  it('keeps the raw GIF an edit returns, so the new version plays on the card', async () => {
+    const bytes = gifBytes(3)
+    const { ctx } = setup({ data: [{ b64_json: Buffer.from(bytes).toString('base64') }] })
+    const dir = await mkdtemp(join(tmpdir(), 'dsh-studio-vault-'))
+    dirs.push(dir)
+    const result = await generateFromStudio(ctx, { ...relay, vaultDir: dir }, { ...request, mode: 'edit', output: { format: 'gif' }, references: [{ mediaType: 'image/png', data: TINY_PNG }] }, signal)
+    expect(result.original).toEqual({ key: createHash('sha256').update(bytes).digest('hex'), bytes: bytes.byteLength, mediaType: 'image/gif' })
   })
 })

@@ -26,6 +26,7 @@ import {
   resolveOpenAICompatChannels,
   resolveOpenAICompatModels,
   studioWatermarkCapability,
+  studioModelForMode,
   studioModelOptionsForMode,
   type CloudImageProvider,
   type StudioConfigResponse,
@@ -38,8 +39,10 @@ import {
   type SubscriptionProvider,
 } from './shared.js'
 
-import { CLOUD_CAPABILITIES, RATIO_LABELS, SUBSCRIPTION_CAPABILITIES } from './capabilities.js'
-import { compatGenerationExtraBody, compatQualityOptions, compatRequestQuality, officialQualityOptions, officialSizeTable, validateOfficialSize, PROVIDER_DEFAULT_QUALITY } from './openai-output.js'
+import { CLOUD_CAPABILITIES, cloudCapability, RATIO_LABELS, SUBSCRIPTION_CAPABILITIES } from './capabilities.js'
+import { compatGenerationExtraBody, compatQualityOptions, compatRequestQuality, gifRequestFields, officialQualityOptions, officialSizeTable, validateGifFrameSize, validateOfficialSize, PROVIDER_DEFAULT_QUALITY } from './openai-output.js'
+import { keepGifOriginal } from './vault-registry.js'
+import { vaultConfigOf } from './vault-store.js'
 import { compatEditExtraBody, selectedWatermark, watermarkProfile } from './watermark.js'
 
 const LEGACY_OPENAI_TABLE: Record<string, Record<string, string>> = {
@@ -111,6 +114,21 @@ export function openAIRequestSize(config: Config, ratio: string, quality: string
     throw new Error(`该比例不支持 ${quality} 清晰度，请降低清晰度或更换比例`)
   }
   return withinBudget.reduce((best, entry) => (entry.rank > best.rank ? entry : best)).size
+}
+
+/** The relay table entry the user picked, if a table is configured and lists this ratio; otherwise nothing. */
+function configuredCompatSize(config: Config, input: Pick<StudioGenerateRequest, 'ratio' | 'quality' | 'resolution'>): string | undefined {
+  const table = config.openaiCompatSizes
+  if (table === undefined || Object.keys(table).length === 0) return undefined
+  if (!openAICompatTable(config).some(group => group.ratio === input.ratio)) return undefined
+  try {
+    return openAIRequestSize(config, input.ratio, input.resolution ?? input.quality)
+  } catch {
+    // A remembered tier below the ratio's lowest (the table changed since the
+    // GIF was made): a GIF card has no tier control to act on that error, so
+    // it sends no size, the provider default, never a larger tier.
+    return undefined
+  }
 }
 
 /** Workbench profile derived from the configured relay table. */
@@ -211,6 +229,12 @@ const SUBSCRIPTION_DISPLAY_LABELS: Record<SubscriptionProvider, string> = {
   'google-sub': 'Google 订阅',
 }
 
+/** A generation on an OpenAI-compatible channel whose extras select GIF is a GIF request even when it carries no `output`. */
+export function channelSelectsGif(config: Config, input: Pick<StudioGenerateRequest, 'provider' | 'mode' | 'channel'>): boolean {
+  return input.provider === 'openai-compat' && input.mode === 'generate'
+    && withOpenAICompatChannel(config, input.channel).openaiCompatExtraBody?.output_format === 'gif'
+}
+
 /** Execute one validated browser workbench request using the existing provider adapters. */
 export async function generateFromStudio(
   ctx: Context,
@@ -226,14 +250,16 @@ export async function generateFromStudio(
   if (isSubscriptionProvider(input.provider)) {
     if (subscriptions === undefined) throw new Error('订阅生图不可用：订阅管理器未初始化')
     const subProfile = subscriptionStudioProfile(input.provider, true)
-    assertAllowed(subProfile, input)
+    assertAllowed(subProfile, input, input.output?.format === 'gif')
     return generateSubscriptionFromStudio(ctx, subscriptions, input, signal)
   }
   const channel = input.provider === 'openai-compat' ? resolveOpenAICompatChannel(config, input.channel) : undefined
   const requestConfig = input.provider === 'openai-compat' ? withOpenAICompatChannel(config, input.channel) : config
   const profile = studioProfile(requestConfig, input.provider, true, channel?.id)
-  assertAllowed(profile, input)
-  const active = resolveProvider(withProviderOverrides(requestConfig, input.provider, input.model))
+  const model = withGenerationModel(profile, input).model
+  const channelGif = channelSelectsGif(config, input)
+  assertAllowed(profile, { ...input, model }, input.output?.format === 'gif' || channelGif)
+  const active = resolveProvider(withProviderOverrides(requestConfig, input.provider, model))
   if (active.provider === 'comfyui') throw new Error('ComfyUI 暂未接入工作台')
   if (isSubscriptionProvider(active.provider)) throw new Error('订阅生图应通过订阅渠道执行')
   // ComfyUI is rejected above; subscription channels were routed earlier; narrow for the closures below.
@@ -265,34 +291,49 @@ export async function generateFromStudio(
       // openai-compat keeps its configured relay table; the others resolve via
       // the capability table. xAI speaks aspect_ratio+resolution, not size.
       const p = wired.provider
+      // GIF fields ride the same extraBody channel as the relay extras, merged
+      // after them, exactly like the chat tools: a channel whose extras already
+      // select GIF counts as a GIF request. A GIF takes its frame size from the
+      // request (a card regenerating keeps its own) or from a relay size table
+      // the user configured and picked from; never from the implicit still-image
+      // table, whose 1024 px sizes overflow the frame sheet.
+      const gifFields: ReturnType<typeof gifRequestFields> = p === 'openai' || p === 'openai-compat'
+        ? gifRequestFields({ outputFormat: input.output?.format ?? (channelGif ? 'gif' : undefined), frameCount: input.output?.frameCount, frameDurationMs: input.output?.frameDurationMs })
+        : {}
+      const gif = gifFields.output_format === 'gif'
       const officialTable = p === 'openai' ? officialSizeTable(requestConfig, wired.model) : undefined
       const officialResolution = input.resolution ?? (officialTable
         ? openAICompatTable({ openaiCompatSizes: officialTable }).find(group => group.ratio === input.ratio)?.tiers[0]?.tier
         : undefined) ?? '1K'
-      const size = p === 'openai-compat' ? openAIRequestSize(requestConfig, input.ratio, input.resolution ?? input.quality)
+      const size = gif ? input.output?.size ?? (p === 'openai-compat' ? configuredCompatSize(requestConfig, input) : undefined)
+        : p === 'openai-compat' ? openAIRequestSize(requestConfig, input.ratio, input.resolution ?? input.quality)
         : p === 'openai' ? openAIRequestSize({ openaiCompatSizes: officialTable! }, input.ratio, officialResolution)
         : p === 'xai' ? undefined
-        : CLOUD_CAPABILITIES[p].sizeFor?.(input.ratio, input.quality)
-      if (p === 'openai' && size !== undefined) validateOfficialSize(wired.model, size)
+        : cloudCapability(p, wired.model).sizeFor?.(input.ratio, input.quality)
+      if (p === 'openai' && size !== undefined) {
+        if (gif) validateGifFrameSize(size)
+        else validateOfficialSize(wired.model, size)
+      }
       const requestedQuality = input.generationQuality ?? input.quality
       const quality = p === 'openai' ? (requestedQuality === 'auto' ? undefined : requestedQuality)
         : p === 'openai-compat' ? compatRequestQuality(requestConfig, input.generationQuality)
         : p === 'zhipu' ? 'hd'
         : undefined
-      const extraBody = p === 'xai' ? { aspect_ratio: input.ratio, resolution: input.quality }
+      const channelExtraBody = p === 'xai' ? { aspect_ratio: input.ratio, resolution: input.quality }
         : p === 'openai-compat' ? input.mode === 'generate'
           ? compatGenerationExtraBody(requestConfig, input.watermark) : compatEditExtraBody(requestConfig, input.watermark)
         : undefined
+      const extraBody = Object.keys(gifFields).length === 0 ? channelExtraBody : { ...channelExtraBody, ...gifFields }
       generated = input.mode === 'edit'
-        ? await editOpenAICompatibleImage({ apiKey: credential, baseURL: wired.baseURL, model: wired.model, prompt: input.prompt, sourceImages, ...(size === undefined ? {} : { size }), maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal, ...(quality === undefined ? {} : { quality }), ...(extraBody === undefined ? {} : { extraBody }), ...(p === 'openai-compat' ? { editFormat: wired.editFormat, editExtra: wired.editExtra, editSizeMode: requestConfig.openaiCompatEditSizeMode ?? 'auto' } : p === 'xai' ? { editFormat: 'xaiJson' as const } : {}) })
-        : await generateOpenAICompatibleImage({ provider: p, apiKey: credential, baseURL: wired.baseURL, model: wired.model, prompt: input.prompt, ...(size === undefined ? {} : { size }), maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal, ...(quality === undefined ? {} : { quality }), ...(extraBody === undefined ? {} : { extraBody }) })
+        ? await editOpenAICompatibleImage({ strictImageDownloads: requestConfig.strictImageDownloads === true, apiKey: credential, baseURL: wired.baseURL, model: wired.model, prompt: input.prompt, sourceImages, ...(size === undefined ? {} : { size }), maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal, ...(quality === undefined ? {} : { quality }), ...(extraBody === undefined ? {} : { extraBody }), ...(p === 'openai-compat' ? { editFormat: wired.editFormat, editExtra: wired.editExtra, editSizeMode: requestConfig.openaiCompatEditSizeMode ?? 'auto' } : p === 'xai' ? { editFormat: 'xaiJson' as const } : {}) })
+        : await generateOpenAICompatibleImage({ strictImageDownloads: requestConfig.strictImageDownloads === true, provider: p, apiKey: credential, baseURL: wired.baseURL, model: wired.model, prompt: input.prompt, ...(size === undefined ? {} : { size }), maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal, ...(quality === undefined ? {} : { quality }), ...(extraBody === undefined ? {} : { extraBody }) })
       output = size ?? `${input.ratio}, ${input.quality}`
     } else if (wired.provider === 'seedream') {
-      const size = CLOUD_CAPABILITIES.seedream.sizeFor?.(input.ratio, input.quality) ?? input.quality
+      const size = cloudCapability('seedream', wired.model).sizeFor?.(input.ratio, input.quality) ?? input.quality
       const arkOptions = { ...wired.arkOptions, watermark: selectedWatermark(input.watermark, wired.arkOptions.watermark)! }
       generated = input.mode === 'edit'
-        ? await editSeedreamImage({ apiKey: credential, baseURL: wired.baseURL, model: wired.model, prompt: input.prompt, sourceImages, size, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal, arkOptions })
-        : await generateOpenAICompatibleImage({ provider: 'seedream', apiKey: credential, baseURL: wired.baseURL, model: wired.model, prompt: input.prompt, size, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal, arkOptions })
+        ? await editSeedreamImage({ strictImageDownloads: requestConfig.strictImageDownloads === true, apiKey: credential, baseURL: wired.baseURL, model: wired.model, prompt: input.prompt, sourceImages, size, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal, arkOptions })
+        : await generateOpenAICompatibleImage({ strictImageDownloads: requestConfig.strictImageDownloads === true, provider: 'seedream', apiKey: credential, baseURL: wired.baseURL, model: wired.model, prompt: input.prompt, size, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal, arkOptions })
       output = size
     } else if (wired.provider === 'dashscope') {
       if (input.mode === 'edit' && sourceImages.length > 3) {
@@ -301,8 +342,8 @@ export async function generateFromStudio(
       const size = CLOUD_CAPABILITIES.dashscope.sizeFor?.(input.ratio, input.quality) ?? '1024x1024'
       const watermark = selectedWatermark(input.watermark)
       generated = input.mode === 'edit'
-        ? await editDashScopeImage({ apiKey: credential, endpoint: wired.endpoint, model: wired.model, prompt: input.prompt, sourceImages, size, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal, ...(watermark === undefined ? {} : { watermark }) })
-        : await generateDashScopeImage({ apiKey: credential, endpoint: wired.endpoint, model: wired.model, prompt: input.prompt, size, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal, ...(watermark === undefined ? {} : { watermark }) })
+        ? await editDashScopeImage({ strictImageDownloads: requestConfig.strictImageDownloads === true, apiKey: credential, endpoint: wired.endpoint, model: wired.model, prompt: input.prompt, sourceImages, size, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal, ...(watermark === undefined ? {} : { watermark }) })
+        : await generateDashScopeImage({ strictImageDownloads: requestConfig.strictImageDownloads === true, apiKey: credential, endpoint: wired.endpoint, model: wired.model, prompt: input.prompt, size, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal, ...(watermark === undefined ? {} : { watermark }) })
       output = size
     } else {
       throw new Error('当前渠道未接入 API 工作台')
@@ -316,10 +357,14 @@ export async function generateFromStudio(
       mediaType: generated.mediaType,
       name: count > 1 ? `studio-image-${index + 1}` : 'studio-image',
     })
+    // The attachment is the host's normalized copy; an animated result keeps
+    // its raw bytes so the conversation card can play it (same rule as the chat tools).
+    const original = await keepGifOriginal(vaultConfigOf(requestConfig), generated, attachment, message => { ctx.logger.warn(message) })
     // Studio generation is temporary on canvas; workspace file persistence occurs when user collects to gallery.
     return {
       attachment,
       output,
+      ...(original === undefined ? {} : { original }),
     }
   }
 
@@ -330,7 +375,7 @@ export async function generateFromStudio(
       output: single.output,
       provider: input.provider,
       ...(channel === undefined ? {} : { channel: channel.id }),
-      model: input.model,
+      model,
       prompt: input.prompt,
       createdAt: Date.now(),
       elapsedMs: Date.now() - startedAt,
@@ -338,6 +383,7 @@ export async function generateFromStudio(
       failedCount: 0,
       items: [single],
       ...(single.savedTo ? { savedTo: single.savedTo } : {}),
+      ...(single.original === undefined ? {} : { original: single.original }),
     }
   }
 
@@ -369,7 +415,7 @@ export async function generateFromStudio(
     output: first.output,
     provider: input.provider,
     ...(channel === undefined ? {} : { channel: channel.id }),
-    model: input.model,
+    model,
     prompt: input.prompt,
     createdAt: Date.now(),
     elapsedMs: Date.now() - startedAt,
@@ -378,6 +424,7 @@ export async function generateFromStudio(
     items: successes,
     ...(errors.length > 0 ? { errors } : {}),
     ...(first.savedTo ? { savedTo: first.savedTo } : {}),
+    ...(first.original === undefined ? {} : { original: first.original }),
   }
 }
 
@@ -568,7 +615,7 @@ function cloudStudioProfile(config: Config, provider: CloudImageProvider, config
       resolutionOptions, defaultResolution: resolutionOptions[defaultRatio]?.[0]?.value ?? '1K' }
   }
   // Every remaining cloud row reads its picker shape from the capability table.
-  const cap = CLOUD_CAPABILITIES[provider as Exclude<CloudImageProvider, 'openai-compat'>]
+  const cap = cloudCapability(provider as Exclude<CloudImageProvider, 'openai-compat'>, model)
   return profile(provider, model, configured, cap.ratioOptions, cap.qualityOptions, cap.defaultRatio, cap.defaultQuality)
 }
 
@@ -630,12 +677,32 @@ function option(value: string): StudioOption {
   return { value, label: RATIO_LABELS[value] ?? value }
 }
 
-function assertAllowed(profile: StudioProviderProfile, input: StudioGenerateRequest): void {
+/**
+ * Regenerating an edit result is a generation, but the card remembers the
+ * channel's separate editing model that drew it, which the generation list
+ * may not offer. That model is swapped for the channel's generation model;
+ * any other unknown model still fails as a stale workbench below.
+ */
+export function withGenerationModel<T extends StudioGenerateRequest>(profile: StudioProviderProfile, input: T): T {
+  if (input.mode !== 'generate' || profile.editModel === undefined || input.model !== profile.editModel) return input
+  if (studioModelOptionsForMode(profile, 'generate').some(option => option.value === input.model)) return input
+  return { ...input, model: studioModelForMode(profile, 'generate') }
+}
+
+function assertAllowed(profile: StudioProviderProfile, input: StudioGenerateRequest, gif: boolean): void {
   if (!studioModelOptionsForMode(profile, input.mode).some(option => option.value === input.model)) throw new Error('模型配置已变化，请刷新工作台后重试')
-  if (!profile.ratioOptions.some(option => option.value === input.ratio)) throw new Error('该 Provider 不支持所选比例')
+  if (input.output !== undefined && input.provider !== 'openai' && input.provider !== 'openai-compat') throw new Error('该 Provider 不支持 GIF 输出参数')
+  // A GIF (asked for by the request or by the channel) takes no size from the
+  // ratio table, so the ratio and tier a card remembered need not exist on this
+  // channel (a relay with a size table lists only pixel tiers, never the legacy
+  // `standard`). OpenAI's quality is not a tier but a field sent as is, so a
+  // GIF request still has it checked.
   const selectedQuality = input.provider === 'openai' ? input.generationQuality ?? input.quality : input.resolution ?? input.quality
-  if (!profile.qualityOptions.some(option => option.value === selectedQuality)) throw new Error('该 Provider 不支持所选清晰度')
-  if (input.resolution !== undefined && profile.resolutionOptions !== undefined && !profile.resolutionOptions[input.ratio]?.some(option => option.value === input.resolution)) throw new Error('该比例不支持所选分辨率')
+  if (!gif) {
+    if (!profile.ratioOptions.some(option => option.value === input.ratio)) throw new Error('该 Provider 不支持所选比例')
+    if (!profile.qualityOptions.some(option => option.value === selectedQuality)) throw new Error('该 Provider 不支持所选清晰度')
+    if (input.resolution !== undefined && profile.resolutionOptions !== undefined && !profile.resolutionOptions[input.ratio]?.some(option => option.value === input.resolution)) throw new Error('该比例不支持所选分辨率')
+  } else if (input.provider === 'openai' && !profile.qualityOptions.some(option => option.value === selectedQuality)) throw new Error('该 Provider 不支持所选清晰度')
   if (input.generationQuality !== undefined && input.provider === 'openai-compat' && !profile.generationQualityOptions?.some(option => option.value === input.generationQuality)) throw new Error('该 Provider 不支持所选生成质量')
   if ((input.resolution !== undefined || input.generationQuality !== undefined) && input.provider !== 'openai' && input.provider !== 'openai-compat') throw new Error('该 Provider 不支持独立的 OpenAI 输出参数')
   if (input.watermark !== undefined && input.watermark !== 'default'

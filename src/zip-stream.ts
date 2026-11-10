@@ -52,7 +52,7 @@ export class ZipStreamWriter {
 
   constructor(
     private readonly res: ServerResponse,
-    private readonly options: { zip64?: 'auto' | 'always' } = {},
+    private readonly options: { zip64?: 'auto' | 'always'; maxBytes?: number } = {},
   ) {}
 
   get entryCount(): number {
@@ -62,6 +62,8 @@ export class ZipStreamWriter {
   get bytesWritten(): number {
     return this.offset
   }
+
+  get isClosed(): boolean { return this.closed }
 
   /** Stop writing as soon as the browser closes the download. */
   markClientClosed(): void {
@@ -199,6 +201,7 @@ export class ZipStreamWriter {
 
   private async write(chunk: Buffer): Promise<void> {
     if (this.closed) throw new Error('client closed the download')
+    if (this.offset + chunk.byteLength > (this.options.maxBytes ?? Number.POSITIVE_INFINITY)) throw new ZipTooLargeError('ZIP export exceeds the archive byte limit')
     this.offset += chunk.byteLength
     if (this.res.write(chunk)) return
     // A response that closes without draining must settle the wait, otherwise
