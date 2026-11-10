@@ -5,12 +5,20 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import type { StudioWorkspaceInfo } from './shared.js'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 
+/**
+ * Media types that can be written to the workspace. SVG is a vector document
+ * the attachment layer does not store, but the generated file is still an
+ * image artifact worth saving next to the rasters.
+ */
+export type SavedMediaType = ImageAttachmentRef['mediaType'] | 'image/svg+xml'
+
 /** File extension for each supported image media type. */
-const EXTENSION: Record<ImageAttachmentRef['mediaType'], string> = {
+const EXTENSION: Record<SavedMediaType, string> = {
   'image/png': 'png',
   'image/jpeg': 'jpg',
   'image/webp': 'webp',
   'image/gif': 'gif',
+  'image/svg+xml': 'svg',
 }
 
 /**
@@ -25,7 +33,7 @@ const EXTENSION: Record<ImageAttachmentRef['mediaType'], string> = {
  */
 export function workspaceImageName(
   attachmentId: string,
-  mediaType: ImageAttachmentRef['mediaType'],
+  mediaType: SavedMediaType,
 ): string {
   const digest = attachmentId.startsWith('sha256:') ? attachmentId.slice('sha256:'.length) : attachmentId
   const prefix = digest.slice(0, 8).padEnd(8, '0')
@@ -109,7 +117,7 @@ export async function saveImageToWorkspace(options: {
   workspaceRoot: string
   folder?: string | undefined
   attachmentId: string
-  mediaType: ImageAttachmentRef['mediaType']
+  mediaType: SavedMediaType
   data: Uint8Array
   signal?: AbortSignal
 }): Promise<string> {
@@ -145,7 +153,7 @@ export async function saveImageToWorkspace(options: {
 }
 
 /** Regex pattern strictly matching generated image file names (e.g. image-01234567.png). */
-const GENERATED_IMAGE_NAME_REGEX = /^image-[0-9a-f]{8,}\.(png|jpg|jpeg|webp|gif)$/i
+const GENERATED_IMAGE_NAME_REGEX = /^image-[0-9a-f]{8,}\.(png|jpg|jpeg|webp|gif|svg)$/i
 
 /** Discover all DSH workspace paths recorded in local application storage. */
 export async function getDshWorkspaceRoots(): Promise<string[]> {

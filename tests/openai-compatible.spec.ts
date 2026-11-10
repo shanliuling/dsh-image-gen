@@ -13,6 +13,26 @@ describe('OpenAI-compatible images', () => {
     expect(fetchMock.mock.calls[0]?.[0]).toBe('https://relay.example/v1/images/generations')
   })
 
+  it('recognises an SVG document returned as base64 instead of a raster image', async () => {
+    const svg = '<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" width="128" height="128"><rect width="128" height="128"/></svg>'
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: [{ b64_json: Buffer.from(svg).toString('base64') }] }), { headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    const result = await generateOpenAICompatibleImage({ provider: 'openai-compat', apiKey: 'key', baseURL: 'https://relay.example/v1', model: 'image-model', prompt: 'an icon', extraBody: { output_format: 'svg' }, maxBytes: 4096, signal })
+    expect(result.mediaType).toBe('image/svg+xml')
+    expect(new TextDecoder().decode(result.data)).toBe(svg)
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({ model: 'image-model', prompt: 'an icon', output_format: 'svg' })
+  })
+
+  it('recognises an SVG document served from the relay object store', async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><circle r="32" cx="32" cy="32"/></svg>'
+    const fetchMock = vi.fn(async (url: unknown) => String(url).endsWith('/a.svg')
+      ? new Response(svg, { headers: { 'content-type': 'image/svg+xml' } })
+      : new Response(JSON.stringify({ data: [{ url: 'https://cdn.example/a.svg' }] }), { headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    const result = await generateOpenAICompatibleImage({ provider: 'openai-compat', apiKey: 'key', baseURL: 'https://relay.example/v1', model: 'image-model', prompt: 'an icon', extraBody: { output_format: 'svg' }, maxBytes: 4096, signal })
+    expect(result.mediaType).toBe('image/svg+xml')
+  })
+
   it('uses multipart /images/edits with the source image', async () => {
     const image = Buffer.from('edited image').toString('base64')
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: [{ b64_json: image }] }), { headers: { 'content-type': 'application/json' } }))

@@ -3,7 +3,7 @@ import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
-import { mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -967,6 +967,32 @@ describe('GIF output through the conversation tools', () => {
     // The channel already asked for a GIF, so a call that only tunes the frames must not be told to add output_format.
     await toolByName(tools, 'generate_image').execute({ prompt: 'wave', frame_count: 4, frame_duration_ms: 120 }, exec())
     expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({ model: 'relay', prompt: 'wave', quality: 'low', output_format: 'gif', frame_count: 4, frame_duration_ms: 120 })
+  })
+
+  it('returns an SVG as markup plus a saved .svg file instead of a chat attachment', async () => {
+    const { ctx, tools } = harnessContext()
+    const svg = '<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" width="128" height="128"><rect width="128" height="128" fill="#F59E0B"/></svg>'
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: [{ b64_json: Buffer.from(svg).toString('base64') }] }), { headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    const workspace = await mkdtemp(join(tmpdir(), 'dsh-svg-'))
+    apply(ctx, { ...compatConfig, saveToWorkspace: true })
+    const svgExec = { signal: new AbortController().signal, agent: { session: { header: { cwd: workspace } } } } as never
+    const value = await toolByName(tools, 'generate_image').execute({ prompt: 'icon', output_format: 'svg', size: '1024x1024' }, svgExec) as { svg?: string; savedTo?: string; attachment?: unknown; notice?: string; output: string; svgBytes?: number }
+    // A vector result carries no pixel size, so the still-image default never reaches the request.
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({ model: 'relay', prompt: 'icon', output_format: 'svg' })
+    expect(value.output).toBe('svg')
+    expect(value.svg).toBe(svg)
+    expect(value.svgBytes).toBe(Buffer.byteLength(svg))
+    expect(value.attachment).toBeUndefined()
+    expect(value.savedTo?.endsWith('.svg')).toBe(true)
+    expect(await readFile(String(value.savedTo), 'utf8')).toBe(svg)
+    expect(value.notice).toContain('do not apply to an SVG')
+    expect(ctx.attachments.saveImage).not.toHaveBeenCalled()
+    expect(renderText(tools, 'generate_image', { prompt: 'icon', output_format: 'svg' }, value)).toContain('no entry in the conversation image card')
+    const content = toolByName(tools, 'generate_image').output.render({ prompt: 'icon', output_format: 'svg' }, value as never)
+    expect(content.map(block => block.type)).toEqual(['text', 'text'])
+    expect(content[1]).toEqual({ type: 'text', text: svg })
+    await rm(workspace, { recursive: true, force: true })
   })
 
   it('checks an official GIF frame size by the per-frame contract and forwards the GIF fields', async () => {

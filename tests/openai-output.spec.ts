@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { compatQualityOptions, compatRequestQuality, compatWatermarkField, gifRequestFields, officialQualityOptions, officialSizeTable, PROVIDER_DEFAULT_QUALITY, validateGifFrameSize, validateOfficialSize } from '../src/openai-output.js'
+import { compatQualityOptions, compatRequestQuality, compatWatermarkField, gifRequestFields, officialQualityOptions, officialSizeTable, outputRequestFields, PROVIDER_DEFAULT_QUALITY, validateGifFrameSize, validateOfficialSize } from '../src/openai-output.js'
 import { parseExtraFields, parseSizeTable } from '../src/client/output-settings.js'
 import { buildComparisonTargets, comparisonOutputOptions } from '../src/client/multi-model-compare.js'
 import { studioProfile } from '../src/studio.js'
@@ -67,6 +67,22 @@ describe('compatible watermark contracts', () => {
     expect(compatWatermarkField({ openaiCompatExtraBody: { watermark_enabled: true } })).toBe('watermark_enabled')
     expect(compatWatermarkField({ openaiCompatExtraBody: { parameters: { watermark: false } } })).toBe('parameters.watermark')
     expect(compatWatermarkField({ openaiCompatExtraBody: { watermark: 'false' } })).toBeUndefined()
+  })
+})
+
+describe('SVG output parameters', () => {
+  it('asks for a single vector document and sends nothing else', () => {
+    expect(outputRequestFields({ outputFormat: 'svg' })).toEqual({ output_format: 'svg' })
+  })
+  it('rejects the frame controls, which only a GIF honours', () => {
+    expect(() => outputRequestFields({ outputFormat: 'svg', frameCount: 4 })).toThrow('SVG')
+    expect(() => outputRequestFields({ outputFormat: 'svg', frameDurationMs: 120 })).toThrow('SVG')
+  })
+  it('refuses an output format outside the OpenAI images contract', () => {
+    expect(() => outputRequestFields({ outputFormat: 'webp' })).toThrow('output_format')
+  })
+  it('keeps gifRequestFields limited to GIF fields', () => {
+    expect(gifRequestFields({ outputFormat: 'svg' })).toEqual({})
   })
 })
 
