@@ -209,7 +209,7 @@ export const SUBSCRIPTION_PROVIDERS = ['chatgpt-sub', 'grok-sub', 'google-sub'] 
 export type SubscriptionProvider = typeof SUBSCRIPTION_PROVIDERS[number]
 
 /** True when the provider generates through a logged-in subscription account. */
-export function isSubscriptionProvider(provider: ImageProvider): provider is SubscriptionProvider {
+export function isSubscriptionProvider(provider: string): provider is SubscriptionProvider {
   return (SUBSCRIPTION_PROVIDERS as readonly string[]).includes(provider)
 }
 
@@ -333,14 +333,14 @@ export function resolveOpenAICompatChannel(source: OpenAICompatChannelSource, ch
  * pipeline and no shared request shape.
  */
 export const STUDIO_PROVIDERS = [...CLOUD_IMAGE_PROVIDERS, ...SUBSCRIPTION_PROVIDERS] as const
-export type StudioProvider = CloudImageProvider | SubscriptionProvider
+export type StudioProvider = CloudImageProvider | SubscriptionProvider | `llm:${string}`
 
 export function studioTargetKey(provider: StudioProvider, channel?: string): string {
   return channel === undefined ? provider : `${provider}:${channel}`
 }
 
 /** True when the provider is selectable in the browser workbench. */
-export function isStudioProvider(provider: ImageProvider): provider is StudioProvider {
+export function isStudioProvider(provider: string): provider is StudioProvider {
   return (STUDIO_PROVIDERS as readonly string[]).includes(provider)
 }
 

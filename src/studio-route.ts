@@ -219,7 +219,7 @@ function requiredText(value: unknown, message: string, maxLength?: number): stri
 }
 
 function studioProvider(value: unknown): value is StudioProvider {
-  return typeof value === 'string' && (STUDIO_PROVIDERS as readonly string[]).includes(value)
+  return typeof value === 'string' && ((STUDIO_PROVIDERS as readonly string[]).includes(value) || value.startsWith('llm:'))
 }
 
 function imageMediaType(value: unknown): value is ImageMediaType {

@@ -23,7 +23,7 @@ export interface GalleryItem {
   attachment: ImageAttachmentRef
   prompt: string
   /** Generation provider, or 'import' for user-uploaded images. */
-  provider: ImageProvider | 'import'
+  provider: ImageProvider | `llm:${string}` | 'import'
   channel?: string | undefined
   model: string
   createdAt: number

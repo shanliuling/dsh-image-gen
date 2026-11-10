@@ -44,6 +44,7 @@ import { compatGenerationExtraBody, compatQualityOptions, compatRequestQuality, 
 import { keepGifOriginal } from './vault-registry.js'
 import { vaultConfigOf } from './vault-store.js'
 import { primeChannelModels, refreshProfileModels, widenProfileModels, withCachedChannelModels } from './channel-model-discovery.js'
+import { generateLlmImage, isLlmImageProvider, llmImageProfiles } from './llm-image-models.js'
 import { compatEditExtraBody, selectedWatermark, watermarkProfile } from './watermark.js'
 
 const LEGACY_OPENAI_TABLE: Record<string, Record<string, string>> = {
@@ -203,7 +204,7 @@ export async function describeStudio(
     const signedIn = subStatuses.find(entry => entry[0] === provider)?.[1] === true
     return subscriptionStudioProfile(provider, signedIn)
   })
-  const profiles = [...cloudProfiles, ...subProfiles]
+  const profiles = [...cloudProfiles, ...subProfiles, ...await llmImageProfiles(ctx)]
   const preferred = config.provider
   const activeProvider = isStudioPreferred(preferred)
     ? preferred
@@ -217,8 +218,9 @@ export async function describeStudio(
 
 /** The persisted default provider is usable directly when the workbench can drive it. */
 function isStudioPreferred(preferred: string | undefined): preferred is NonNullable<StudioConfigResponse['activeProvider']> {
-  return preferred !== undefined && (CLOUD_IMAGE_PROVIDERS as readonly string[]).includes(preferred)
-    || preferred !== undefined && (SUBSCRIPTION_PROVIDERS as readonly string[]).includes(preferred)
+  return preferred !== undefined && ((CLOUD_IMAGE_PROVIDERS as readonly string[]).includes(preferred)
+    || (SUBSCRIPTION_PROVIDERS as readonly string[]).includes(preferred)
+    || isLlmImageProvider(preferred))
 }
 
 /** Subscription profiles come from the shared capability table (see capabilities.ts). */
@@ -260,6 +262,27 @@ export async function generateFromStudio(
   fallbackWorkspaceRoot?: string | undefined,
   subscriptions?: SubscriptionManager | undefined,
 ): Promise<StudioGenerateResponse> {
+  if (isLlmImageProvider(input.provider)) {
+    if (input.output !== undefined) throw new Error('对话模型通道不支持 GIF 输出参数')
+    const startedAt = Date.now()
+    const count = input.count ?? 1
+    const items: StudioGeneratedItem[] = []
+    for (let index = 0; index < count; index++) items.push(await generateLlmImage(ctx, input, signal))
+    const primary = items[0]!
+    return {
+      attachment: primary.attachment,
+      output: primary.output,
+      provider: input.provider,
+      model: input.model,
+      prompt: input.prompt,
+      createdAt: Date.now(),
+      elapsedMs: Date.now() - startedAt,
+      requestedCount: count,
+      failedCount: 0,
+      items,
+      ...(primary.original === undefined ? {} : { original: primary.original }),
+    }
+  }
   // Subscription channels take a dedicated path: fixed model, channel-default
   // parameters, and a per-request sign-in check. Edit mode reads the
   // references through the same studio reader as the API-key channels.
