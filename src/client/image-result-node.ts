@@ -5,7 +5,13 @@ import { VAULT_KEY_PATTERN } from '../shared.js'
 export const IMAGE_RESULT_NODE_KIND = 'dsh-image-result'
 
 export interface ImageResultPresentation {
-  readonly attachment: ImageAttachmentRef
+  /**
+   * The stored raster attachment. Absent for an SVG result, which the
+   * attachment layer cannot store and which travels as `svg` markup instead.
+   */
+  readonly attachment?: ImageAttachmentRef
+  /** SVG markup for a vector result; the card renders it from a data URL. */
+  readonly svg?: string
   readonly prompt: string
   readonly provider: string
   readonly channel?: string
@@ -18,6 +24,14 @@ export interface ImageResultPresentation {
   readonly sourceAttachmentIds?: readonly string[]
   /** Raw bytes in the vault when the attachment is a normalized copy; today only an animated GIF. */
   readonly original?: { readonly key: string; readonly bytes: number; readonly mediaType: ImageMediaType }
+}
+
+/** A result the attachment layer stored; the raster card renders and reuses it. */
+export type RasterImageResult = ImageResultPresentation & { readonly attachment: ImageAttachmentRef }
+
+/** True for a stored raster result, narrowing away the SVG-only shape. */
+export function isRasterResult(result: ImageResultPresentation): result is RasterImageResult {
+  return result.attachment !== undefined
 }
 
 interface ImageResultState {
@@ -132,13 +146,23 @@ export function createImageResultDefinition(): ConversationNodeDefinitionLike<Im
   }
 }
 
+/**
+ * Identity of one result inside a card. A stored image is its attachment; an
+ * SVG has no attachment, so its markup stands in for one.
+ */
+export function resultIdentity(result: ImageResultPresentation): string {
+  if (result.attachment !== undefined) return String(result.attachment.attachmentId)
+  return `svg:${result.svg ?? ''}`
+}
+
 /** Append a parsed result unless its attachment is already collected. */
 function appendResult(
   state: ImageResultState,
   result: ImageResultPresentation,
   seq: number,
 ): ImageResultState {
-  if (state.results.some(candidate => candidate.attachment.attachmentId === result.attachment.attachmentId)) {
+  const identity = resultIdentity(result)
+  if (state.results.some(candidate => resultIdentity(candidate) === identity)) {
     return state
   }
   return { ...state, results: [...state.results, { ...result, seq }] }
@@ -147,12 +171,15 @@ function appendResult(
 /** Parse the plugin-owned durable presentation metadata from a Tool result event. */
 export function imageResultFromMeta(value: unknown): ImageResultPresentation | undefined {
   const meta = record(value)
-  if (meta?.kind !== 'dsh-image-gen') return undefined
+  if (meta?.kind !== 'dsh-image-gen' && meta?.kind !== 'dsh-image-gen-svg') return undefined
   const attachment = imageAttachment(meta.attachment)
-  if (attachment === undefined) return undefined
+  const svg = typeof meta.svg === 'string' && meta.svg.trimStart().startsWith('<') ? meta.svg : undefined
+  // A result carries exactly one artifact: the stored raster, or the vector markup.
+  if (attachment === undefined && svg === undefined) return undefined
   const original = originalFromMeta(meta.original)
   return {
-    attachment,
+    ...(attachment === undefined ? {} : { attachment }),
+    ...(svg === undefined ? {} : { svg }),
     prompt: stringValue(meta.prompt, 'Generated Image'),
     provider: stringValue(meta.provider, 'google'),
     ...(typeof meta.channel === 'string' ? { channel: meta.channel } : {}),
@@ -191,9 +218,13 @@ const PTC_IMAGE_TOOL_NAMES: ReadonlySet<string> = new Set(['generate_image', 'ge
  * template rather than parsed out of natural language.
  */
 const PTC_SUMMARY_PATTERN = /^(?:Generated|Edited) one image with ([^/\s]+)\/(\S+) \((.+)\)\. Attachment ID: /
+/** The vector summary the tools render for output_format=svg (index.ts svgRender). */
+const PTC_SVG_SUMMARY_PATTERN = /^(?:Generated|Edited) one SVG document with ([^/\s]+)\/(\S+) \((.+)\)\./
 /** The vault reference the tools append for an animated result (index.ts originalNote). */
 const ORIGINAL_NOTE_PATTERN = / Original animation \(for the result card only\): vault ([a-f0-9]{64}), (\d+) bytes, (image\/[a-z]+)\./
 const PTC_SAVED_TO_PATTERN = / It was also saved to the workspace as (.+)\. (?:(?:Saving it to the workspace failed)|(?:It has no local file path)|(?:Respond to the user))/
+/** The saved .svg path a vector summary names (index.ts svgRender). */
+const PTC_SVG_SAVED_TO_PATTERN = / The \.svg file is saved at (.+?)\. An SVG is a vector document/
 
 /**
  * Parse a plugin image result from a tool/ptc-dispatch event (#38). PTC
@@ -218,11 +249,15 @@ export function imageResultsFromPtcDispatch(event: EventLike): readonly ImageRes
   let summaryText = ''
   const args = record(data.arguments)
   const sourceIds = sourceAttachmentIds(args)
+  // The SVG markup follows its summary as a second text block, so it is
+  // collected instead of being mistaken for another summary.
+  const texts: string[] = []
   for (const block of content) {
     const candidate = record(block)
     if (candidate === undefined) continue
     if (candidate.type === 'text' && typeof candidate.text === 'string') {
-      summaryText = candidate.text
+      if (summaryText === '') summaryText = candidate.text
+      else texts.push(candidate.text)
       continue
     }
     if (candidate.type !== 'image') continue
@@ -244,6 +279,23 @@ export function imageResultsFromPtcDispatch(event: EventLike): readonly ImageRes
       ...(sourceIds !== undefined ? { sourceAttachmentIds: sourceIds } : {}),
       ...(original === undefined ? {} : { original }),
     })
+  }
+  // A vector result has no image block: its summary and the markup that
+  // follows it are the whole payload.
+  if (results.length === 0) {
+    const svgSummary = PTC_SVG_SUMMARY_PATTERN.exec(summaryText)
+    const markup = texts.find(text => text.trimStart().startsWith('<'))
+    if (svgSummary !== null && markup !== undefined) {
+      const savedTo = PTC_SVG_SAVED_TO_PATTERN.exec(summaryText)?.[1]
+      results.push({
+        svg: markup,
+        prompt: stringValue(args?.prompt, 'Generated Image'),
+        provider: svgSummary[1] ?? '',
+        model: svgSummary[2] ?? '',
+        output: svgSummary[3] ?? '',
+        ...(savedTo === undefined ? {} : { savedTo }),
+      })
+    }
   }
   return results
 }

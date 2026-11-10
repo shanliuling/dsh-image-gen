@@ -242,7 +242,7 @@ pnpm dsh plugin --profile web add ./dsh-image-gen
 
 生图时也可以要求矢量结果：`generate_image` 传 `output_format: "svg"`（仅 OpenAI 官方与兼容中转的**文生图**；图生图接口不支持 SVG）。
 
-- 结果不进入对话图卡：DSH 附件层只保存 png/jpeg/webp/gif，SVG 因此以「保存到工作区的 .svg 文件 + 返回 SVG 源码」的形式交付，工具结果里直接带上 Markdown 源码，可直接引用或另存。
+- 结果会进入对话图卡：卡片直接显示矢量图（点开可放大，无损），工具栏可复制 SVG 源码、下载 `.svg`、在侧栏打开保存的文件。DSH 附件层只保存 png/jpeg/webp/gif，所以卡片是用工具结果里的 SVG 源码渲染的，图库与版本历史仍只收录位图。
 - SVG 没有像素尺寸，`size` / `aspect_ratio` / `image_size` 不会发送，结果里会给出一条说明；`frame_count` / `frame_duration_ms` 只属于 GIF，与 SVG 一起传会直接报错。
 
 <br />

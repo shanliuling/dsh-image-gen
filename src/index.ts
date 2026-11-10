@@ -855,6 +855,8 @@ function imageOutput(verb: 'Generated' | 'Edited') {
     presentationMeta: (args: unknown, value: GeneratedValue) => ({
       kind: value.attachment === undefined ? 'dsh-image-gen-svg' : 'dsh-image-gen',
       ...(value.attachment === undefined ? {} : { attachment: attachmentMeta(value.attachment) }),
+      // The card renders a vector result from its markup, since no attachment exists.
+      ...(value.svg === undefined ? {} : { svg: value.svg }),
       provider: value.provider, model: value.model, output: value.output,
       ...(value.channel === undefined ? {} : { channel: value.channel }),
       ...(verb === 'Edited' ? { operation: 'edit' } : {}),

@@ -242,7 +242,7 @@ With a GIF-capable model such as GPT Image 2.6, just ask for a "GIF" or "animati
 
 Generation can also return a vector document: pass `output_format: "svg"` to `generate_image` (official OpenAI and compatible relays, **text-to-image only** — the edits endpoint does not produce SVG).
 
-- The result does not become a chat image card: DSH attachments store png/jpeg/webp/gif only, so an SVG travels as the saved `.svg` file in the workspace plus the markup in the tool result, which you can quote or save.
+- The result does appear as a chat card: the card draws the vector image itself (open it to zoom without loss), and its toolbar copies the markup, downloads the `.svg`, or opens the saved file in the sidebar. DSH attachments store png/jpeg/webp/gif only, so the card renders the markup from the tool result; the Gallery and version history still keep bitmaps only.
 - A vector document has no pixel grid, so `size` / `aspect_ratio` / `image_size` are not sent and the result says so; `frame_count` / `frame_duration_ms` belong to GIF and are rejected alongside SVG.
 
 <br />

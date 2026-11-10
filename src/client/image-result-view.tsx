@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type DragEvent } from 'react'
 import type { InjectFace, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { imageRef, type ToolCallBlock } from './image-ref.js'
-import { imageResultsFromMeta, imageVersionKey, originalFromMeta, type ImageResultPresentation } from './image-result-node.js'
+import { imageResultsFromMeta, imageVersionKey, isRasterResult, originalFromMeta, resultIdentity, type ImageResultPresentation, type RasterImageResult } from './image-result-node.js'
 import {
   appendConversationImageRevision,
   loadConversationImageRevisionChain,
@@ -34,7 +34,9 @@ export interface ImageResultNodeProps {
 export function GeneratedImageCard(props: ImageCardProps) {
   const result = imageResultFromBlock(props.block)
   if (props.promoted && result !== undefined) return <PromotedResultNotice locale={props.locale} />
-  return <ImageResultCard result={result} locale={props.locale} sessionId={props.sessionId} openFile={props.openFile} />
+  // A tool-call block always carries a stored attachment; vector results only
+  // arrive through result metadata or a PTC dispatch.
+  return <ImageResultCard result={result !== undefined && isRasterResult(result) ? result : undefined} locale={props.locale} sessionId={props.sessionId} openFile={props.openFile} />
 }
 
 /** Suppress the folded duplicate on modern hosts; render every image on legacy hosts. */
@@ -59,15 +61,26 @@ export function GeneratedImagesCard(props: ImageCardProps) {
     return <div>{content.filter(item => item.type === 'text').map((item, index) => <p key={index}>{item.text}</p>)}</div>
   }
   return <div className="dsh-ig-promoted-results">
-    {results.map((result, index) => <ImageResultCard key={`${result.attachment.attachmentId}:${index}`} result={result} locale={props.locale} sessionId={props.sessionId} openFile={props.openFile} />)}
+    {results.map((result, index) => <ResultCard key={`${resultIdentity(result)}:${index}`} result={result} locale={props.locale} sessionId={props.sessionId} openFile={props.openFile} />)}
   </div>
+}
+
+/** Route one result to its card: vector markup has no attachment to render. */
+function ResultCard({ result, locale, sessionId, openFile }: {
+  result: ImageResultPresentation
+  locale?: LocaleService | undefined
+  sessionId?: string | undefined
+  openFile?: ((path: string) => void) | undefined
+}) {
+  if (!isRasterResult(result)) return <SvgResultCard result={result} locale={locale} openFile={openFile} />
+  return <ImageResultCard result={result} locale={locale} sessionId={sessionId} openFile={openFile} />
 }
 
 /** Render modern image artifacts as final conversation output instead of Tool process content. */
 export function PromotedImageResultNode(props: ImageResultNodeProps) {
   return <div className="dsh-ig-promoted-results">
     {props.node.data.results.map((result, index) =>
-      <ImageResultCard key={`${result.attachment.attachmentId}:${index}`} result={result} locale={props.locale} sessionId={props.sessionId} openFile={props.openFile} />)}
+      <ResultCard key={`${resultIdentity(result)}:${index}`} result={result} locale={props.locale} sessionId={props.sessionId} openFile={props.openFile} />)}
   </div>
 }
 
@@ -82,7 +95,7 @@ function ImageResultCard({
   sessionId,
   openFile,
 }: {
-  result?: ImageResultPresentation | undefined
+  result?: RasterImageResult | undefined
   locale?: LocaleService | undefined
   sessionId?: string | undefined
   openFile?: ((path: string) => void) | undefined
@@ -135,7 +148,7 @@ function ImageResultCard({
     return text
   }
 
-  const baseGalleryRecord = (presentation: ImageResultPresentation): GalleryRecord => ({
+  const baseGalleryRecord = (presentation: RasterImageResult): GalleryRecord => ({
     id: imageVersionKey(String(presentation.attachment.attachmentId), presentation.original),
     attachment: presentation.attachment,
     prompt: presentation.prompt,
@@ -514,6 +527,81 @@ function ImageResultCard({
   </section>
 }
 
+
+/**
+ * Card for a vector result. DSH attachments store raster formats only, so the
+ * markup the model received is rendered here as a data URL: the picture shows
+ * in the conversation exactly like a bitmap card, with vector-only actions
+ * (copy markup, download .svg).
+ */
+function SvgResultCard({ result, locale, openFile }: {
+  result: ImageResultPresentation
+  locale?: LocaleService | undefined
+  openFile?: ((path: string) => void) | undefined
+}) {
+  const lang = usePluginLanguage(locale)
+  const t = (keyName: DictKey): string => DICT[lang][keyName] || DICT.zh[keyName] || keyName
+  const markup = result.svg ?? ''
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [toast, setToast] = useState<string>()
+  const savedTo = result.savedTo
+  // A percent-encoded data URL avoids base64 limits for large documents and
+  // keeps the markup readable in devtools. <img> never runs scripts.
+  const url = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(markup)}`
+  const copyMarkup = () => {
+    void navigator.clipboard?.writeText(markup).then(() => {
+      setToast(t('svgCopy'))
+      setTimeout(() => { setToast(undefined) }, 2000)
+    }).catch(() => { setToast(t('svgCopy')) })
+  }
+  const download = () => {
+    const name = savedTo?.split(/[\\/]/).pop() ?? 'image.svg'
+    const blobUrl = URL.createObjectURL(new Blob([markup], { type: 'image/svg+xml' }))
+    const anchor = document.createElement('a')
+    anchor.href = blobUrl
+    anchor.download = name.endsWith('.svg') ? name : `${name}.svg`
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    setTimeout(() => { URL.revokeObjectURL(blobUrl) }, 10_000)
+  }
+  return <section className="dsh-ig-result" aria-label={t('generatedTitle')}>
+    <div className="dsh-ig-result-title">
+      {t('generatedTitle')}
+      <span className="dsh-ig-tag dsh-ig-svg-badge" title={t('svgPreviewHint')}>{t('svgBadge')}</span>
+    </div>
+    {savedTo !== undefined
+      ? <div className="dsh-ig-savedto">{t('savedToPath')}: {openFile === undefined ? savedTo : <button type="button" className="dsh-ig-savedto-open" title={savedTo} onClick={() => { openFile(savedTo) }}>{savedTo}</button>}</div>
+      : null}
+    <div className="dsh-ig-container">
+      <img
+        className="dsh-ig-image"
+        src={url}
+        alt={result.prompt || 'Generated SVG'}
+        onClick={() => { setPreviewOpen(true) }}
+      />
+      <div className={toast !== undefined ? 'dsh-ig-toolbar is-pinned' : 'dsh-ig-toolbar'}>
+        <button type="button" className="dsh-ig-tool-btn" title={t('svgCopy')} onClick={copyMarkup}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 18l6-6-6-6"/><path d="M8 6l-6 6 6 6"/></svg>
+        </button>
+        <button type="button" className="dsh-ig-tool-btn" title={t('svgDownload')} onClick={download}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        </button>
+        {openFile !== undefined && savedTo !== undefined
+          ? <button type="button" className="dsh-ig-tool-btn" title={t('openNewTab')} onClick={() => { openFile(savedTo) }}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+          </button>
+          : null}
+        {toast ? <div className="dsh-ig-toast">{toast}</div> : null}
+      </div>
+    </div>
+    {previewOpen ? <div className="dsh-ig-lightbox-backdrop" onClick={() => { setPreviewOpen(false) }}>
+      <div className="dsh-ig-lightbox-img-wrap" onClick={(event) => { event.stopPropagation() }}>
+        <img className="dsh-ig-lightbox-img" src={url} alt={result.prompt || 'Generated SVG preview'} />
+      </div>
+    </div> : null}
+  </section>
+}
 
 function imageResultFromBlock(block: ToolCallBlock): ImageResultPresentation | undefined {
   const attachment = imageRef(block)
