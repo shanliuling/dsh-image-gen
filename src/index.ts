@@ -137,6 +137,13 @@ function cleanImageToolArgs<T extends SingleGenerationArgs>(args: T): T {
 }
 
 /** GIF output parameters shared by generate_image and generate_images (OpenAI images contract). */
+// A relay may front several upstreams for one model name and only some of
+// them honour output_format=svg, so a vector request is worth repeating. The
+// attempt cap and the wall-clock budget keep a slow relay from turning one
+// call into a multi-minute stall.
+const SVG_REQUEST_ATTEMPTS = 3
+const SVG_RETRY_BUDGET_MS = 200_000
+
 const gifToolParameters = {
   output_format: { type: 'string', enum: ['gif', 'svg'], description: 'Optional. Only for provider=openai or openai-compat. gif produces a looping animation; svg produces a single vector document that is saved as a .svg file (DSH image attachments are raster-only, so an SVG result has no chat card image). For GIF, omit size unless the user asks for exact dimensions: all frames are tiled into one sheet whose longest edge must stay at or below 3840 px. To animate a subject from reference images, use edit_image with output_format=gif instead.' },
   frame_count: { type: 'integer', description: 'Optional, GIF only: number of frames, 2-16. Omit to use the provider default.' },
@@ -546,7 +553,13 @@ export function apply(ctx: Context, config: Config = {}): void {
     const quality = active.provider === 'openai-compat' ? compatRequestQuality(requestConfig, args.quality) : active.provider === 'openai' ? args.quality : undefined
     if (active.provider === 'openai' && quality !== undefined && !officialQualityOptions(active.model).some(option => option.value === quality)) throw new Error('该 OpenAI 模型不支持所选生成质量')
     const extraBody = channelExtraBody !== undefined ? { ...channelExtraBody, ...outputFields } : Object.keys(outputFields).length === 0 ? undefined : outputFields
-    const generated = await runCloud(signal => generateOpenAICompatibleImage({ provider: active.provider, apiKey: credential, baseURL: active.baseURL, model: active.model, prompt: args.prompt, ...(size === undefined ? {} : { size }), maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal, ...(quality === undefined ? {} : { quality }), ...(extraBody === undefined ? {} : { extraBody }), ...(arkOptions === undefined ? {} : { arkOptions }) }), gifRequested)
+    const requestOnce = () => runCloud(signal => generateOpenAICompatibleImage({ provider: active.provider, apiKey: credential, baseURL: active.baseURL, model: active.model, prompt: args.prompt, ...(size === undefined ? {} : { size }), maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal, ...(quality === undefined ? {} : { quality }), ...(extraBody === undefined ? {} : { extraBody }), ...(arkOptions === undefined ? {} : { arkOptions }) }), gifRequested)
+    // A relay can route one model name to several upstreams, and only some of
+    // them honour output_format=svg. Since a bitmap cannot be turned into a
+    // vector, ask again instead of silently handing back a raster.
+    const retryStartedAt = Date.now()
+    let generated = await requestOnce()
+    for (let attempt = 1; svgRequested && attempt < SVG_REQUEST_ATTEMPTS && generated.mediaType !== 'image/svg+xml' && Date.now() - retryStartedAt < SVG_RETRY_BUDGET_MS; attempt++) generated = await requestOnce()
     // Report what the provider actually delivered: a relay that ignores
     // output_format returns a bitmap, and the card must not claim 'svg'.
     const deliveredSvg = generated.mediaType === 'image/svg+xml'
