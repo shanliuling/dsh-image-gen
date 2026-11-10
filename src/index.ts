@@ -875,7 +875,7 @@ function imageOutput(verb: 'Generated' | 'Edited') {
  */
 function svgRender(verb: 'Generated' | 'Edited', value: GeneratedValue): { type: 'text'; text: string }[] {
   const saved = typeof value.savedTo === 'string' ? ` The .svg file is saved at ${value.savedTo}.` : typeof value.saveError === 'string' ? ` Saving the .svg file failed: ${value.saveError}.` : ''
-  const head = `${verb} one SVG document with ${value.provider}/${value.model} (${value.output})${saved} An SVG is a vector document, so it has no entry in the conversation image card; use the saved file or the markup below.${value.notice === undefined ? '' : ` ${value.notice}`}`
+  const head = `${verb} one SVG document with ${value.provider}/${value.model} (${value.output})${saved} An SVG is a vector document, so the conversation card renders it directly from this markup instead of a bitmap attachment; the markup is below.${value.notice === undefined ? '' : ` ${value.notice}`}`
   return [{ type: 'text', text: head }, { type: 'text', text: value.svg ?? '' }]
 }
 
