@@ -1,5 +1,5 @@
 /** Live, credential-free instructions for the conversation model's image tools. */
-import { activeComfyUIWorkflow, resolveComfyUIWorkflows, resolveProvider, withProviderOverrides, type Config } from './config.js'
+import { activeComfyUIWorkflow, resolveComfyUIWorkflows, resolveProvider, withOpenAICompatChannel, withProviderOverrides, type Config } from './config.js'
 import { comfyUIWorkflowSlots } from './comfyui-workflow.js'
 
 /** Workflow names listed for the model; a long list is cut so the system prompt stays small. */
@@ -36,9 +36,12 @@ export function imageToolContext(config: Config, configuredProviders?: readonly 
   let model = 'not configured'
   let editModel = model
   try {
-    const active = resolveProvider(config)
+    // Describe the relay channel tool calls run on (configForToolCall), not the legacy flat
+    // fields: those stay empty when only a named channel is set up.
+    const effective = provider === 'openai-compat' ? withOpenAICompatChannel(config) : config
+    const active = resolveProvider(effective)
     model = active.provider === 'comfyui' ? active.workflow?.name ?? 'workflow selected in settings' : active.model
-    const edit = resolveProvider(withProviderOverrides(config, undefined, undefined, 'edit'))
+    const edit = resolveProvider(withProviderOverrides(effective, undefined, undefined, 'edit'))
     editModel = edit.provider === 'comfyui' ? edit.workflow?.name ?? model : edit.model
   } catch { /* Incomplete settings must not break the host system prompt. */ }
   return [
