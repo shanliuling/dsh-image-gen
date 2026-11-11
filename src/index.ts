@@ -5,7 +5,7 @@ import type {} from '@deepseek-ai/dsh-client-connection'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type { SettingsForms } from '@deepseek-ai/dsh-settings'
 import { defineTool, type ToolResult } from '@deepseek-ai/dsh-tools'
-import { Config, migrateOpenAICompatConfig, resolveProvider, selectComfyUIWorkflow, withOpenAICompatChannel, withProviderOverrides, type AspectRatio, type ImageSize } from './config.js'
+import { Config, migrateOpenAICompatConfig, resolveLlmProvider, resolveProvider, selectComfyUIWorkflow, withOpenAICompatChannel, withProviderOverrides, type AspectRatio, type ImageSize } from './config.js'
 import { withGenerationTimeout } from './generation-timeout.js'
 import { requireApiKey, resolveApiKey } from './credentials.js'
 import { CanvasMirror } from './canvas-state.js'
@@ -31,10 +31,11 @@ import { editOpenAICompatibleImage, generateOpenAICompatibleImage } from './open
 import { type ResolvedReferenceImage, resolveReferenceImages } from './reference-image.js'
 import { editSeedreamImage } from './seedream.js'
 import { generateSubscriptionImage, registerSubscriptionRoutes, subscriptionToolParameters, SubscriptionManager } from './subscription.js'
-import { CANVAS_STATE_ROUTE, DEFAULT_CLOUD_TIMEOUT_MS, IMAGE_GENERATION_NAMESPACE, cloudTimeoutFor, IMAGE_PROVIDERS, IMPORT_ROUTE, INSPIRATION_ROUTE, PREVIEW_ROUTE, STORAGE_STATS_ROUTE, STUDIO_ROUTE, TEST_CONNECTION_ROUTE, THUMB_ROUTE, VAULT_DELETE_ROUTE, VAULT_REFS_ROUTE, VAULT_ROUTE, ZIP_CANCEL_ROUTE, ZIP_PROGRESS_ROUTE, ZIP_ROUTE, mergeComfyUIPrompt, resolveOpenAICompatChannel, type ImageProvider } from './shared.js'
+import { CANVAS_STATE_ROUTE, DEFAULT_CLOUD_TIMEOUT_MS, IMAGE_GENERATION_NAMESPACE, cloudTimeoutFor, IMAGE_PROVIDERS, IMPORT_ROUTE, INSPIRATION_ROUTE, PREVIEW_ROUTE, STORAGE_STATS_ROUTE, STUDIO_ROUTE, TEST_CONNECTION_ROUTE, THUMB_ROUTE, VAULT_DELETE_ROUTE, VAULT_REFS_ROUTE, VAULT_ROUTE, ZIP_CANCEL_ROUTE, ZIP_PROGRESS_ROUTE, ZIP_ROUTE, isLlmImageProvider, mergeComfyUIPrompt, resolveOpenAICompatChannel, type AnyImageProvider, type ImageProvider } from './shared.js'
 import { createInspirationRoute } from './inspiration-route.js'
 import { BUNDLED_INSPIRATION_CATALOG, searchInspirationCases } from './inspiration.js'
 import { channelSelectsGif, generateFromStudio, describeStudio } from './studio.js'
+import { fetchLlmImageBytes } from './llm-image-models.js'
 import { serveStudio } from './studio-route.js'
 import { serveTestConnection } from './test-route.js'
 import { describeSettingsHealth, serveSettingsHealth } from './settings-health.js'
@@ -59,7 +60,7 @@ export const inject = ['tools', 'attachments', 'credentials']
 
 interface GeneratedValue {
   attachment: ImageAttachmentRef
-  provider: ImageProvider
+  provider: AnyImageProvider
   channel?: string
   model: string
   output: string
@@ -158,15 +159,15 @@ function assertGifProvider(args: Pick<SingleGenerationArgs, 'output_format' | 'f
 }
 
 /** Validate the untrusted per-call provider override from tool arguments. */
-function providerOverrideOf(value: unknown): ImageProvider | undefined {
+function providerOverrideOf(value: unknown): AnyImageProvider | undefined {
   if (value === undefined || value === null || value === '') return undefined
-  if (typeof value !== 'string' || !(IMAGE_PROVIDERS as readonly string[]).includes(value)) {
-    throw new Error(`Unsupported provider ${JSON.stringify(value)}. Supported providers: ${IMAGE_PROVIDERS.join(', ')}.`)
+  if (typeof value !== 'string' || !((IMAGE_PROVIDERS as readonly string[]).includes(value) || isLlmImageProvider(value))) {
+    throw new Error(`Unsupported provider ${JSON.stringify(value)}. Supported providers: ${IMAGE_PROVIDERS.join(', ')}, or an llm:<id> conversation source.`)
   }
-  return value as ImageProvider
+  return value as AnyImageProvider
 }
 
-function configForToolCall(config: Config, provider: ImageProvider | undefined, channel: string | undefined): Config {
+function configForToolCall(config: Config, provider: AnyImageProvider | undefined, channel: string | undefined): Config {
   const selected = provider ?? config.provider ?? 'google'
   if (channel !== undefined && selected !== 'openai-compat') throw new Error('The channel argument is only supported with provider=openai-compat.')
   return selected === 'openai-compat' ? withOpenAICompatChannel(config, channel) : config
@@ -458,7 +459,22 @@ export function apply(ctx: Context, config: Config = {}): void {
   const generateSingle = async (rawArgs: SingleGenerationArgs, exec: { agent?: { session: { header: { cwd?: string } } }; signal: AbortSignal }): Promise<GeneratedValue> => {
     const args = cleanImageToolArgs(rawArgs)
     const requestConfig = configForToolCall(current(), providerOverrideOf(args.provider), args.channel)
-    const active = resolveProvider(withProviderOverrides(requestConfig, providerOverrideOf(args.provider), args.model))
+    const overridden = withProviderOverrides(requestConfig, providerOverrideOf(args.provider), args.model)
+    const llmProfile = resolveLlmProvider(overridden)
+    if (llmProfile !== undefined) {
+      if (llmProfile.model.length === 0) throw new Error('该对话模型通道尚未选择生图模型，请在工作台或生图菜单中选择')
+      const generated = await fetchLlmImageBytes(ctx, {
+        provider: llmProfile.provider,
+        model: llmProfile.model,
+        mode: 'generate',
+        prompt: args.prompt,
+        ratio: args.aspect_ratio ?? '1:1',
+        quality: 'default',
+        count: 1,
+      }, exec.signal)
+      return saveGenerated(ctx, generated, llmProfile.provider, llmProfile.model, '对话模型通道', current(), exec, knownWorkspaceRoots)
+    }
+    const active = resolveProvider(overridden)
     assertGifProvider(args, active.provider)
     if (active.provider === 'comfyui') {
       const workflow = selectComfyUIWorkflow(active, args.workflow)
@@ -539,7 +555,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     description: 'Generate a new image with the configured provider. Use when the user asks to create or draw a new image; use edit_image instead when they want to change an existing image. Give a complete visual prompt including subject, composition, style, lighting, and any exact text that should appear. The optional provider/model arguments switch provider or model for this call only when the user asks for a specific one. A successful image is attached directly to the conversation and may also be saved under the session workspace. Do not call read, glob, or other tools to locate or verify the image.',
     parameters: {
       prompt: { type: 'string', required: true, description: 'Complete description of the image to generate.' },
-      provider: { type: 'string', enum: ['google', 'openai', 'openai-compat', 'seedream', 'dashscope', 'xai', 'zhipu', 'comfyui', 'chatgpt-sub', 'grok-sub', 'google-sub'], description: 'OMIT unless the user explicitly requests a specific image provider. Omission uses the saved default; never guess a channel or fill this with an empty string. chatgpt-sub, grok-sub, and google-sub use logged-in subscription accounts instead of API keys.' },
+      provider: { type: 'string', description: 'OMIT unless the user explicitly requests a specific image provider. Conversation-provider image sources named in the configured image providers context are accepted as llm:<provider id>. Omission uses the saved default; never guess a channel or fill this with an empty string. chatgpt-sub, grok-sub, and google-sub use logged-in subscription accounts instead of API keys.' },
       model: { type: 'string', description: 'OMIT unless the user explicitly requests a specific model; omission uses the configured model. Optional override for this call only. Not used by ComfyUI (use workflow instead) nor by the subscription providers (model fixed by the subscription).' },
       channel: { type: 'string', description: 'Optional configured OpenAI-compatible channel id for this call only. Only meaningful with provider=openai-compat; omit to use the active channel.' },
       aspect_ratio: { type: 'string', enum: ['1:1', '3:2', '2:3', '4:3', '3:4', '4:5', '5:4', '16:9', '9:16', '21:9'], description: 'Optional output aspect ratio for Google Gemini, xAI Grok, subscription channels, and ComfyUI workflows with {{width}}/{{height}} placeholders (about one megapixel).' },
@@ -561,7 +577,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     description: 'Generate several images in one call, one per prompt, in order. Use for batches, variations, or illustration sets; prefer generate_image for a single image. Every successful image is attached to the conversation and may be saved under the session workspace. Items generate sequentially; a failed item is reported in the failures list and does not abort the rest. The optional provider/model/size arguments apply to every item.',
     parameters: {
       prompts: { type: 'array', items: { type: 'string' }, required: true, description: 'Ordered complete prompts; one image is generated per entry (1-10).' },
-      provider: { type: 'string', enum: ['google', 'openai', 'openai-compat', 'seedream', 'dashscope', 'xai', 'zhipu', 'comfyui', 'chatgpt-sub', 'grok-sub', 'google-sub'], description: 'OMIT unless the user explicitly requests a specific image provider. Uses the saved default for all items; never guess a channel or fill unused fields with empty strings.' },
+      provider: { type: 'string', description: 'OMIT unless the user explicitly requests a specific image provider. Conversation-provider image sources named in the configured image providers context are accepted as llm:<provider id>. Uses the saved default for all items; never guess a channel or fill unused fields with empty strings.' },
       model: { type: 'string', description: 'OMIT unless the user explicitly requests a specific model for every item; omission uses the configured model.' },
       channel: { type: 'string', description: 'Optional configured OpenAI-compatible channel id applied to every item; omit to use the active channel.' },
       aspect_ratio: { type: 'string', enum: ['1:1', '3:2', '2:3', '4:3', '3:4', '4:5', '5:4', '16:9', '9:16', '21:9'], description: 'Optional output aspect ratio for Google Gemini, xAI Grok, subscription channels, and ComfyUI workflows with {{width}}/{{height}} placeholders (about one megapixel).' },
@@ -640,7 +656,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     description: 'Edit, combine, or restyle existing images with the configured provider. Images attached inline to the latest human message are already readable DSH attachments even when no workspace file exists. In that case, call edit_image immediately with prompt only (plus output options such as output_format=gif when the user wants an animation); NEVER call read_image, glob, or shell to locate them, and NEVER invent @ paths. All inline images will be used in upload order. For specific older conversation images use source_attachment_id or source_attachment_ids; both canonical sha256: IDs and full bare SHA-256 digests are accepted. For files the user explicitly names in the workspace use source_path or source_paths. For what the user selected or drew on the image-gen workbench canvas (for example a hand-drawn sketch) use source=canvas_selection; canvas_state can verify a selection exists first. Provide exactly one selector field. Without a selector, images from the latest human message take priority; only when that message has no images does editing fall back to the newest conversation image. When the user wants a person, character, or object from the reference images kept as the same identity, write short hard identity-preservation instructions (use the same subject from the references; do not redesign it or synthesize a similar-looking replacement; change only scene, clothing, pose, lighting, style, or composition) instead of long generic appearance descriptions, which make the model replace the subject with a synthesized lookalike.',
     parameters: {
       prompt: { type: 'string', required: true, description: 'Describe the changes to make while preserving everything else that should remain.' },
-      provider: { type: 'string', enum: ['google', 'openai', 'openai-compat', 'seedream', 'dashscope', 'xai', 'zhipu', 'comfyui', 'chatgpt-sub', 'grok-sub', 'google-sub'], description: 'OMIT unless the user explicitly requests a specific image provider. Omission uses the saved default; never guess a channel or fill this with an empty string. Subscription providers edit through their logged-in accounts.' },
+      provider: { type: 'string', description: 'OMIT unless the user explicitly requests a specific image provider. Conversation-provider image sources named in the configured image providers context are accepted as llm:<provider id>. Omission uses the saved default; never guess a channel or fill this with an empty string. Subscription providers edit through their logged-in accounts.' },
       model: { type: 'string', description: 'OMIT unless the user explicitly requests a specific model; omission uses the configured model. Optional override for this call only. Not used by ComfyUI (use workflow instead) nor by the subscription providers (model fixed by the subscription).' },
       channel: { type: 'string', description: 'Optional configured OpenAI-compatible channel id for this call only. Only meaningful with provider=openai-compat; omit to use the active channel.' },
       source: { type: 'string', enum: ['canvas_selection'], description: 'Use the current selection on the image-gen workbench infinite canvas as the reference image(s): full-resolution originals when the selection is conversation-generated images, plus a screenshot of the whole selection when it also contains other content (hand-drawn strokes, pasted images). Choose this when the user refers to what they selected or drew on the canvas; combine with no other selector field.' },
@@ -659,7 +675,9 @@ export function apply(ctx: Context, config: Config = {}): void {
     async execute(rawArgs, exec): Promise<GeneratedValue> {
       const args = cleanImageToolArgs(rawArgs)
       const requestConfig = configForToolCall(current(), providerOverrideOf(args.provider), args.channel)
-      const active = resolveProvider(withProviderOverrides(requestConfig, providerOverrideOf(args.provider), args.model, 'edit'))
+      const overridden = withProviderOverrides(requestConfig, providerOverrideOf(args.provider), args.model, 'edit')
+      if (resolveLlmProvider(overridden) !== undefined) throw new Error('对话模型通道暂不支持图生图')
+      const active = resolveProvider(overridden)
       assertGifProvider(args, active.provider)
       const canvasSelection = args.source === 'canvas_selection'
       if (canvasSelection && (
@@ -905,7 +923,7 @@ function attachmentMeta(ref: ImageAttachmentRef) {
 async function saveGenerated(
   ctx: Context,
   generated: { data: Uint8Array; mediaType: ImageAttachmentRef['mediaType']; seed?: number },
-  provider: ImageProvider,
+  provider: AnyImageProvider,
   model: string,
   output: string,
   config: Config,

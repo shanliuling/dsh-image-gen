@@ -9,11 +9,14 @@ import {
   CLOUD_IMAGE_PROVIDERS,
   DEFAULT_MODELS,
   IMAGE_PROVIDERS,
+  STUDIO_ROUTE,
   SUBSCRIPTION_PROVIDERS,
   SUBSCRIPTION_STATUS_ROUTE,
   activeComfyUIWorkflow,
   cloudCredentialRef,
   currentSeedreamModel,
+  isLlmImageProvider,
+  llmProviderIdOf,
   resolveComfyUIWorkflows,
   isSubscriptionProvider,
   resolveOpenAICompatChannel,
@@ -23,6 +26,7 @@ import {
   type ComfyUIWorkflowEntry,
   type OpenAICompatChannel,
   type ImageProvider,
+  type StudioOption,
   type SubscriptionProvider,
 } from '../shared.js'
 import type { SettingsScope } from './index.js'
@@ -31,7 +35,7 @@ import { writeSetting } from './settings-write.js'
 
 /** Settings fields the pill reads; a structural subset of the full settings shape. */
 export interface PillSettings {
-  provider?: ImageProvider
+  provider?: ImageProvider | `llm:${string}`
   googleModel?: string
   openaiModel?: string
   openaiCompatLabel?: string
@@ -47,6 +51,8 @@ export interface PillSettings {
   comfyuiActiveWorkflow?: string
   comfyuiWorkflowJson?: string
   comfyuiWorkflowName?: string
+  /** Selected model for a conversation-provider image source (`llm:<id>`). */
+  llmImageModels?: Record<string, string>
   /** Opt-in toggle persisted by the settings card; the pill stays hidden until enabled. */
   showProviderPill?: boolean
 }
@@ -264,7 +270,7 @@ export function ImageProviderPill(props: ProviderPillFace) {
   const [snapshot, setSnapshot] = useState(() => props.scope.getSnapshot())
   const [lang, setLang] = useState<'zh' | 'en'>(() => (props.locale?.getSnapshot?.()?.active?.startsWith('en') ? 'en' : 'zh'))
   const [open, setOpen] = useState(false)
-  const [pending, setPending] = useState<ImageProvider | undefined>(undefined)
+  const [pending, setPending] = useState<ImageProvider | `llm:${string}` | undefined>(undefined)
   const [error, setError] = useState('')
   const [dots, setDots] = useState<Record<string, KeyDot>>({})
   const [keyTick, setKeyTick] = useState(0)
@@ -273,6 +279,10 @@ export function ImageProviderPill(props: ProviderPillFace) {
   const [subDots, setSubDots] = useState<Record<SubscriptionProvider, 'logged-in' | 'logged-out' | 'unknown'>>(
     () => ({ 'chatgpt-sub': 'unknown', 'grok-sub': 'unknown', 'google-sub': 'unknown' }),
   )
+  // Conversation-provider image rows (llm:<id>) come from the studio describe
+  // route: the pill has no host service access, and the route already filters
+  // each provider's catalog down to its image-generation models.
+  const [llmRows, setLlmRows] = useState<Array<{ provider: string; label: string; modelOptions: StudioOption[] }>>([])
   const buttonRef = useRef<HTMLButtonElement | null>(null)
   const [menuStyle, setMenuStyle] = useState<{ left: number; bottom?: number; top?: number } | null>(null)
 
@@ -330,6 +340,24 @@ export function ImageProviderPill(props: ProviderPillFace) {
       } catch { /* dots stay unknown */ }
     }
     void probe()
+    return () => { active = false }
+  }, [open, keyTick])
+
+  // Conversation rows refresh on mount and whenever the menu opens: a provider
+  // signed in after the last open still appears without a page reload, and the
+  // button label for an active llm row resolves without opening the menu.
+  useEffect(() => {
+    let active = true
+    void fetch(STUDIO_ROUTE, { cache: 'no-store' })
+      .then(async response => {
+        if (!response.ok) return
+        const payload = await response.json() as { providers?: Array<{ provider: string; label: string; modelOptions?: StudioOption[] }> }
+        if (!active) return
+        setLlmRows((payload.providers ?? [])
+          .filter(row => isLlmImageProvider(row.provider))
+          .map(row => ({ provider: row.provider, label: row.label, modelOptions: row.modelOptions ?? [] })))
+      })
+      .catch(() => { /* llm rows simply stay absent */ })
     return () => { active = false }
   }, [open, keyTick])
 
@@ -396,18 +424,22 @@ export function ImageProviderPill(props: ProviderPillFace) {
   // enables the pill in settings. Toggling later is a plain re-render.
   if (!pillVisible(snapshot.value)) return null
 
-  const select = (provider: ImageProvider, model?: string, channelId?: string): void => {
-    const currentModel = pillModelOf(provider, snapshot.value, channelId)
+  const select = (provider: ImageProvider | `llm:${string}`, model?: string, channelId?: string): void => {
+    const currentModel = isLlmImageProvider(provider)
+      ? snapshot.value?.llmImageModels?.[llmProviderIdOf(provider)] ?? ''
+      : pillModelOf(provider, snapshot.value, channelId)
     const sameChannel = provider !== 'openai-compat' || currentChannel?.id === (channelId ?? 'default')
     if (pending !== undefined || (provider === current && sameChannel && (model === undefined || model === currentModel))) {
       setOpen(false)
       return
     }
-    const modelField = model === undefined ? undefined : PILL_MODEL_FIELDS[provider]
+    const modelField = model === undefined || isLlmImageProvider(provider) ? undefined : PILL_MODEL_FIELDS[provider]
     setError('')
     setPending(provider)
     void (async () => {
-      if (model !== undefined && provider === 'comfyui') {
+      if (model !== undefined && isLlmImageProvider(provider)) {
+        await writeSetting(props.scope, 'llmImageModels', { ...(snapshot.value?.llmImageModels ?? {}), [llmProviderIdOf(provider)]: model }, t('writeRejected'))
+      } else if (model !== undefined && provider === 'comfyui') {
         const writes = comfyUIWorkflowWrites(snapshot.value, model)
         if (writes === undefined) throw new Error(t('writeRejected'))
         for (const [field, value] of writes) await writeSetting(props.scope, field, value, t('writeRejected'))
@@ -460,11 +492,18 @@ export function ImageProviderPill(props: ProviderPillFace) {
     return includeModel ? model : ''
   }
 
-  const menuEntries = IMAGE_PROVIDERS.flatMap<{ provider: ImageProvider; channel?: OpenAICompatChannel }>(provider =>
-    provider === 'openai-compat'
-      ? resolveOpenAICompatChannels(snapshot.value ?? {}).map(channel => ({ provider, channel }))
-      : [{ provider }],
-  )
+  const buttonLabel = isLlmImageProvider(current)
+    ? llmRows.find(row => row.provider === current)?.label ?? current
+    : pillButtonLabel(current, PILL_PROVIDER_LABELS[lang][current], snapshot.value, currentChannel?.label)
+
+  const menuEntries: Array<{ provider: ImageProvider | `llm:${string}`; channel?: OpenAICompatChannel; llm?: { label: string; modelOptions: StudioOption[] } }> = [
+    ...IMAGE_PROVIDERS.flatMap<{ provider: ImageProvider; channel?: OpenAICompatChannel }>(provider =>
+      provider === 'openai-compat'
+        ? resolveOpenAICompatChannels(snapshot.value ?? {}).map(channel => ({ provider, channel }))
+        : [{ provider }],
+    ),
+    ...llmRows.map(row => ({ provider: row.provider as `llm:${string}`, llm: row })),
+  ]
 
   return (
     <div className="dsh-ig-pill-root">
@@ -481,7 +520,7 @@ export function ImageProviderPill(props: ProviderPillFace) {
         <svg className="dsh-ig-pill-icon" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <rect x="1.5" y="2.5" width="13" height="11" rx="2" /><circle cx="5.5" cy="6.5" r="1.3" /><path d="M14.5 10.5l-3.2-3.2-6.3 6.2" />
         </svg>
-        <span className="dsh-ig-pill-provider">{pillButtonLabel(current, PILL_PROVIDER_LABELS[lang][current], snapshot.value, currentChannel?.label)}</span>
+        <span className="dsh-ig-pill-provider">{buttonLabel}</span>
         <span className={`dsh-ig-pill-caret${open ? ' dsh-ig-pill-caret-open' : ''}`} aria-hidden="true">
           <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 10l4-4 4 4" /></svg>
         </span>
@@ -489,11 +528,18 @@ export function ImageProviderPill(props: ProviderPillFace) {
       {open && menuStyle !== null ? (
         <div className="dsh-ig-pill-menu" role="menu" aria-label={t('menuTitle')} style={menuStyle}>
           <div className="dsh-ig-pill-menu-title">{t('menuTitle')}</div>
-          {menuEntries.map(({ provider, channel }) => {
+          {menuEntries.map(({ provider, channel, llm }) => {
             const channelId = channel?.id
-            const modelOptions = pillModelOptionsOf(provider, snapshot.value, channelId)
+            const isLlm = llm !== undefined
+            const modelOptions = isLlm
+              ? llm.modelOptions.map(option => option.value)
+              : pillModelOptionsOf(provider as ImageProvider, snapshot.value, channelId)
             const active = provider === current && (provider !== 'openai-compat' || currentChannel?.id === channelId)
-            const currentModel = active ? pillModelOf(provider, snapshot.value, channelId) : ''
+            const currentModel = active
+              ? (isLlm
+                ? snapshot.value?.llmImageModels?.[llmProviderIdOf(provider)] ?? llm.modelOptions[0]?.value ?? ''
+                : pillModelOf(provider as ImageProvider, snapshot.value, channelId))
+              : ''
             // ComfyUI without an imported workflow cannot generate: show the empty state, not a switch.
             const unavailable = provider === 'comfyui' && modelOptions.length === 0 && !active
             return (
@@ -506,10 +552,12 @@ export function ImageProviderPill(props: ProviderPillFace) {
                   disabled={pending !== undefined || unavailable}
                   onClick={() => { select(provider, undefined, channelId) }}
                 >
-                  <span className={`dsh-ig-pill-dot ${dotClassOf(provider, channelId)}`} aria-hidden="true" />
+                  <span className={`dsh-ig-pill-dot ${isLlm ? 'dsh-ig-pill-dot-ok' : dotClassOf(provider as ImageProvider, channelId)}`} aria-hidden="true" />
                   <span className="dsh-ig-pill-option-text">
-                    <span className="dsh-ig-pill-option-name">{channel?.label ?? PILL_PROVIDER_LABELS[lang][provider]}</span>
-                    <span className="dsh-ig-pill-option-sub">{subtitleOf(provider, modelOptions.length === 0, channelId)}</span>
+                    <span className="dsh-ig-pill-option-name">{isLlm ? llm.label : channel?.label ?? PILL_PROVIDER_LABELS[lang][provider as ImageProvider]}</span>
+                    <span className="dsh-ig-pill-option-sub">{isLlm
+                      ? `${t('noKeyNeeded')} · ${currentModel || llm.modelOptions[0]?.value || ''}`
+                      : subtitleOf(provider as ImageProvider, modelOptions.length === 0, channelId)}</span>
                   </span>
                   {active && modelOptions.length === 0 ? <span className="dsh-ig-pill-check" aria-hidden="true">
                     <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M2.5 8.5l3.5 3.5 7-8" /></svg>

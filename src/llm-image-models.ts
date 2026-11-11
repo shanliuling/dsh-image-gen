@@ -2,9 +2,8 @@
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import type { Context } from '@deepseek-ai/cordis'
 import { detectImageMediaType } from './reference-image.js'
-import { CLOUD_IMAGE_PROVIDERS, SUBSCRIPTION_PROVIDERS, type StudioGenerateRequest, type StudioGeneratedItem, type StudioProviderProfile } from './shared.js'
+import { CLOUD_IMAGE_PROVIDERS, LLM_PROVIDER_PREFIX, SUBSCRIPTION_PROVIDERS, isLlmImageProvider, llmProviderIdOf, type StudioGenerateRequest, type StudioGeneratedItem, type StudioProviderProfile } from './shared.js'
 
-const LLM_PREFIX = 'llm:'
 const IMAGE_MODEL = /生图|绘图|图像生成|图片生成|image[ -]?(?:gen|generation)|seedream|dall-?e|gpt-image|flux|imagen|cogview|qwen-image|wanx|grok-imagine/i
 
 interface LlmProviderInfo { id: string; name: string }
@@ -20,14 +19,7 @@ interface LlmService {
   }): AsyncIterable<unknown>
 }
 
-export function isLlmImageProvider(provider: string): provider is `llm:${string}` {
-  return provider.startsWith(LLM_PREFIX) && provider.length > LLM_PREFIX.length
-}
-
-export function llmProviderId(provider: string): string {
-  if (!isLlmImageProvider(provider)) throw new Error('无效的对话模型通道')
-  return provider.slice(LLM_PREFIX.length)
-}
+export { isLlmImageProvider, llmProviderIdOf }
 
 function llmOf(ctx: Context): LlmService | undefined {
   const get = (ctx as Context & { get?: (name: string) => unknown }).get
@@ -60,7 +52,7 @@ export async function llmImageProfiles(ctx: Context): Promise<StudioProviderProf
     if (models.length === 0) continue
     const options = models.map(model => ({ value: model.id, label: model.name }))
     profiles.push({
-      provider: `${LLM_PREFIX}${provider.id}`,
+      provider: `${LLM_PROVIDER_PREFIX}${provider.id}`,
       label: `${provider.name} · 对话模型`,
       model: options[0]!.value,
       modelOptions: options,
@@ -108,15 +100,15 @@ async function downloadImage(url: string, maxBytes: number, signal: AbortSignal)
   return { data, mediaType }
 }
 
-export async function generateLlmImage(
+/** Stream the selected conversation model and return the generated image bytes, unsaved. */
+export async function fetchLlmImageBytes(
   ctx: Context,
   input: StudioGenerateRequest,
   signal: AbortSignal,
-): Promise<StudioGeneratedItem> {
-  if (input.mode === 'edit') throw new Error('该对话模型通道暂不支持图生图')
+): Promise<{ data: Uint8Array; mediaType: ImageMediaType }> {
   const llm = llmOf(ctx)
   if (llm === undefined) throw new Error('当前 DSH 未提供对话模型服务')
-  const provider = llmProviderId(input.provider)
+  const provider = llmProviderIdOf(input.provider)
   const selected = (await llm.listModels(provider)).find(model => model.id === input.model)
   if (selected === undefined || !isLlmImageModel(selected)) throw new Error('所选模型不是当前对话通道已启用的生图模型')
   let text = ''
@@ -132,10 +124,22 @@ export async function generateLlmImage(
     const attachment = imageBlockAttachment(chunk)
     if (attachment !== undefined) attachments.push(attachment)
   }
-  if (attachments.length > 0) return { attachment: attachments[0]!, output: '对话模型通道' }
+  if (attachments.length > 0) {
+    const stored = await ctx.attachments.readImage(attachments[0]!)
+    return { data: stored.data, mediaType: attachments[0]!.mediaType }
+  }
   const urls = imageUrlsFromText(text)
   if (urls.length === 0) throw new Error('对话模型未返回图片，请确认在提供方中启用了生图模型')
-  const generated = await downloadImage(urls[0]!, ctx.attachments.imageLimits.maxImageBytes, signal)
+  return downloadImage(urls[0]!, ctx.attachments.imageLimits.maxImageBytes, signal)
+}
+
+export async function generateLlmImage(
+  ctx: Context,
+  input: StudioGenerateRequest,
+  signal: AbortSignal,
+): Promise<StudioGeneratedItem> {
+  if (input.mode === 'edit') throw new Error('该对话模型通道暂不支持图生图')
+  const generated = await fetchLlmImageBytes(ctx, input, signal)
   const attachment = await ctx.attachments.saveImage({ data: generated.data, mediaType: generated.mediaType, name: 'studio-llm-image' })
   return { attachment, output: '对话模型通道' }
 }

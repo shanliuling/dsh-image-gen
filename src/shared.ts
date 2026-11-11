@@ -213,6 +213,23 @@ export function isSubscriptionProvider(provider: string): provider is Subscripti
   return (SUBSCRIPTION_PROVIDERS as readonly string[]).includes(provider)
 }
 
+/** Prefix of the conversation-provider image source (see llm-image-models.ts). */
+export const LLM_PROVIDER_PREFIX = 'llm:'
+
+/** True for the open conversation-provider image source, e.g. `llm:doubao`. */
+export function isLlmImageProvider(provider: string): provider is `llm:${string}` {
+  return provider.startsWith(LLM_PROVIDER_PREFIX) && provider.length > LLM_PROVIDER_PREFIX.length
+}
+
+/** The host llm provider id behind an `llm:` studio provider. */
+export function llmProviderIdOf(provider: string): string {
+  if (!isLlmImageProvider(provider)) throw new Error('无效的对话模型通道')
+  return provider.slice(LLM_PROVIDER_PREFIX.length)
+}
+
+/** Every provider id the workbench and tools can act on, including conversation sources. */
+export type AnyImageProvider = ImageProvider | `llm:${string}`
+
 /** Providers supported by the first browser workbench release. */
 export const CLOUD_IMAGE_PROVIDERS = ['google', 'openai', 'openai-compat', 'seedream', 'dashscope', 'xai', 'zhipu'] as const
 export type CloudImageProvider = typeof CLOUD_IMAGE_PROVIDERS[number]

@@ -33,8 +33,11 @@ import {
   XAI_API_KEY_ENV,
   ZHIPU_API_KEY_ENV,
   activeComfyUIWorkflow,
+  isLlmImageProvider,
+  llmProviderIdOf,
   resolveComfyUIWorkflows,
   resolveOpenAICompatChannel,
+  type AnyImageProvider,
   type OpenAICompatChannel,
   type ArkBackgroundMode,
   type ArkOutputFormat,
@@ -90,7 +93,9 @@ export type ImageSize = typeof IMAGE_SIZES[number]
 
 /** Bundle configuration from the profile patch and the Web settings page. */
 export interface Config {
-  provider?: ImageProvider
+  provider?: AnyImageProvider
+  /** Selected generation model per conversation-provider image source, keyed by host provider id. */
+  llmImageModels?: Record<string, string>
   cloudTimeoutMs?: number
   googleModel?: string
   googleEndpoint?: string
@@ -217,7 +222,9 @@ function volatile<T extends z>(schema: T): T {
  * rest of the codebase because the wrapping is unwrapped at the entry.
  */
 export const Config = z.object({
-  provider: volatile(z.union(IMAGE_PROVIDERS).default('google')),
+  provider: volatile(z.union([...IMAGE_PROVIDERS, z.string().pattern(/^llm:.+$/)]).default('google')),
+  /** Selected generation model per conversation-provider image source, keyed by host provider id. */
+  llmImageModels: volatile(z.dict(z.string()).default({})),
   cloudTimeoutMs: volatile(z.number().min(5_000).max(3_600_000).default(DEFAULT_CLOUD_TIMEOUT_MS)),
   googleModel: volatile(z.string().default(DEFAULT_GOOGLE_MODEL)),
   googleEndpoint: volatile(z.string().default(DEFAULT_GOOGLE_ENDPOINT)),
@@ -282,6 +289,13 @@ export const Config = z.object({
   vaultDir: volatile(z.string().default('')),
 }) as unknown as z<Config>
 
+/** The conversation-provider image profile, when the config selects one. */
+export function resolveLlmProvider(config: Config): { provider: `llm:${string}`; model: string } | undefined {
+  const provider = config.provider ?? 'google'
+  if (!isLlmImageProvider(provider)) return undefined
+  return { provider, model: config.llmImageModels?.[llmProviderIdOf(provider)]?.trim() || '' }
+}
+
 /** Resolve exactly one provider profile for a tool call. */
 export function resolveProvider(config: Config):
   | { provider: 'google'; apiKeyEnv: string; model: string; endpoint: string; native: boolean; aspectRatio: AspectRatio; imageSize: ImageSize }
@@ -295,7 +309,9 @@ export function resolveProvider(config: Config):
   | { provider: 'chatgpt-sub'; model: string }
   | { provider: 'grok-sub'; model: string }
   | { provider: 'google-sub'; model: string } {
-  switch (config.provider ?? 'google') {
+  const selected = config.provider ?? 'google'
+  if (isLlmImageProvider(selected)) throw new Error('对话模型通道请通过 resolveLlmProvider 解析')
+  switch (selected) {
     case 'openai': return { provider: 'openai', apiKeyEnv: OPENAI_API_KEY_ENV, model: config.openaiModel ?? DEFAULT_OPENAI_MODEL, baseURL: config.openaiBaseURL ?? DEFAULT_OPENAI_BASE_URL, imageSize: '1024x1024' }
     case 'openai-compat': {
       const baseURL = config.openaiCompatBaseURL?.trim()
@@ -374,11 +390,15 @@ export function withOpenAICompatChannel(config: Config, channelId?: string): Con
  * Apply a per-call provider and/or model override on top of the saved config.
  * `model` is ignored for ComfyUI, whose per-call equivalent is `workflow`.
  */
-export function withProviderOverrides(config: Config, provider?: ImageProvider, model?: string, mode: 'generate' | 'edit' = 'generate'): Config {
+export function withProviderOverrides(config: Config, provider?: AnyImageProvider, model?: string, mode: 'generate' | 'edit' = 'generate'): Config {
   const base: Config = provider === undefined ? { ...config } : { ...config, provider }
+  const selected = base.provider ?? 'google'
   const trimmed = model?.trim() || (mode === 'edit' && base.provider === 'openai-compat' ? base.openaiCompatEditModel?.trim() : '') || ''
   if (trimmed.length === 0) return base
-  switch (base.provider ?? 'google') {
+  if (isLlmImageProvider(selected)) {
+    return { ...base, llmImageModels: { ...base.llmImageModels, [llmProviderIdOf(selected)]: trimmed } }
+  }
+  switch (selected) {
     case 'google': return { ...base, googleModel: trimmed }
     case 'openai': return { ...base, openaiModel: trimmed }
     case 'openai-compat': return { ...base, openaiCompatModel: trimmed, ...(mode === 'edit' ? { openaiCompatEditModel: trimmed } : {}) }

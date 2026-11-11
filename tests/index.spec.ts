@@ -39,7 +39,7 @@ function execWithUserImages(...ids: string[]): never {
   } as never
 }
 
-function harnessContext(options: { webServer?: boolean } = {}): { ctx: Context; tools: ToolDefinition[]; installSection: ReturnType<typeof vi.fn> } {
+function harnessContext(options: { webServer?: boolean; llm?: unknown } = {}): { ctx: Context; tools: ToolDefinition[]; installSection: ReturnType<typeof vi.fn> } {
   const tools: ToolDefinition[] = []
   const installSection = vi.fn()
   const hasWebServer = options.webServer ?? true
@@ -47,6 +47,7 @@ function harnessContext(options: { webServer?: boolean } = {}): { ctx: Context; 
     tools: { register: (tool: ToolDefinition) => { tools.push(tool) } },
     effect: (setup: () => unknown) => setup(),
     ...(hasWebServer ? { webServer: { register: vi.fn(() => () => {}) } } : {}),
+    ...(options.llm === undefined ? {} : { get: (name: string) => (name === 'llm' ? options.llm : undefined) }),
     credentials: { resolve: vi.fn(async () => ({ value: 'test-key' })) },
     inject: (services: readonly string[], callback: (owner: unknown) => void) => {
       if (services.includes('webServer')) {
@@ -865,12 +866,36 @@ describe('image tool registration', () => {
     vi.stubGlobal('fetch', fetchMock)
     apply(ctx, { provider: 'google', saveToWorkspace: false })
 
-    // The declared enum makes the framework reject unknown providers with the full list.
+    // The per-call override is validated before any request; the error names the supported list.
     await expect(toolByName(tools, 'generate_image').execute(
       { prompt: 'a portrait', provider: 'midjourney' } as never,
       { signal: new AbortController().signal } as never,
-    )).rejects.toThrow('"provider" must be one of')
+    )).rejects.toThrow('Unsupported provider "midjourney"')
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('routes a conversation-provider image source through the host llm stream', async () => {
+    const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 7])
+    const fetchMock = vi.fn(async () => new Response(png, { status: 200, headers: { 'content-type': 'image/png' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    const stream = vi.fn(async function* () { yield { type: 'text-delta', text: '![img](https://img.example/a.png)' } })
+    const { ctx, tools } = harnessContext({
+      llm: {
+        listProviders: () => [{ id: 'doubao', name: '豆包' }],
+        listModels: vi.fn(async () => [{ id: 'image-gen', name: '豆包 生图（Seedream 5.0）' }]),
+        stream,
+      },
+    })
+    apply(ctx, { provider: 'llm:doubao', llmImageModels: { doubao: 'image-gen' }, saveToWorkspace: false })
+
+    const value = await toolByName(tools, 'generate_image').execute(
+      { prompt: 'a sailboat' },
+      { signal: new AbortController().signal } as never,
+    ) as { provider: string; model: string }
+
+    expect(value).toMatchObject({ provider: 'llm:doubao', model: 'image-gen' })
+    expect(stream).toHaveBeenCalledWith(expect.objectContaining({ provider: 'doubao', model: 'image-gen' }))
+    expect(fetchMock).toHaveBeenCalledWith('https://img.example/a.png', expect.objectContaining({ redirect: 'follow' }))
   })
 
   it('routes a per-call ComfyUI provider override to the configured workflow', async () => {
