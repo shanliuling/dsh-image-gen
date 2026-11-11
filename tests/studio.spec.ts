@@ -1698,6 +1698,14 @@ describe('workbench GIF output and originals', () => {
     expect(bodyOf(fetch, 3)).toEqual({ model: DEFAULT_OPENAI_MODEL, prompt: 'wave', size: '512x512', output_format: 'gif' })
   })
 
+  it('refuses a channel that defaults to SVG before calling the provider, unless the call picks GIF', async () => {
+    const { ctx, fetch } = setup()
+    await expect(generateFromStudio(ctx, { ...relay, openaiCompatExtraBody: { output_format: 'svg' } }, request, signal)).rejects.toThrow('SVG')
+    expect(fetch).not.toHaveBeenCalled()
+    await generateFromStudio(ctx, { ...relay, openaiCompatExtraBody: { output_format: 'svg' } }, { ...request, output: gif }, signal)
+    expect(bodyOf(fetch)).toMatchObject({ output_format: 'gif' })
+  })
+
   it('sends the GIF fields after the channel extras and leaves the frame size to the provider', async () => {
     const { ctx, fetch } = setup()
     await generateFromStudio(ctx, { ...relay, openaiCompatExtraBody: { watermark: false, frame_count: 4 } }, { ...request, output: gif }, signal)

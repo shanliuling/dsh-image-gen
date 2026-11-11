@@ -19,12 +19,6 @@ export interface GeneratedCompatibleImage {
 }
 
 /**
- * True when the bytes are an SVG document rather than a raster image. The
- * relay returns SVG as `b64_json` of the markup (or a URL to a .svg file), so
- * the payload is UTF-8 text that opens with an XML declaration or the root tag;
- * every raster format starts with a binary magic number instead.
- */
-/**
  * The workbench stores results through the raster attachment API only, so a
  * studio call never asks for SVG; guard the widened result type anyway.
  */
@@ -33,9 +27,21 @@ export function rasterOnly<T extends { data: Uint8Array; mediaType: GeneratedMed
   return { data: image.data, mediaType: image.mediaType }
 }
 
+/**
+ * True when the bytes are an SVG document rather than a raster image. The
+ * relay returns SVG as `b64_json` of the markup (or a URL to a .svg file), so
+ * the payload is UTF-8 text whose root element, after any XML declaration,
+ * processing instructions, comments, and DOCTYPE, is `<svg>`; every raster
+ * format starts with a binary magic number instead. An HTML page that merely
+ * contains an inline `<svg>` is not an SVG document. Only the first 64 KB are
+ * decoded.
+ */
 export function isSvgDocument(data: Uint8Array): boolean {
-  const head = new TextDecoder().decode(data.subarray(0, 512)).trimStart()
-  return head.startsWith('<') && head.includes('<svg')
+  const decoder = new TextDecoder()
+  if (!decoder.decode(data.subarray(0, 64)).replace(/^\uFEFF/, '').trimStart().startsWith('<')) return false
+  // The root element sits right after a short preamble, so 64 KB is ample.
+  const text = decoder.decode(data.subarray(0, 64 * 1024)).replace(/^\uFEFF/, '')
+  return /^\s*(?:(?:<\?[\s\S]*?\?>|<!--[\s\S]*?-->|<!DOCTYPE[^>[]*(?:\[[\s\S]*?\])?\s*>)\s*)*<svg[\s/>]/.test(text)
 }
 
 export interface CompatibleReferenceImage {

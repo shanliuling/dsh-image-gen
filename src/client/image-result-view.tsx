@@ -549,10 +549,13 @@ function SvgResultCard({ result, locale, openFile }: {
   // keeps the markup readable in devtools. <img> never runs scripts.
   const url = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(markup)}`
   const copyMarkup = () => {
-    void navigator.clipboard?.writeText(markup).then(() => {
-      setToast(t('svgCopy'))
+    const flash = (message: string) => {
+      setToast(message)
       setTimeout(() => { setToast(undefined) }, 2000)
-    }).catch(() => { setToast(t('svgCopy')) })
+    }
+    // navigator.clipboard is missing outside a secure context.
+    if (typeof navigator.clipboard?.writeText !== 'function') { flash(t('copyFailed')); return }
+    void navigator.clipboard.writeText(markup).then(() => { flash(t('svgCopy')) }).catch(() => { flash(t('copyFailed')) })
   }
   const download = () => {
     const name = savedTo?.split(/[\\/]/).pop() ?? 'image.svg'

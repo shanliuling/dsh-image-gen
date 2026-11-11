@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { createImageResultDefinition, imageResultFromMeta, imageResultsFromMeta, originalFromMeta } from '../src/client/image-result-node.js'
+import { createImageResultDefinition, imageResultFromMeta, imageResultsFromMeta, imageResultsFromPtcDispatch, originalFromMeta } from '../src/client/image-result-node.js'
 
 const attachment = {
   attachmentId: 'sha256:promoted-image',
@@ -242,6 +242,29 @@ describe('ptc dispatch image results (#38)', () => {
       data: { results: [{ svg: markup, prompt: 'an icon', provider: 'openai-compat', model: 'relay', output: 'svg', savedTo: 'out/image-1.svg' }] },
     })
     expect((node as { data: { results: { attachment?: unknown }[] } }).data.results[0]?.attachment).toBeUndefined()
+  })
+
+  it('pairs each item of a PTC batch with its own summary, SVG items included', () => {
+    const markup = '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"/>'
+    const results = imageResultsFromPtcDispatch({
+      ...dispatchEvent,
+      data: {
+        ...dispatchEvent.data,
+        name: 'generate_images',
+        arguments: { prompts: ['a png', 'an icon'] },
+        content: [
+          { type: 'text', text: 'Generated 2 of 2 images.\n' },
+          { type: 'text', text: 'Generated one image with google/gemini (2:3). Attachment ID: sha256:ptc-image. Respond to the user without reading or searching for the image.\nImage prompt: a png' },
+          { type: 'image', attachment: { attachmentId: 'sha256:ptc-image', mediaType: 'image/png', bytes: 12, width: 32, height: 24 } },
+          { type: 'text', text: 'Generated one SVG document with openai-compat/relay (svg). An SVG is a vector document, so the conversation card renders it directly from this markup instead of a bitmap attachment; the markup is below.\nImage prompt: an icon' },
+          { type: 'text', text: markup },
+        ],
+      },
+    } as never)
+    expect(results).toMatchObject([
+      { prompt: 'a png', provider: 'google', model: 'gemini', output: '2:3' },
+      { svg: markup, prompt: 'an icon', provider: 'openai-compat', model: 'relay', output: 'svg' },
+    ])
   })
 
   it('merges a re-dispatch of the same sub-call without duplicating the image', () => {

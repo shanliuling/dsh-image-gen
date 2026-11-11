@@ -249,15 +249,30 @@ export function imageResultsFromPtcDispatch(event: EventLike): readonly ImageRes
   let summaryText = ''
   const args = record(data.arguments)
   const sourceIds = sourceAttachmentIds(args)
-  // The SVG markup follows its summary as a second text block, so it is
-  // collected instead of being mistaken for another summary.
-  const texts: string[] = []
   for (const block of content) {
     const candidate = record(block)
     if (candidate === undefined) continue
     if (candidate.type === 'text' && typeof candidate.text === 'string') {
-      if (summaryText === '') summaryText = candidate.text
-      else texts.push(candidate.text)
+      // A vector result has no image block: the SVG markup follows its own
+      // summary as a second text block, so it pairs with that summary instead
+      // of being mistaken for the next one. Every other text is a summary.
+      if (!candidate.text.trimStart().startsWith('<')) {
+        summaryText = candidate.text
+        continue
+      }
+      const svgSummary = PTC_SVG_SUMMARY_PATTERN.exec(summaryText)
+      if (svgSummary === null) continue
+      const savedTo = PTC_SVG_SAVED_TO_PATTERN.exec(summaryText)?.[1]
+      const promptMarker = '\nImage prompt: '
+      const promptAt = data.name === 'generate_images' ? summaryText.indexOf(promptMarker) : -1
+      results.push({
+        svg: candidate.text,
+        prompt: promptAt < 0 ? stringValue(args?.prompt, 'Generated Image') : summaryText.slice(promptAt + promptMarker.length),
+        provider: svgSummary[1] ?? '',
+        model: svgSummary[2] ?? '',
+        output: svgSummary[3] ?? '',
+        ...(savedTo === undefined ? {} : { savedTo }),
+      })
       continue
     }
     if (candidate.type !== 'image') continue
@@ -279,23 +294,6 @@ export function imageResultsFromPtcDispatch(event: EventLike): readonly ImageRes
       ...(sourceIds !== undefined ? { sourceAttachmentIds: sourceIds } : {}),
       ...(original === undefined ? {} : { original }),
     })
-  }
-  // A vector result has no image block: its summary and the markup that
-  // follows it are the whole payload.
-  if (results.length === 0) {
-    const svgSummary = PTC_SVG_SUMMARY_PATTERN.exec(summaryText)
-    const markup = texts.find(text => text.trimStart().startsWith('<'))
-    if (svgSummary !== null && markup !== undefined) {
-      const savedTo = PTC_SVG_SAVED_TO_PATTERN.exec(summaryText)?.[1]
-      results.push({
-        svg: markup,
-        prompt: stringValue(args?.prompt, 'Generated Image'),
-        provider: svgSummary[1] ?? '',
-        model: svgSummary[2] ?? '',
-        output: svgSummary[3] ?? '',
-        ...(savedTo === undefined ? {} : { savedTo }),
-      })
-    }
   }
   return results
 }

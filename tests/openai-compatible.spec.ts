@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { editOpenAICompatibleImage, generateOpenAICompatibleImage } from '../src/openai-compatible.js'
+import { editOpenAICompatibleImage, generateOpenAICompatibleImage, isSvgDocument } from '../src/openai-compatible.js'
 
 afterEach(() => { vi.unstubAllGlobals() })
 const signal = new AbortController().signal
@@ -31,6 +31,16 @@ describe('OpenAI-compatible images', () => {
     vi.stubGlobal('fetch', fetchMock)
     const result = await generateOpenAICompatibleImage({ provider: 'openai-compat', apiKey: 'key', baseURL: 'https://relay.example/v1', model: 'image-model', prompt: 'an icon', extraBody: { output_format: 'svg' }, maxBytes: 4096, signal })
     expect(result.mediaType).toBe('image/svg+xml')
+  })
+
+  it('accepts an SVG root after any preamble and rejects an HTML page with inline SVG', () => {
+    const bytes = (text: string) => new TextEncoder().encode(text)
+    expect(isSvgDocument(bytes('<svg xmlns="http://www.w3.org/2000/svg"/>'))).toBe(true)
+    expect(isSvgDocument(bytes(`\uFEFF<?xml version="1.0"?>\n<!-- ${'x'.repeat(2048)} -->\n<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">\n<svg xmlns="http://www.w3.org/2000/svg"></svg>`))).toBe(true)
+    expect(isSvgDocument(bytes('<!DOCTYPE html><html><body><svg xmlns="http://www.w3.org/2000/svg"/></body></html>'))).toBe(false)
+    expect(isSvgDocument(bytes('<svgx/>'))).toBe(false)
+    expect(isSvgDocument(bytes(`<!DOCTYPE html><html><body>${'<p>error</p>'.repeat(20_000)}<svg xmlns="http://www.w3.org/2000/svg"/></body></html>`))).toBe(false)
+    expect(isSvgDocument(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))).toBe(false)
   })
 
   it('uses multipart /images/edits with the source image', async () => {

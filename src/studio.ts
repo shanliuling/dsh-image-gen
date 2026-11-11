@@ -324,6 +324,9 @@ export async function generateFromStudio(
           ? compatGenerationExtraBody(requestConfig, input.watermark) : compatEditExtraBody(requestConfig, input.watermark)
         : undefined
       const extraBody = Object.keys(gifFields).length === 0 ? channelExtraBody : { ...channelExtraBody, ...gifFields }
+      // rasterOnly would reject an SVG only after the provider has generated
+      // (and billed) it, so a channel that defaults to SVG is refused up front.
+      if (extraBody?.output_format === 'svg') throw new Error('该渠道默认输出 SVG；工作台仅支持位图，请更换渠道或调整渠道输出格式')
       generated = rasterOnly(input.mode === 'edit'
         ? await editOpenAICompatibleImage({ apiKey: credential, baseURL: wired.baseURL, model: wired.model, prompt: input.prompt, sourceImages, ...(size === undefined ? {} : { size }), maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal, ...(quality === undefined ? {} : { quality }), ...(extraBody === undefined ? {} : { extraBody }), ...(p === 'openai-compat' ? { editFormat: wired.editFormat, editExtra: wired.editExtra, editSizeMode: requestConfig.openaiCompatEditSizeMode ?? 'auto' } : p === 'xai' ? { editFormat: 'xaiJson' as const } : {}) })
         : await generateOpenAICompatibleImage({ provider: p, apiKey: credential, baseURL: wired.baseURL, model: wired.model, prompt: input.prompt, ...(size === undefined ? {} : { size }), maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal, ...(quality === undefined ? {} : { quality }), ...(extraBody === undefined ? {} : { extraBody }) }))
