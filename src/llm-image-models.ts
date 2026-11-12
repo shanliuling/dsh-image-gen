@@ -105,17 +105,23 @@ export async function fetchLlmImageBytes(
   ctx: Context,
   input: StudioGenerateRequest,
   signal: AbortSignal,
-): Promise<{ data: Uint8Array; mediaType: ImageMediaType }> {
+): Promise<{ data: Uint8Array; mediaType: ImageMediaType; model: string }> {
   const llm = llmOf(ctx)
   if (llm === undefined) throw new Error('当前 DSH 未提供对话模型服务')
   const provider = llmProviderIdOf(input.provider)
-  const selected = (await llm.listModels(provider)).find(model => model.id === input.model)
+  const catalog = await llm.listModels(provider)
+  // An empty selection falls back to the catalog's first image model: the
+  // picker writes the choice, but a provider selected without opening the
+  // model submenu must still draw instead of dead-ending.
+  const selected = input.model.length > 0
+    ? catalog.find(model => model.id === input.model)
+    : catalog[0]
   if (selected === undefined || !isLlmImageModel(selected)) throw new Error('所选模型不是当前对话通道已启用的生图模型')
   let text = ''
   const attachments: ImageAttachmentRef[] = []
   for await (const chunk of llm.stream({
     provider,
-    model: input.model,
+    model: selected.id,
     messages: [{ role: 'user', content: input.prompt }],
     signal,
   })) {
@@ -126,11 +132,12 @@ export async function fetchLlmImageBytes(
   }
   if (attachments.length > 0) {
     const stored = await ctx.attachments.readImage(attachments[0]!)
-    return { data: stored.data, mediaType: attachments[0]!.mediaType }
+    return { data: stored.data, mediaType: attachments[0]!.mediaType, model: selected.id }
   }
   const urls = imageUrlsFromText(text)
   if (urls.length === 0) throw new Error('对话模型未返回图片，请确认在提供方中启用了生图模型')
-  return downloadImage(urls[0]!, ctx.attachments.imageLimits.maxImageBytes, signal)
+  const downloaded = await downloadImage(urls[0]!, ctx.attachments.imageLimits.maxImageBytes, signal)
+  return { ...downloaded, model: selected.id }
 }
 
 export async function generateLlmImage(

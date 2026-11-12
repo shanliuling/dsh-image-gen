@@ -898,6 +898,27 @@ describe('image tool registration', () => {
     expect(fetchMock).toHaveBeenCalledWith('https://img.example/a.png', expect.objectContaining({ redirect: 'follow' }))
   })
 
+  it('falls back to the catalog first image model when no llm model is selected', async () => {
+    const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 7])
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(png, { status: 200, headers: { 'content-type': 'image/png' } })))
+    const stream = vi.fn(async function* () { yield { type: 'text-delta', text: '![img](https://img.example/a.png)' } })
+    const { ctx, tools } = harnessContext({
+      llm: {
+        listProviders: () => [{ id: 'doubao', name: '豆包' }],
+        listModels: vi.fn(async () => [{ id: 'image-gen', name: '豆包 生图（Seedream 5.0）' }]),
+        stream,
+      },
+    })
+    apply(ctx, { provider: 'llm:doubao', saveToWorkspace: false })
+
+    const value = await toolByName(tools, 'generate_image').execute(
+      { prompt: 'a sailboat' },
+      { signal: new AbortController().signal } as never,
+    ) as { provider: string; model: string }
+
+    expect(value).toMatchObject({ provider: 'llm:doubao', model: 'image-gen' })
+  })
+
   it('routes a per-call ComfyUI provider override to the configured workflow', async () => {
     const { ctx, tools } = harnessContext()
     const fetchMock = vi.fn()

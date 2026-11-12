@@ -1,5 +1,5 @@
 /** Live, credential-free instructions for the conversation model's image tools. */
-import { activeComfyUIWorkflow, resolveComfyUIWorkflows, resolveProvider, withProviderOverrides, type Config } from './config.js'
+import { activeComfyUIWorkflow, resolveComfyUIWorkflows, resolveLlmProvider, resolveProvider, withProviderOverrides, type Config } from './config.js'
 import { comfyUIWorkflowSlots } from './comfyui-workflow.js'
 
 /** Workflow names listed for the model; a long list is cut so the system prompt stays small. */
@@ -35,7 +35,13 @@ export function imageToolContext(config: Config, configuredProviders?: readonly 
   if (configured !== undefined && !configured.includes('comfyui') && resolveComfyUIWorkflows(config).length > 0) configured.push('comfyui')
   let model = 'not configured'
   let editModel = model
-  try {
+  const llm = resolveLlmProvider(config)
+  if (llm !== undefined) {
+    // The conversation catalog is async, so an unselected model reads as the
+    // fallback the generation path actually uses, not as a missing setting.
+    model = llm.model.length > 0 ? llm.model : 'catalog default (first advertised image model)'
+    editModel = 'unsupported (the conversation transport has no edit contract)'
+  } else try {
     const active = resolveProvider(config)
     model = active.provider === 'comfyui' ? active.workflow?.name ?? 'workflow selected in settings' : active.model
     const edit = resolveProvider(withProviderOverrides(config, undefined, undefined, 'edit'))

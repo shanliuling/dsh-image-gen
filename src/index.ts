@@ -462,7 +462,6 @@ export function apply(ctx: Context, config: Config = {}): void {
     const overridden = withProviderOverrides(requestConfig, providerOverrideOf(args.provider), args.model)
     const llmProfile = resolveLlmProvider(overridden)
     if (llmProfile !== undefined) {
-      if (llmProfile.model.length === 0) throw new Error('该对话模型通道尚未选择生图模型，请在工作台或生图菜单中选择')
       const generated = await fetchLlmImageBytes(ctx, {
         provider: llmProfile.provider,
         model: llmProfile.model,
@@ -472,7 +471,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         quality: 'default',
         count: 1,
       }, exec.signal)
-      return saveGenerated(ctx, generated, llmProfile.provider, llmProfile.model, '对话模型通道', current(), exec, knownWorkspaceRoots)
+      return saveGenerated(ctx, generated, llmProfile.provider, generated.model, '对话模型通道', current(), exec, knownWorkspaceRoots)
     }
     const active = resolveProvider(overridden)
     assertGifProvider(args, active.provider)
