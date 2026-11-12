@@ -49,19 +49,39 @@ interface GifRequestOptions {
   frameDurationMs?: number | undefined
 }
 
+/** Output formats the OpenAI images contract can return besides a still raster image. */
+export type ImageOutputFormat = 'gif' | 'svg'
+
 /** A type alias (not an interface) so it satisfies the adapter's Record<string, unknown> extraBody. */
+type OutputRequestFields = {
+  output_format?: ImageOutputFormat
+  frame_count?: number
+  frame_duration_ms?: number
+}
+
 type GifRequestFields = {
   output_format?: 'gif'
   frame_count?: number
   frame_duration_ms?: number
 }
 
-/** Fold one call's GIF parameters into OpenAI images request fields; anything but a GIF yields {}. */
-export function gifRequestFields(options: GifRequestOptions): GifRequestFields {
-  if (options.outputFormat !== 'gif') {
+/**
+ * Fold one call's output-format parameters into OpenAI images request fields.
+ *
+ * `gif` keeps the frame controls; `svg` is a single vector document, so the
+ * frame controls are rejected rather than silently dropped. A call that only
+ * sets frame fields without `output_format` stays an error.
+ */
+export function outputRequestFields(options: GifRequestOptions): OutputRequestFields {
+  if (options.outputFormat === undefined) {
     if (options.frameCount !== undefined || options.frameDurationMs !== undefined) throw new Error('frame_count / frame_duration_ms 仅在 output_format=gif 时有效')
     return {}
   }
+  if (options.outputFormat === 'svg') {
+    if (options.frameCount !== undefined || options.frameDurationMs !== undefined) throw new Error('frame_count / frame_duration_ms 仅用于 GIF；SVG 是单张矢量图')
+    return { output_format: 'svg' }
+  }
+  if (options.outputFormat !== 'gif') throw new Error(`不支持的 output_format: ${options.outputFormat}；仅支持 gif 与 svg`)
   if (options.frameCount !== undefined && !inRange(options.frameCount, GIF_FRAME_COUNT_MIN, GIF_FRAME_COUNT_MAX)) {
     throw new Error(`GIF frame_count 须为 ${String(GIF_FRAME_COUNT_MIN)} 到 ${String(GIF_FRAME_COUNT_MAX)} 的整数`)
   }
@@ -72,6 +92,17 @@ export function gifRequestFields(options: GifRequestOptions): GifRequestFields {
     output_format: 'gif',
     ...(options.frameCount === undefined ? {} : { frame_count: options.frameCount }),
     ...(options.frameDurationMs === undefined ? {} : { frame_duration_ms: options.frameDurationMs }),
+  }
+}
+
+/** Fold one call's GIF parameters into OpenAI images request fields; anything but a GIF yields {}. */
+export function gifRequestFields(options: GifRequestOptions): GifRequestFields {
+  const fields = outputRequestFields(options)
+  if (fields.output_format !== 'gif') return {}
+  return {
+    output_format: 'gif',
+    ...(fields.frame_count === undefined ? {} : { frame_count: fields.frame_count }),
+    ...(fields.frame_duration_ms === undefined ? {} : { frame_duration_ms: fields.frame_duration_ms }),
   }
 }
 

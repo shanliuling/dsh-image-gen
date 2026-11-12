@@ -89,14 +89,15 @@ export function startConversationLandings(sessions: CanvasSessions, selection?: 
         const results = event.type === 'tool/result'
           ? imageResultsFromMeta(event.data.meta) : imageResultsFromPtcDispatch(event)
         if (results.length === 0) continue
-        pushTlLandingsLive(results.map(result => ({
+        // A vector result has no attachment and therefore no canvas landing.
+        pushTlLandingsLive(results.flatMap(result => result.attachment === undefined ? [] : [{
           galleryId: String(result.attachment.attachmentId),
           attachment: result.attachment,
           fromConversation: true,
           prompt: result.prompt,
           provider: result.provider,
           model: result.model,
-        })))
+        }]))
       }
     })
   }

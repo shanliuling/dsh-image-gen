@@ -1,4 +1,5 @@
 /** Multi-provider image-generation Bundle for DeepSeek Harness. */
+import { createHash } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-client-connection'
@@ -41,7 +42,7 @@ import { describeSettingsHealth, serveSettingsHealth } from './settings-health.j
 import { SETTINGS_HEALTH_ROUTE, type SettingsHealth } from './shared.js'
 import { deleteImageFromWorkspace, getDshWorkspaceRoots, getDshWorkspacesFull, saveImageToWorkspace } from './workspace-save.js'
 import { xaiToolParameters } from './xai-params.js'
-import { compatRequestQuality, gifRequestFields, officialQualityOptions, validateGifFrameSize, validateOfficialSize } from './openai-output.js'
+import { compatRequestQuality, gifRequestFields, officialQualityOptions, outputRequestFields, validateGifFrameSize, validateOfficialSize } from './openai-output.js'
 import { gifFrameDurationMs, readGifInfo } from './gif-info.js'
 import { imageToolContext } from './image-tool-context.js'
 import { resolveWebAdmission, withWebAdmission, type WebAdmission } from './web-route.js'
@@ -58,7 +59,12 @@ export const name = 'dsh-image-gen'
 export const inject = ['tools', 'attachments', 'credentials']
 
 interface GeneratedValue {
-  attachment: ImageAttachmentRef
+  /**
+   * The stored raster attachment. Absent for an SVG result: the DSH
+   * attachment layer only stores png/jpeg/webp/gif, so a vector result travels
+   * as `svg` markup plus the saved .svg file instead.
+   */
+  attachment?: ImageAttachmentRef
   provider: ImageProvider
   channel?: string
   model: string
@@ -71,6 +77,10 @@ interface GeneratedValue {
   animation?: { frames: number; frameDurationMs: number; durationMs: number }
   /** Raw GIF bytes kept in the vault when the attachment layer normalized the animation away. */
   original?: SavedOriginal
+  /** Full SVG markup returned by `output_format: 'svg'`; the raster attachment is absent. */
+  svg?: string
+  /** Byte length of the returned SVG document. */
+  svgBytes?: number
   /** Something the model should tell the user, such as a size the workflow could not apply. */
   notice?: string
 }
@@ -127,8 +137,17 @@ function cleanImageToolArgs<T extends SingleGenerationArgs>(args: T): T {
 }
 
 /** GIF output parameters shared by generate_image and generate_images (OpenAI images contract). */
+// A relay may front several upstreams for one model name and only some of
+// them honour output_format=svg, so a vector request is worth repeating. The
+// attempt cap and the wall-clock budget keep a slow relay from turning one
+// call into a multi-minute stall.
+const SVG_REQUEST_ATTEMPTS = 3
+const SVG_RETRY_BUDGET_MS = 200_000
+/** Channel extras that only describe a raster or GIF and have no meaning for an SVG. */
+const SVG_INCOMPATIBLE_EXTRAS: ReadonlySet<string> = new Set(['frame_count', 'frame_duration_ms', 'size'])
+
 const gifToolParameters = {
-  output_format: { type: 'string', enum: ['gif'], description: 'Optional. Only for provider=openai or openai-compat; gif produces a looping animation. For GIF, omit size unless the user asks for exact dimensions: all frames are tiled into one sheet whose longest edge must stay at or below 3840 px. To animate a subject from reference images, use edit_image with output_format=gif instead.' },
+  output_format: { type: 'string', enum: ['gif', 'svg'], description: 'Optional. Only for provider=openai or openai-compat. gif produces a looping animation; svg produces a single vector document that is saved as a .svg file (DSH image attachments are raster-only, so an SVG result has no chat card image). For GIF, omit size unless the user asks for exact dimensions: all frames are tiled into one sheet whose longest edge must stay at or below 3840 px. To animate a subject from reference images, use edit_image with output_format=gif instead.' },
   frame_count: { type: 'integer', description: 'Optional, GIF only: number of frames, 2-16. Omit to use the provider default.' },
   frame_duration_ms: { type: 'integer', description: 'Optional, GIF only: milliseconds per frame, 20-2000; the provider rounds to 10 ms. Omit to use the provider default.' },
 } as const
@@ -150,7 +169,7 @@ interface BatchGeneratedValue {
   failures: { index: number; prompt: string; error: string }[]
 }
 
-/** GIF fields follow the OpenAI images contract; other providers would drop them silently. */
+/** GIF/SVG fields follow the OpenAI images contract; other providers would drop them silently. */
 function assertGifProvider(args: Pick<SingleGenerationArgs, 'output_format' | 'frame_count' | 'frame_duration_ms'>, provider: ImageProvider): void {
   if ((args.output_format !== undefined || args.frame_count !== undefined || args.frame_duration_ms !== undefined) && provider !== 'openai' && provider !== 'openai-compat') {
     throw new Error('output_format, frame_count and frame_duration_ms are only supported with provider=openai or openai-compat.')
@@ -492,8 +511,12 @@ export function apply(ctx: Context, config: Config = {}): void {
       })
       return saveGenerated(ctx, generated, active.provider, active.model, 'subscription', current(), exec, knownWorkspaceRoots)
     }
-    const runCloud = <T>(operation: (signal: AbortSignal) => Promise<T>, gif = false): Promise<T> =>
-      withGenerationTimeout(cloudTimeoutFor(current().cloudTimeoutMs, gif), exec.signal, operation)
+    // budgetMs caps the timeout below the configured one, e.g. for what is
+    // left of the SVG retry budget.
+    const runCloud = <T>(operation: (signal: AbortSignal) => Promise<T>, gif = false, budgetMs?: number): Promise<T> => {
+      const timeoutMs = cloudTimeoutFor(current().cloudTimeoutMs, gif)
+      return withGenerationTimeout(budgetMs === undefined ? timeoutMs : Math.min(timeoutMs, budgetMs), exec.signal, operation)
+    }
     const credential = await requireApiKey(ctx, active.provider, 'generate_image', active.provider === 'openai-compat' ? resolveOpenAICompatChannel(requestConfig, args.channel).keyRef : undefined)
     if (active.provider === 'google') {
       const aspectRatio = (args.aspect_ratio ?? active.aspectRatio) as AspectRatio
@@ -516,11 +539,14 @@ export function apply(ctx: Context, config: Config = {}): void {
     // channel whose extras already select GIF counts as a GIF request, so a
     // call may tune the frames alone.
     const channelExtraBody = active.provider === 'openai-compat' ? requestConfig.openaiCompatExtraBody ?? {} : undefined
-    const gifFields = gifRequestFields({ outputFormat: args.output_format ?? (channelExtraBody?.output_format === 'gif' ? 'gif' : undefined), frameCount: args.frame_count, frameDurationMs: args.frame_duration_ms })
-    const gifRequested = gifFields.output_format === 'gif'
+    const channelFormat = channelExtraBody?.output_format
+    const outputFields = outputRequestFields({ outputFormat: args.output_format ?? (channelFormat === 'gif' || channelFormat === 'svg' ? channelFormat : undefined), frameCount: args.frame_count, frameDurationMs: args.frame_duration_ms })
+    const gifRequested = outputFields.output_format === 'gif'
+    const svgRequested = outputFields.output_format === 'svg'
     // A GIF without an explicit size leaves the frame size to the provider:
-    // the still-image default of 1024x1024 overflows the frame sheet.
-    const size = gifRequested && args.size === undefined ? undefined : args.size ?? active.imageSize
+    // the still-image default of 1024x1024 overflows the frame sheet. An SVG
+    // has no pixel grid at all, so a still-image size would only be rejected.
+    const size = svgRequested ? undefined : gifRequested && args.size === undefined ? undefined : args.size ?? active.imageSize
     // Ark output controls exist only on the Seedream profile; every other
     // provider in this branch ignores them.
     const arkOptions = active.provider === 'seedream' ? active.arkOptions : undefined
@@ -528,12 +554,47 @@ export function apply(ctx: Context, config: Config = {}): void {
       if (gifRequested) validateGifFrameSize(size)
       else validateOfficialSize(active.model, size)
     }
+    // A vector document has no pixel dimensions, so an explicit size is not
+    // forwarded; say so instead of letting the relay ignore it silently.
+    const sizeNotice = svgRequested && (args.size !== undefined || args.aspect_ratio !== undefined || args.image_size !== undefined)
+      ? `Note for the user: size/aspect_ratio/image_size do not apply to an SVG result, so the requested ${args.size ?? args.aspect_ratio ?? args.image_size ?? ''} was not sent.`
+      : undefined
     const quality = active.provider === 'openai-compat' ? compatRequestQuality(requestConfig, args.quality) : active.provider === 'openai' ? args.quality : undefined
     if (active.provider === 'openai' && quality !== undefined && !officialQualityOptions(active.model).some(option => option.value === quality)) throw new Error('该 OpenAI 模型不支持所选生成质量')
-    const extraBody = channelExtraBody !== undefined ? { ...channelExtraBody, ...gifFields } : Object.keys(gifFields).length === 0 ? undefined : gifFields
-    const generated = await runCloud(signal => generateOpenAICompatibleImage({ strictImageDownloads: current().strictImageDownloads === true, provider: active.provider, apiKey: credential, baseURL: active.baseURL, model: active.model, prompt: args.prompt, ...(size === undefined ? {} : { size }), maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal, ...(quality === undefined ? {} : { quality }), ...(extraBody === undefined ? {} : { extraBody }), ...(arkOptions === undefined ? {} : { arkOptions }) }), gifRequested)
-    const output = size ?? 'auto'
+    // A GIF channel's frame controls and a configured pixel size do not apply
+    // to a vector document, so an SVG request leaves them out.
+    const channelExtras = svgRequested && channelExtraBody !== undefined
+      ? Object.fromEntries(Object.entries(channelExtraBody).filter(([key]) => !SVG_INCOMPATIBLE_EXTRAS.has(key)))
+      : channelExtraBody
+    const extraBody = channelExtras !== undefined ? { ...channelExtras, ...outputFields } : Object.keys(outputFields).length === 0 ? undefined : outputFields
+    const requestOnce = (budgetMs?: number) => runCloud(signal => generateOpenAICompatibleImage({ strictImageDownloads: current().strictImageDownloads === true, provider: active.provider, apiKey: credential, baseURL: active.baseURL, model: active.model, prompt: args.prompt, ...(size === undefined ? {} : { size }), maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal, ...(quality === undefined ? {} : { quality }), ...(extraBody === undefined ? {} : { extraBody }), ...(arkOptions === undefined ? {} : { arkOptions }) }), gifRequested, budgetMs)
+    // A relay can route one model name to several upstreams, and only some of
+    // them honour output_format=svg. Since a bitmap cannot be turned into a
+    // vector, ask again instead of silently handing back a raster.
+    const retryStartedAt = Date.now()
+    let generated = await requestOnce()
+    for (let attempt = 1; svgRequested && attempt < SVG_REQUEST_ATTEMPTS && generated.mediaType !== 'image/svg+xml' && Date.now() - retryStartedAt < SVG_RETRY_BUDGET_MS; attempt++) {
+      // A retry only gets what is left of the budget, and one that fails or
+      // runs out of time keeps the raster already in hand (reported below as
+      // an SVG fallback) instead of losing it. A user cancel still propagates.
+      try {
+        generated = await requestOnce(SVG_RETRY_BUDGET_MS - (Date.now() - retryStartedAt))
+      } catch (error) {
+        if (exec.signal.aborted) throw error
+        ctx.logger.warn('dsh-image-gen: SVG retry failed; keeping the earlier raster result: ' + (error instanceof Error ? error.message : String(error)))
+        break
+      }
+    }
+    // Report what the provider actually delivered: a relay that ignores
+    // output_format returns a bitmap, and the card must not claim 'svg'.
+    const deliveredSvg = generated.mediaType === 'image/svg+xml'
+    const output = deliveredSvg ? 'svg' : size ?? 'auto'
     const value = await saveGenerated(ctx, generated, active.provider, active.model, quality === undefined ? output : `${output}, quality=${quality}`, current(), exec, knownWorkspaceRoots)
+    if (sizeNotice !== undefined) value.notice = value.notice === undefined ? sizeNotice : `${value.notice} ${sizeNotice}`
+    const svgFallback = svgRequested && !deliveredSvg
+      ? `Note for the user: an SVG was requested, but the provider returned a ${generated.mediaType.replace('image/', '').toUpperCase()} raster image; the result is a bitmap, not a vector document.`
+      : undefined
+    if (svgFallback !== undefined) value.notice = value.notice === undefined ? svgFallback : `${value.notice} ${svgFallback}`
     return active.provider === 'openai-compat' ? { ...value, channel: resolveOpenAICompatChannel(requestConfig, args.channel).id } : value
   }
 
@@ -578,9 +639,10 @@ export function apply(ctx: Context, config: Config = {}): void {
       schema: {
         type: 'object', additionalProperties: false, properties: {
           images: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
-            attachment: { type: 'object', required: true, additionalProperties: false, properties: {
+            attachment: { type: 'object', additionalProperties: false, properties: {
               attachmentId: { type: 'string', required: true }, mediaType: { type: 'string', required: true }, bytes: { type: 'integer', required: true }, width: { type: 'integer', required: true }, height: { type: 'integer', required: true }, name: { type: 'string' }, originalDimensions: { type: 'object', additionalProperties: false, properties: { width: { type: 'integer', required: true }, height: { type: 'integer', required: true } } },
             } },
+            svg: { type: 'string' }, svgBytes: { type: 'integer' },
             provider: { type: 'string', required: true }, channel: { type: 'string' }, model: { type: 'string', required: true }, output: { type: 'string', required: true }, savedTo: { type: 'string' }, saveError: { type: 'string' }, seed: { type: 'integer' }, animation: animationSchema, original: originalSchema, notice: { type: 'string' }, prompt: { type: 'string', required: true },
           } } },
           failures: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
@@ -588,20 +650,28 @@ export function apply(ctx: Context, config: Config = {}): void {
           } } },
         },
       },
-      render: (args: unknown, value: BatchGeneratedValue) => [
-        {
-          type: 'text' as const,
-          text: `Generated ${String(value.images.length)} of ${String(value.images.length + value.failures.length)} images.\n${value.failures.map(failure => `${failure.prompt.slice(0, 80)} — failed: ${failure.error}`).join('\n')}`,
-        },
-        // Batch arguments apply to every item, so each item's summary can
-        // compare the GIF it asked for with what came back.
-        ...value.images.flatMap(image => imageOutput('Generated').render(args, image).map(block =>
-          block.type === 'text' ? { ...block, text: `${block.text}\nImage prompt: ${image.prompt}` } : block)),
-      ],
-      presentationMeta: (_args: unknown, value: BatchGeneratedValue) => ({
-        kind: 'dsh-image-gen-batch',
-        images: value.images.map(image => imageOutput('Generated').presentationMeta({ prompt: image.prompt }, image)),
-      }),
+      // The schema-derived value type spells attachmentId as a plain string,
+      // so the renderer takes the result structurally rather than nominally.
+      render: (args: unknown, raw: unknown) => {
+        const value = raw as BatchGeneratedValue
+        return [
+          {
+            type: 'text' as const,
+            text: `Generated ${String(value.images.length)} of ${String(value.images.length + value.failures.length)} images.\n${value.failures.map(failure => `${failure.prompt.slice(0, 80)} — failed: ${failure.error}`).join('\n')}`,
+          },
+          // Batch arguments apply to every item, so each item's summary can
+          // compare the GIF it asked for with what came back.
+          ...value.images.flatMap(image => imageOutput('Generated').render(args, image).map((block, index) =>
+            index === 0 && block.type === 'text' ? { type: 'text' as const, text: `${block.text}\nImage prompt: ${image.prompt}` } : block)),
+        ]
+      },
+      presentationMeta: (_args: unknown, raw: unknown) => {
+        const value = raw as BatchGeneratedValue
+        return {
+          kind: 'dsh-image-gen-batch',
+          images: value.images.map(image => imageOutput('Generated').presentationMeta({ prompt: image.prompt }, image)),
+        }
+      },
     },
     async execute(args, exec): Promise<BatchGeneratedValue> {
       if (args.prompts.length === 0) throw new Error('generate_images requires at least one prompt')
@@ -809,24 +879,30 @@ function imageOutput(verb: 'Generated' | 'Edited') {
   return {
     schema: {
       type: 'object', additionalProperties: false, properties: {
-        attachment: { type: 'object', required: true, additionalProperties: false, properties: {
+        attachment: { type: 'object', additionalProperties: false, properties: {
           attachmentId: { type: 'string', required: true }, mediaType: { type: 'string', required: true }, bytes: { type: 'integer', required: true }, width: { type: 'integer', required: true }, height: { type: 'integer', required: true }, name: { type: 'string' }, originalDimensions: { type: 'object', additionalProperties: false, properties: { width: { type: 'integer', required: true }, height: { type: 'integer', required: true } } },
         } },
+        svg: { type: 'string' }, svgBytes: { type: 'integer' },
         provider: { type: 'string', required: true }, channel: { type: 'string' }, model: { type: 'string', required: true }, output: { type: 'string', required: true }, savedTo: { type: 'string' }, saveError: { type: 'string' }, seed: { type: 'integer' }, animation: animationSchema, original: originalSchema, notice: { type: 'string' },
       },
     },
     render: (args: unknown, value: GeneratedValue) => {
+      if (value.svg !== undefined) return svgRender(verb, value)
       const saved = typeof value.savedTo === 'string' ? ` It was also saved to the workspace as ${value.savedTo}.` : typeof value.saveError === 'string' ? ` Saving it to the workspace failed: ${value.saveError}.` : ' It has no local file path.'
       const action = verb === 'Generated' ? 'It is already attached to the conversation.' : 'The edited image is attached to the conversation.'
       // The fixed sentence is a parsing contract for PTC dispatch cards
       // (image-result-node.ts); GIF facts are appended after it, never inside.
       return [
-        { type: 'text' as const, text: `${verb} one image with ${value.provider}/${value.model} (${value.output}). Attachment ID: ${String(value.attachment.attachmentId)}. ${action}${saved} Respond to the user without reading or searching for the image.${animationNotes(args, value)}${cardNote(value)}${originalNote(value)}${value.notice === undefined ? '' : ` ${value.notice}`}` },
-        { type: 'image' as const, attachment: value.attachment },
+        { type: 'text' as const, text: `${verb} one image with ${value.provider}/${value.model} (${value.output}). Attachment ID: ${String(value.attachment?.attachmentId)}. ${action}${saved} Respond to the user without reading or searching for the image.${animationNotes(args, value)}${cardNote(value)}${originalNote(value)}${value.notice === undefined ? '' : ` ${value.notice}`}` },
+        ...(value.attachment === undefined ? [] : [{ type: 'image' as const, attachment: value.attachment }]),
       ]
     },
     presentationMeta: (args: unknown, value: GeneratedValue) => ({
-      kind: 'dsh-image-gen', attachment: attachmentMeta(value.attachment), provider: value.provider, model: value.model, output: value.output,
+      kind: value.attachment === undefined ? 'dsh-image-gen-svg' : 'dsh-image-gen',
+      ...(value.attachment === undefined ? {} : { attachment: attachmentMeta(value.attachment) }),
+      // The card renders a vector result from its markup, since no attachment exists.
+      ...(value.svg === undefined ? {} : { svg: value.svg }),
+      provider: value.provider, model: value.model, output: value.output,
       ...(value.channel === undefined ? {} : { channel: value.channel }),
       ...(verb === 'Edited' ? { operation: 'edit' } : {}),
       ...(typeof value.savedTo === 'string' ? { savedTo: value.savedTo } : {}),
@@ -835,6 +911,17 @@ function imageOutput(verb: 'Generated' | 'Edited') {
       prompt: (args as { prompt: string }).prompt,
     }),
   } as const
+}
+
+/**
+ * Rendered text for a vector result. The result card has no image to show
+ * (DSH attachments are raster-only), so the markup itself rides along: the
+ * model can quote it, write it to a file, or point at the saved path.
+ */
+function svgRender(verb: 'Generated' | 'Edited', value: GeneratedValue): { type: 'text'; text: string }[] {
+  const saved = typeof value.savedTo === 'string' ? ` The .svg file is saved at ${value.savedTo}.` : typeof value.saveError === 'string' ? ` Saving the .svg file failed: ${value.saveError}.` : ''
+  const head = `${verb} one SVG document with ${value.provider}/${value.model} (${value.output}).${saved} An SVG is a vector document, so the conversation card renders it directly from this markup instead of a bitmap attachment; the markup is below.${value.notice === undefined ? '' : ` ${value.notice}`}`
+  return [{ type: 'text', text: head }, { type: 'text', text: value.svg ?? '' }]
 }
 
 /**
@@ -850,7 +937,7 @@ function animationNotes(args: unknown, value: GeneratedValue): string {
     return requested.output_format === 'gif' ? ' Requested a GIF, but the provider returned a still image (no animation frames); the model or relay may not support GIF output.' : ''
   }
   let notes = ` The image is an animated GIF: ${String(animation.frames)} frames × ${String(animation.frameDurationMs)} ms (${String(animation.durationMs / 1000)}s loop). It is complete; do not regenerate or redraw individual frames unless the user asks.`
-  if (value.attachment.mediaType !== 'image/gif') notes += ' The attached preview shows only its first frame.'
+  if (value.attachment?.mediaType !== 'image/gif') notes += ' The attached preview shows only its first frame.'
   const mismatches: string[] = []
   if (typeof requested.frame_count === 'number' && requested.frame_count !== animation.frames) mismatches.push(`Requested ${String(requested.frame_count)} frames but received ${String(animation.frames)}`)
   // GIF delays are stored in 10 ms ticks and the provider rounds to them, so
@@ -870,7 +957,7 @@ function animationNotes(args: unknown, value: GeneratedValue): string {
  */
 function cardNote(value: GeneratedValue): string {
   const animated = value.animation !== undefined
-  if (animated && value.attachment.mediaType !== 'image/gif' && value.original === undefined) {
+  if (animated && value.attachment?.mediaType !== 'image/gif' && value.original === undefined) {
     // Forward slashes keep a Windows path intact inside a Markdown link target.
     return typeof value.savedTo === 'string' ? ` To show the animation, embed the saved file in your reply with Markdown: ![animated GIF](<${value.savedTo.replace(/\\/g, '/')}>)` : ''
   }
@@ -907,7 +994,7 @@ function attachmentMeta(ref: ImageAttachmentRef) {
 
 async function saveGenerated(
   ctx: Context,
-  generated: { data: Uint8Array; mediaType: ImageAttachmentRef['mediaType']; seed?: number },
+  generated: { data: Uint8Array; mediaType: ImageAttachmentRef['mediaType'] | 'image/svg+xml'; seed?: number },
   provider: ImageProvider,
   model: string,
   output: string,
@@ -915,12 +1002,14 @@ async function saveGenerated(
   exec: { agent?: { session: { header: { cwd?: string } } }; signal: AbortSignal },
   knownRoots?: Set<string>,
 ): Promise<GeneratedValue> {
-  if (!ctx.attachments.imageLimits.mediaTypes.includes(generated.mediaType)) throw new Error(`This DSH deployment does not accept ${generated.mediaType} generated images`)
-  const attachment = await ctx.attachments.saveImage({ data: generated.data, mediaType: generated.mediaType, name: 'generated-image' })
-  const animation = animationOf(generated)
+  if (generated.mediaType === 'image/svg+xml') return saveGeneratedSvg({ ...generated, mediaType: 'image/svg+xml' }, provider, model, output, config, exec)
+  const raster = { ...generated, mediaType: generated.mediaType as ImageAttachmentRef['mediaType'] }
+  if (!ctx.attachments.imageLimits.mediaTypes.includes(raster.mediaType)) throw new Error(`This DSH deployment does not accept ${raster.mediaType} generated images`)
+  const attachment = await ctx.attachments.saveImage({ data: raster.data, mediaType: raster.mediaType, name: 'generated-image' })
+  const animation = animationOf(raster)
   // Kept before the workspace step so a result without a file (or a disabled
   // workspace) still carries the animation the card plays.
-  const original = await keepGifOriginal(vaultConfigOf(config), generated, attachment, message => { ctx.logger.warn(message) })
+  const original = await keepGifOriginal(vaultConfigOf(config), raster, attachment, message => { ctx.logger.warn(message) })
   const value: GeneratedValue = {
     attachment, provider, model, output,
     ...(typeof generated.seed === 'number' ? { seed: generated.seed } : {}),
@@ -932,10 +1021,47 @@ async function saveGenerated(
   if (workspaceRoot === undefined) return value
   knownRoots?.add(workspaceRoot)
   try {
-    value.savedTo = await saveImageToWorkspace({ workspaceRoot, folder: config.workspaceFolder, attachmentId: attachment.attachmentId, mediaType: generated.mediaType, data: generated.data, signal: exec.signal })
+    value.savedTo = await saveImageToWorkspace({ workspaceRoot, folder: config.workspaceFolder, attachmentId: attachment.attachmentId, mediaType: raster.mediaType, data: raster.data, signal: exec.signal })
   } catch (error) {
     exec.signal.throwIfAborted()
     ctx.logger.warn(`dsh-image-gen: failed to save image to workspace: ${error instanceof Error ? error.message : String(error)}`)
+    value.saveError = error instanceof Error ? error.message : String(error)
+  }
+  return value
+}
+
+/**
+ * Persist a vector result. The attachment layer only stores raster formats, so
+ * an SVG travels as markup plus its saved .svg file: the caller can write it
+ * out, embed it, or hand the path to the user, and no chat card image exists.
+ */
+async function saveGeneratedSvg(
+  generated: { data: Uint8Array; mediaType: 'image/svg+xml'; seed?: number },
+  provider: ImageProvider,
+  model: string,
+  output: string,
+  config: Config,
+  exec: { agent?: { session: { header: { cwd?: string } } }; signal: AbortSignal },
+): Promise<GeneratedValue> {
+  const value: GeneratedValue = {
+    provider, model, output,
+    svg: new TextDecoder().decode(generated.data),
+    svgBytes: generated.data.byteLength,
+    ...(typeof generated.seed === 'number' ? { seed: generated.seed } : {}),
+  }
+  if (config.saveToWorkspace === false) return value
+  const workspaceRoot = exec.agent?.session.header.cwd
+  if (workspaceRoot === undefined) return value
+  try {
+    // The file name is content-addressed exactly like a raster attachment, so
+    // the same drawing always lands on the same .svg path.
+    value.savedTo = await saveImageToWorkspace({
+      workspaceRoot, folder: config.workspaceFolder,
+      attachmentId: `sha256:${createHash('sha256').update(generated.data).digest('hex')}`,
+      mediaType: 'image/svg+xml', data: generated.data, signal: exec.signal,
+    })
+  } catch (error) {
+    exec.signal.throwIfAborted()
     value.saveError = error instanceof Error ? error.message : String(error)
   }
   return value

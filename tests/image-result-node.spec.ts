@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { createImageResultDefinition, imageResultFromMeta, imageResultsFromMeta, originalFromMeta } from '../src/client/image-result-node.js'
+import { createImageResultDefinition, imageResultFromMeta, imageResultsFromMeta, imageResultsFromPtcDispatch, originalFromMeta } from '../src/client/image-result-node.js'
 
 const attachment = {
   attachmentId: 'sha256:promoted-image',
@@ -215,6 +215,58 @@ describe('ptc dispatch image results (#38)', () => {
     })
   })
 
+  it('builds a vector card from a dispatch that carries markup instead of an attachment', () => {
+    const definition = createImageResultDefinition()
+    const markup = '<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128"><rect width="128" height="128"/></svg>'
+    const event = {
+      ...dispatchEvent,
+      data: {
+        ...dispatchEvent.data,
+        name: 'generate_image',
+        arguments: { prompt: 'an icon' },
+        content: [
+          {
+            type: 'text',
+            text: 'Generated one SVG document with openai-compat/relay (svg). The .svg file is saved at out/image-1.svg. An SVG is a vector document, so the conversation card renders it directly from this markup instead of a bitmap attachment; the markup is below.',
+          },
+          { type: 'text', text: markup },
+        ],
+      },
+    }
+    const match = ptcMatch(event)
+    expect(definition.match(event)).not.toBeNull()
+    const state = definition.start(ptcContext(undefined, [match]), match, reader)
+    const node = definition.buildViewNode?.(ptcContext(state, [match]))
+
+    expect(node).toMatchObject({
+      data: { results: [{ svg: markup, prompt: 'an icon', provider: 'openai-compat', model: 'relay', output: 'svg', savedTo: 'out/image-1.svg' }] },
+    })
+    expect((node as { data: { results: { attachment?: unknown }[] } }).data.results[0]?.attachment).toBeUndefined()
+  })
+
+  it('pairs each item of a PTC batch with its own summary, SVG items included', () => {
+    const markup = '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"/>'
+    const results = imageResultsFromPtcDispatch({
+      ...dispatchEvent,
+      data: {
+        ...dispatchEvent.data,
+        name: 'generate_images',
+        arguments: { prompts: ['a png', 'an icon'] },
+        content: [
+          { type: 'text', text: 'Generated 2 of 2 images.\n' },
+          { type: 'text', text: 'Generated one image with google/gemini (2:3). Attachment ID: sha256:ptc-image. Respond to the user without reading or searching for the image.\nImage prompt: a png' },
+          { type: 'image', attachment: { attachmentId: 'sha256:ptc-image', mediaType: 'image/png', bytes: 12, width: 32, height: 24 } },
+          { type: 'text', text: 'Generated one SVG document with openai-compat/relay (svg). An SVG is a vector document, so the conversation card renders it directly from this markup instead of a bitmap attachment; the markup is below.\nImage prompt: an icon' },
+          { type: 'text', text: markup },
+        ],
+      },
+    } as never)
+    expect(results).toMatchObject([
+      { prompt: 'a png', provider: 'google', model: 'gemini', output: '2:3' },
+      { svg: markup, prompt: 'an icon', provider: 'openai-compat', model: 'relay', output: 'svg' },
+    ])
+  })
+
   it('merges a re-dispatch of the same sub-call without duplicating the image', () => {
     const definition = createImageResultDefinition()
     const match = ptcMatch(dispatchEvent, 'update')
@@ -249,6 +301,34 @@ describe('ptc dispatch image results (#38)', () => {
     expect(node).toMatchObject({
       data: { results: [{ prompt: 'a q-version comic', provider: '', model: '', output: '' }] },
     })
+  })
+})
+
+describe('vector results in result metadata', () => {
+  const markup = '<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128"><rect width="128" height="128" fill="#F59E0B"/></svg>'
+
+  it('keeps the markup of a vector result and no attachment', () => {
+    const result = imageResultFromMeta({ kind: 'dsh-image-gen-svg', svg: markup, prompt: 'an icon', provider: 'openai-compat', model: 'relay', output: 'svg', savedTo: 'image/image-1.svg' })
+    expect(result).toMatchObject({ svg: markup, prompt: 'an icon', output: 'svg', savedTo: 'image/image-1.svg' })
+    expect(result).not.toHaveProperty('attachment')
+  })
+
+  it('drops a result that carries neither an attachment nor markup', () => {
+    expect(imageResultFromMeta({ kind: 'dsh-image-gen-svg', prompt: 'an icon' })).toBeUndefined()
+    expect(imageResultFromMeta({ kind: 'dsh-image-gen', prompt: 'an icon', svg: 'not markup' })).toBeUndefined()
+  })
+
+  it('keeps markup and attachment apart inside a batch', () => {
+    const results = imageResultsFromMeta({
+      kind: 'dsh-image-gen-batch',
+      images: [
+        { kind: 'dsh-image-gen', attachment, prompt: 'a png', provider: 'openai-compat', model: 'relay', output: 'auto' },
+        { kind: 'dsh-image-gen-svg', svg: markup, prompt: 'an icon', provider: 'openai-compat', model: 'relay', output: 'svg' },
+      ],
+    })
+    expect(results).toHaveLength(2)
+    expect(results[0]).toHaveProperty('attachment')
+    expect(results[1]).toMatchObject({ svg: markup })
   })
 })
 

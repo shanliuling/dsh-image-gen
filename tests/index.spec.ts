@@ -3,7 +3,7 @@ import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
-import { mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -967,6 +967,129 @@ describe('GIF output through the conversation tools', () => {
     // The channel already asked for a GIF, so a call that only tunes the frames must not be told to add output_format.
     await toolByName(tools, 'generate_image').execute({ prompt: 'wave', frame_count: 4, frame_duration_ms: 120 }, exec())
     expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({ model: 'relay', prompt: 'wave', quality: 'low', output_format: 'gif', frame_count: 4, frame_duration_ms: 120 })
+  })
+
+  it('returns an SVG as markup plus a saved .svg file instead of a chat attachment', async () => {
+    const { ctx, tools } = harnessContext()
+    const svg = '<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" width="128" height="128"><rect width="128" height="128" fill="#F59E0B"/></svg>'
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: [{ b64_json: Buffer.from(svg).toString('base64') }] }), { headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    const workspace = await mkdtemp(join(tmpdir(), 'dsh-svg-'))
+    apply(ctx, { ...compatConfig, saveToWorkspace: true })
+    const svgExec = { signal: new AbortController().signal, agent: { session: { header: { cwd: workspace } } } } as never
+    const value = await toolByName(tools, 'generate_image').execute({ prompt: 'icon', output_format: 'svg', size: '1024x1024' }, svgExec) as { svg?: string; savedTo?: string; attachment?: unknown; notice?: string; output: string; svgBytes?: number }
+    // A vector result carries no pixel size, so the still-image default never reaches the request.
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({ model: 'relay', prompt: 'icon', output_format: 'svg' })
+    expect(value.output).toBe('svg')
+    expect(value.svg).toBe(svg)
+    expect(value.svgBytes).toBe(Buffer.byteLength(svg))
+    expect(value.attachment).toBeUndefined()
+    expect(value.savedTo?.endsWith('.svg')).toBe(true)
+    expect(await readFile(String(value.savedTo), 'utf8')).toBe(svg)
+    expect(value.notice).toContain('do not apply to an SVG')
+    expect(ctx.attachments.saveImage).not.toHaveBeenCalled()
+    expect(renderText(tools, 'generate_image', { prompt: 'icon', output_format: 'svg' }, value)).toContain('the conversation card renders it directly from this markup')
+    const content = toolByName(tools, 'generate_image').output.render({ prompt: 'icon', output_format: 'svg' }, value as never)
+    expect(content.map(block => block.type)).toEqual(['text', 'text'])
+    expect(content[1]).toEqual({ type: 'text', text: svg })
+    await rm(workspace, { recursive: true, force: true })
+  })
+
+  it('reports a raster result when the relay ignores output_format=svg', async () => {
+    const { ctx, tools } = harnessContext()
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d])
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: [{ b64_json: Buffer.from(png).toString('base64') }] }), { headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    apply(ctx, { ...compatConfig })
+    const value = await toolByName(tools, 'generate_image').execute({ prompt: 'icon', output_format: 'svg' }, exec()) as { svg?: string; output: string; notice?: string }
+    expect(value.svg).toBeUndefined()
+    expect(value.output).toBe('auto')
+    expect(value.notice).toContain('returned a PNG raster image')
+  })
+
+  it('keeps the raster already in hand when an SVG retry fails, but still propagates a user cancel', async () => {
+    const { ctx, tools } = harnessContext()
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d])
+    const rasterResponse = () => new Response(JSON.stringify({ data: [{ b64_json: Buffer.from(png).toString('base64') }] }), { headers: { 'content-type': 'application/json' } })
+    const fetchMock = vi.fn(async () => rasterResponse())
+    fetchMock.mockResolvedValueOnce(rasterResponse()).mockRejectedValueOnce(new Error('relay reset the connection'))
+    vi.stubGlobal('fetch', fetchMock)
+    apply(ctx, { ...compatConfig })
+    const value = await toolByName(tools, 'generate_image').execute({ prompt: 'icon', output_format: 'svg' }, exec()) as { svg?: string; attachment?: unknown; notice?: string }
+    // The failed retry ends the loop: no third attempt, and the first image survives with the fallback notice.
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(value.svg).toBeUndefined()
+    expect(value.attachment).toBeDefined()
+    expect(value.notice).toContain('returned a PNG raster image')
+    expect(ctx.logger.warn).toHaveBeenCalledWith(expect.stringContaining('SVG retry failed'))
+
+    const controller = new AbortController()
+    fetchMock.mockReset()
+    fetchMock.mockResolvedValueOnce(rasterResponse()).mockImplementationOnce(async () => {
+      controller.abort()
+      throw new Error('aborted by user')
+    })
+    await expect(toolByName(tools, 'generate_image').execute({ prompt: 'icon', output_format: 'svg' }, { signal: controller.signal } as never)).rejects.toThrow('aborted')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('limits an SVG retry to what is left of the 200-second budget', async () => {
+    vi.useFakeTimers()
+    try {
+      const { ctx, tools } = harnessContext()
+      const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d])
+      let retrySignal: AbortSignal | null | undefined
+      let retryStarted!: () => void
+      const retrying = new Promise<void>(resolve => { retryStarted = resolve })
+      const fetchMock = vi.fn((_url: unknown, init?: RequestInit) => fetchMock.mock.calls.length === 1
+        // The first upstream answers with a raster after 120 s, inside its own 150 s timeout.
+        ? new Promise<Response>(resolve => { setTimeout(() => { resolve(new Response(JSON.stringify({ data: [{ b64_json: Buffer.from(png).toString('base64') }] }), { headers: { 'content-type': 'application/json' } })) }, 120_000) })
+        : new Promise<Response>((_, reject) => {
+          retrySignal = init?.signal
+          retryStarted()
+          retrySignal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
+        }))
+      vi.stubGlobal('fetch', fetchMock)
+      apply(ctx, { ...compatConfig })
+      const executing = toolByName(tools, 'generate_image').execute({ prompt: 'icon', output_format: 'svg' }, exec()) as Promise<{ attachment?: unknown; notice?: string }>
+      await vi.advanceTimersByTimeAsync(120_000)
+      await retrying
+      // 80 s of the budget remain, so the retry is cut there rather than at its own 150 s timeout.
+      await vi.advanceTimersByTimeAsync(79_999)
+      expect(retrySignal?.aborted).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(retrySignal?.aborted).toBe(true)
+      const value = await executing
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(value.attachment).toBeDefined()
+      expect(value.notice).toContain('returned a PNG raster image')
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
+  it('drops GIF frame controls and a pixel size from the channel extras of an SVG request', async () => {
+    const { ctx, tools } = harnessContext()
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"/>'
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: [{ b64_json: Buffer.from(svg).toString('base64') }] }), { headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    apply(ctx, { ...compatConfig, openaiCompatExtraBody: { watermark: false, output_format: 'gif', frame_count: 8, frame_duration_ms: 120, size: '512x512' } })
+    await toolByName(tools, 'generate_image').execute({ prompt: 'icon', output_format: 'svg' }, exec())
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({ model: 'relay', prompt: 'icon', watermark: false, output_format: 'svg' })
+  })
+
+  it('appends the batch prompt to each SVG summary and leaves the markup block a valid document', async () => {
+    const { ctx, tools } = harnessContext()
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8"/></svg>'
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: [{ b64_json: Buffer.from(svg).toString('base64') }] }), { headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    apply(ctx, { ...compatConfig })
+    const batchArgs = { prompts: ['one', 'two'], output_format: 'svg' }
+    const batch = await toolByName(tools, 'generate_images').execute(batchArgs, exec())
+    const texts = toolByName(tools, 'generate_images').output.render(batchArgs, batch as never).flatMap(block => block.type === 'text' ? [block.text] : [])
+    expect(texts.filter(text => text === svg)).toHaveLength(2)
+    expect(texts.filter(text => text.startsWith('Generated one SVG document')).map(text => text.split('\nImage prompt: ')[1])).toEqual(['one', 'two'])
   })
 
   it('checks an official GIF frame size by the per-frame contract and forwards the GIF fields', async () => {

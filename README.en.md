@@ -247,6 +247,13 @@ With a GIF-capable model such as GPT Image 2.6, just ask for a "GIF" or "animati
 - A GIF card's **Edit** chip (or **Edit frames** in the enlarged view) takes notes on frames: click a spot on the picture to leave a note, which shows only on its own frame, or switch to **All frames** to see them together; send once to redraw the whole animation from your notes, kept as a new version that plays (OpenAI and compatible channels only, and the relay must support image editing; otherwise one click turns the notes into a plain regeneration).
 - Supported channels: official OpenAI and OpenAI-compatible relays (the model and relay must support GIF). The Codex images endpoint behind the ChatGPT subscription does not offer GIF output upstream yet.
 
+#### 🖼️ SVG vector output
+
+Generation can also return a vector document: pass `output_format: "svg"` to `generate_image` (official OpenAI and compatible relays, **text-to-image only** — the edits endpoint does not produce SVG).
+
+- The result does appear as a chat card: the card draws the vector image itself (open it to zoom without loss), and its toolbar copies the markup, downloads the `.svg`, or opens the saved file in the sidebar. DSH attachments store png/jpeg/webp/gif only, so the card renders the markup from the tool result; the Gallery and version history still keep bitmaps only.
+- A vector document has no pixel grid, so `size` / `aspect_ratio` / `image_size` are not sent and the result says so; `frame_count` / `frame_duration_ms` belong to GIF and are rejected alongside SVG.
+
 <br />
 
 ### ✨ 500+ prompt inspirations, and the Agent finds them for you

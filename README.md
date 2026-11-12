@@ -247,6 +247,13 @@ pnpm dsh plugin --profile web add ./dsh-image-gen
 - GIF 卡片右下角「编辑」（或大图播放条的「编辑帧」）可按帧写修改意见：在画面上点位置写评论，评论只显示在它所在的那一帧，也可切到「全部帧」一次看全；一次发送即按评论重绘整段，新结果作为新版本保留并会动（仅 OpenAI 与兼容渠道，且中转需支持图生图；不支持时可一键改为描述后重新生成）。
 - 支持渠道：OpenAI 官方与 OpenAI 兼容中转（需模型与中转支持 GIF）。ChatGPT 订阅使用的 Codex 图片接口目前上游未开放 GIF，暂不支持。
 
+#### 🖼️ SVG 矢量输出
+
+生图时也可以要求矢量结果：`generate_image` 传 `output_format: "svg"`（仅 OpenAI 官方与兼容中转的**文生图**；图生图接口不支持 SVG）。
+
+- 结果会进入对话图卡：卡片直接显示矢量图（点开可放大，无损），工具栏可复制 SVG 源码、下载 `.svg`、在侧栏打开保存的文件。DSH 附件层只保存 png/jpeg/webp/gif，所以卡片是用工具结果里的 SVG 源码渲染的，图库与版本历史仍只收录位图。
+- SVG 没有像素尺寸，`size` / `aspect_ratio` / `image_size` 不会发送，结果里会给出一条说明；`frame_count` / `frame_duration_ms` 只属于 GIF，与 SVG 一起传会直接报错。
+
 <br />
 
 ### ✨ 500+ Prompt 灵感：Agent 会自己去找

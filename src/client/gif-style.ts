@@ -9,6 +9,7 @@ export const GIF_STYLE = `
 .dsh-ig-toolbar:has(.dsh-ig-dl-menu){z-index:4}
 .dsh-ig-toolbar .dsh-ig-tool-btn:disabled{opacity:.4;cursor:default;background:transparent}
 .dsh-ig-gif-badge{margin-left:8px;vertical-align:middle;font-size:11px;font-weight:600}
+.dsh-ig-svg-badge{margin-left:8px;vertical-align:middle;font-size:11px;font-weight:600}
 .dsh-ig-gif-chip-slot{position:absolute;left:12px;bottom:12px;z-index:3;line-height:normal}
 .dsh-ig-gif-chip{corner-shape:round;appearance:none;border:0;min-width:44px;height:36px;padding:0 10px;border-radius:999px;background:rgba(17,20,26,0.6);color:#fff;font-size:13px;font-weight:600;font-variant-numeric:tabular-nums;cursor:pointer;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
 .dsh-ig-gif-chip:hover:not(:disabled){background:rgba(17,20,26,0.8)}
