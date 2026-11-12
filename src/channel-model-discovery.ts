@@ -396,4 +396,3 @@ export function refreshProfileModels(ctx: Context, config: Config, profile: Stud
     void discoverOfficialModels(ctx, config, provider).catch(() => undefined)
   }
 }
-

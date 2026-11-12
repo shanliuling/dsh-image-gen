@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { credentialRef } from '@deepseek-ai/dsh-credentials'
 
 import {
   discoverOfficialModels,
@@ -9,6 +10,7 @@ import {
   withCachedOfficialModels,
 } from '../src/channel-model-discovery.js'
 import type { Config } from '../src/config.js'
+import { describeStudio, generateFromStudio } from '../src/studio.js'
 
 const RELAY = 'https://relay.example.com/v1'
 
@@ -58,6 +60,47 @@ describe('workbench channel model discovery', () => {
     const result = withCachedChannelModels(config)
     expect(result.config).toBe(config)
     expect(result.pending.map(channel => channel.id)).toEqual(['relay'])
+  })
+
+  it('signals a cold catalog and accepts the discovered model after refreshing Studio', async () => {
+    const config = relayConfig(['my-custom-image-model'])
+    const channel = config.openaiCompatChannels![0]!
+    const discoveredModel = 'seedream-4.0'
+    let finishCatalog!: (response: Response) => void
+    const catalogReply = new Promise<Response>(resolve => { finishCatalog = resolve })
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    const fetch = vi.fn(async (_url: string, init?: RequestInit) => init?.method === 'POST'
+      ? Response.json({ data: [{ b64_json: png.toString('base64') }] })
+      : catalogReply)
+    vi.stubGlobal('fetch', fetch)
+    const attachment = { attachmentId: 'sha256:studio-fixture', mediaType: 'image/png', bytes: png.length, width: 8, height: 8 }
+    const ctx = {
+      credentials: {
+        resolve: async (ref: string) => ref === credentialRef(channel.keyRef) ? { value: 'relay-fixture-key' } : undefined,
+      },
+      attachments: {
+        imageLimits: { maxImageBytes: 4096, mediaTypes: ['image/png'] },
+        saveImage: vi.fn(async () => attachment),
+      },
+      logger: { warn: vi.fn() },
+    } as never
+    const cold = await describeStudio(ctx, config)
+    const profileOf = (result: typeof cold) => result.providers.find(row => row.channel === channel.id)!
+    expect(cold.modelDiscoveryPending).toBe(true)
+    expect(profileOf(cold).modelOptions?.map(option => option.value)).not.toContain(discoveredModel)
+
+    finishCatalog(catalog(discoveredModel))
+    await primeChannelModels(ctx, config, channel)
+    const warm = await describeStudio(ctx, config)
+    const profile = profileOf(warm)
+    expect(warm.modelDiscoveryPending).toBeUndefined()
+    expect(profile.modelOptions?.map(option => option.value)).toContain(discoveredModel)
+    const result = await generateFromStudio(ctx, config, {
+      mode: 'generate', provider: 'openai-compat', channel: channel.id, model: discoveredModel,
+      prompt: 'A rectangle', ratio: profile.defaultRatio, quality: profile.defaultQuality,
+    }, new AbortController().signal)
+    expect(result.attachment).toEqual(attachment)
+    expect(JSON.parse(String(fetch.mock.calls.find(([, init]) => init?.method === 'POST')?.[1]?.body))).toMatchObject({ model: discoveredModel })
   })
 
   it('appends discovered image models after the typed ones once primed', async () => {

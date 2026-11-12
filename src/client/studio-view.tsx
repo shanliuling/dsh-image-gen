@@ -65,6 +65,8 @@ import { PROVIDER_DEFAULT_QUALITY } from '../openai-output.js'
 
 
 const PAGE_SIZE = 12
+const MODEL_DISCOVERY_POLL_MS = 1_000
+const MODEL_DISCOVERY_WINDOW_MS = 12_000
 
 /** Below this workbench width the recent-generations rail folds automatically. */
 const WORKBENCH_NARROW_WIDTH = 560
@@ -376,16 +378,17 @@ export const StudioView: FC<{
   const formStateRef = useRef({ provider, channel, model })
   formStateRef.current = { provider, channel, model }
 
-  const loadConfig = useCallback(async (options?: { silent?: boolean }) => {
+  const loadConfig = useCallback(async (options?: { silent?: boolean; signal?: AbortSignal }) => {
     const silent = options?.silent === true
+    const signal = options?.signal
     if (!silent) {
       setConfigLoading(true)
       setConfigError(null)
     }
-    const controller = new AbortController()
     try {
-      const response = await fetch(STUDIO_ROUTE, { signal: controller.signal, credentials: 'same-origin' })
+      const response = await fetch(STUDIO_ROUTE, { signal: signal ?? null, credentials: 'same-origin' })
       const payload = await readStudioBody(response)
+      if (signal?.aborted) return
       if (!response.ok || !('providers' in payload)) throw new Error('error' in payload && payload.error ? payload.error : 'Studio unavailable')
       setConfig(payload)
       if (silent) {
@@ -403,7 +406,7 @@ export const StudioView: FC<{
         }
         setComparisonProviderKeys(current => current.filter(selectedKey =>
           payload.providers.some(item => studioTargetKey(item.provider, item.channel) === selectedKey && item.configured)))
-        return
+        return payload
       }
       const initial = payload.providers.find(item => item.provider === payload.activeProvider && item.channel === payload.activeChannel)
         ?? payload.providers.find(item => item.provider === payload.activeProvider)
@@ -412,16 +415,39 @@ export const StudioView: FC<{
         applyProvider(initial)
         setComparisonProviderKeys(initialComparisonProviders(payload.providers, initial.provider, initial.channel))
       }
+      return payload
     } catch (fetchError) {
-      if (!silent && !controller.signal.aborted) setConfigError(messageOf(fetchError))
+      if (!silent && !signal?.aborted) setConfigError(messageOf(fetchError))
     } finally {
-      if (!silent) setConfigLoading(false)
+      if (!silent && !signal?.aborted) setConfigLoading(false)
     }
   }, [])
 
   useEffect(() => {
-    void loadConfig()
+    const controller = new AbortController()
+    void loadConfig({ signal: controller.signal })
+    return () => { controller.abort() }
   }, [loadConfig])
+
+  const modelDiscoveryPending = config?.modelDiscoveryPending === true
+  useEffect(() => {
+    if (!modelDiscoveryPending) return
+    const controller = new AbortController()
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(MODEL_DISCOVERY_WINDOW_MS)])
+    let timer: number
+    const refresh = async () => {
+      if (signal.aborted) return
+      const latest = await loadConfig({ silent: true, signal })
+      if (!signal.aborted && (latest === undefined || latest.modelDiscoveryPending === true)) {
+        timer = window.setTimeout(() => { void refresh() }, MODEL_DISCOVERY_POLL_MS)
+      }
+    }
+    timer = window.setTimeout(() => { void refresh() }, MODEL_DISCOVERY_POLL_MS)
+    return () => {
+      window.clearTimeout(timer)
+      controller.abort()
+    }
+  }, [loadConfig, modelDiscoveryPending])
 
   // Host credential changes (subscription sign-in/out, API keys) re-read the
   // provider state silently; the workbench refreshes badges and option lists
