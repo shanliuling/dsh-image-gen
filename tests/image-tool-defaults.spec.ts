@@ -59,6 +59,16 @@ describe('image tool defaults and placeholders', () => {
     await vi.waitFor(() => { expect(context!.text()).toContain(': none.') })
     expect(context!.text()).not.toContain('offline-test-key')
   })
+  it('describes the active relay channel that tool calls run on', () => {
+    const relay2 = { id: 'relay2', label: 'Relay 2', keyRef: 'DSH_IMAGE_GEN_OPENAI_COMPAT_KEY_RELAY2', baseURL: 'https://relay2.example/v1', model: 'relay2-generate', editModel: 'relay2-edit' }
+    const onlyNamed = imageToolContext({ provider: 'openai-compat', openaiCompatChannels: [relay2], openaiCompatActiveChannel: 'relay2' } as never)
+    expect(onlyNamed).toContain('generation model: "relay2-generate"; editing model: "relay2-edit".')
+    expect(onlyNamed).not.toContain('relay2.example')
+    const withLegacy = imageToolContext({ provider: 'openai-compat', openaiCompatBaseURL: 'https://relay.example/v1', openaiCompatModel: 'relay-generate', openaiCompatEditModel: 'relay-edit', openaiCompatChannels: [relay2], openaiCompatActiveChannel: 'relay2' } as never)
+    expect(withLegacy).toContain('generation model: "relay2-generate"; editing model: "relay2-edit".')
+    const legacyActive = imageToolContext({ provider: 'openai-compat', openaiCompatBaseURL: 'https://relay.example/v1', openaiCompatModel: 'relay-generate', openaiCompatChannels: [relay2] } as never)
+    expect(legacyActive).toContain('generation model: "relay-generate"')
+  })
   it('lists the ComfyUI workflow names the workflow argument accepts', () => {
     expect(imageToolContext({ provider: 'openai' } as never)).not.toContain('ComfyUI workflows')
     const workflows = [{ name: '人像 "8步"', json: '{}' }, { name: 'landscape', json: '{}' }]

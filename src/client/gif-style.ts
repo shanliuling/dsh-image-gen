@@ -84,11 +84,34 @@ export const GIF_STYLE = `
 .dsh-ig-gif-view button[aria-pressed="true"]{background:rgba(255,255,255,0.18);color:#fff;font-weight:600}
 .dsh-ig-gif-edit-ghost,.dsh-ig-gif-edit-send{corner-shape:round;appearance:none;flex:none;height:36px;border-radius:999px;font:inherit;font-size:13px;cursor:pointer}
 .dsh-ig-gif-edit-ghost{padding:0 12px;border:1px solid rgba(255,255,255,0.25);background:transparent;color:#fff}
-.dsh-ig-gif-edit-send{padding:0 14px;border:0;background:#3b6cf0;color:#fff;font-weight:600}
+.dsh-ig-gif-edit-send{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:0 14px;border:0;background:#3b6cf0;color:#fff;font-weight:600;font-variant-numeric:tabular-nums}
 .dsh-ig-gif-edit-ghost:disabled,.dsh-ig-gif-edit-send:disabled{opacity:.5;cursor:default}
+/* A send in progress stays readable: it counts the seconds. */
+.dsh-ig-gif-edit-send.is-busy:disabled{opacity:.8}
 .dsh-ig-gif-edit-notice,.dsh-ig-gif-edit-error{display:grid;gap:6px;justify-items:start;padding:8px 10px;border-radius:8px;font-size:12px;line-height:1.45;white-space:pre-wrap;word-break:break-word}
 .dsh-ig-gif-edit-notice{margin:6px 0;background:var(--dsw-alias-bg-layer-2,rgba(0,0,0,0.05));color:var(--dsw-alias-label-secondary,inherit)}
 .dsh-ig-gif-edit-error{background:rgba(239,68,68,0.16);color:#fca5a5}
+/* Over the picture while an edit is sent, above the pins and note boxes, which wait for it. */
+.dsh-ig-gif-edit-busy{position:absolute;inset:0;z-index:6;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;border-radius:10px;background:rgba(13,15,19,0.6);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);color:#fff;line-height:normal;cursor:default;animation:dsh-ig-gif-fade .18s ease-out}
+.dsh-ig-gif-edit-busy-spinner,.dsh-ig-gif-edit-spinner{corner-shape:round;flex:none;box-sizing:border-box;border:2px solid rgba(255,255,255,0.25);border-top-color:#fff;border-radius:50%;animation:dsh-ig-gif-spin .8s linear infinite}
+.dsh-ig-gif-edit-busy-spinner{width:32px;height:32px;border-width:3px}
+.dsh-ig-gif-edit-spinner{width:14px;height:14px}
+.dsh-ig-gif-edit-busy-text{font-size:14px;font-weight:600;text-shadow:0 1px 2px rgba(0,0,0,0.4)}
+.dsh-ig-gif-edit-busy-track{corner-shape:round;width:min(200px,60%);height:4px;border-radius:2px;background:rgba(255,255,255,0.18);overflow:hidden}
+/* The estimate moves once a second; gliding for that second makes it read as steady progress. */
+.dsh-ig-gif-edit-busy-fill{display:block;height:100%;background:#5b8cff;transform-origin:left;transition:transform 1s linear}
+/* The reply is in: the bar fills within GIF_EDIT_FINISH_MS, and the overlay stays until the new version is filed. */
+.dsh-ig-gif-edit-busy.is-finishing .dsh-ig-gif-edit-busy-fill{transition:transform .3s ease-out}
+.dsh-ig-gif-edit-done-text{margin:0;font-size:13px;line-height:1.5}
+.dsh-ig-gif-edit-row.is-end{justify-content:flex-end}
+/* The plain preview has no player bar for the finished edit's bar to take its width from, and keeps the picture clear of it. */
+.dsh-ig-gif-dock.is-plain{width:min(560px,calc(100vw - 48px))}
+.dsh-ig-lightbox-backdrop:has(>.dsh-ig-gif-dock.is-plain) .dsh-ig-lightbox-img{max-height:calc(100vh - 320px)}
+/* The previews swap while a finished edit's new version loads; replaying their entrance would flash the page behind them. */
+.dsh-ig-lightbox-backdrop:has(.dsh-ig-gif-edit.is-done){animation:none}
+@keyframes dsh-ig-gif-spin{to{transform:rotate(360deg)}}
+@keyframes dsh-ig-gif-fade{from{opacity:0}}
+@media(prefers-reduced-motion:reduce){.dsh-ig-gif-edit-busy,.dsh-ig-gif-edit-busy *,.dsh-ig-gif-edit-spinner{animation:none!important;transition:none!important}}
 /* The cursor is the pin it places, its sharp corner on the point, as ChatGPT draws it. */
 .dsh-ig-gif-edit-layer{position:absolute;inset:0;z-index:3;margin:0;padding:0;border:0;border-radius:10px;background:transparent;cursor:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24'%3E%3Cpath d='M2 22V12A10 10 0 0 1 22 12A10 10 0 0 1 12 22Z' fill='%233b6cf0' stroke='white' stroke-width='1.5'/%3E%3C/svg%3E") 2 22,crosshair}
 /* While a note is being written, a click on the picture only closes it, so the cursor is the plain one. */
