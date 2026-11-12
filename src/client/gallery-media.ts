@@ -6,6 +6,7 @@ import { fetchAttachmentBlob } from './image-cache.js'
 const GALLERY_PREFETCH_ORIGINAL_MAX_BYTES = 4 * 1024 * 1024
 /** A GIF original is the only copy that animates, so it is worth prefetching further than a still. */
 const GALLERY_PREFETCH_GIF_MAX_BYTES = 16 * 1024 * 1024
+const GALLERY_ORIGINAL_CLAIM_TIMEOUT_MS = 3_000
 
 export function shouldPrefetchOriginal(original: GalleryItem['original']): boolean {
   if (original === undefined) return false
@@ -33,7 +34,7 @@ export function vaultProfileId(): string | undefined {
 }
 
 /** Sync this profile's references; the server never deletes originals here. */
-export function syncVaultRefs(keys: string[]): Promise<void> {
+export function syncVaultRefs(keys: string[], signal?: AbortSignal): Promise<void> {
   const profileId = vaultProfileId()
   if (profileId === undefined) return keys.length === 0 ? Promise.resolve() : Promise.reject(new Error('Original reference storage unavailable'))
   return fetch(VAULT_REFS_ROUTE, {
@@ -41,6 +42,7 @@ export function syncVaultRefs(keys: string[]): Promise<void> {
     credentials: 'same-origin',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ profileId, keys }),
+    ...(signal === undefined ? {} : { signal }),
   }).then(response => {
     if (!response.ok) throw Object.assign(new Error('Original reference sync failed (HTTP ' + String(response.status) + ')'), { status: response.status })
   })
@@ -80,10 +82,14 @@ export type GalleryRecord = Parameters<typeof saveGalleryItem>[0]
 export async function persistGalleryRecord(record: GalleryRecord): Promise<boolean> {
   const saved = await saveGalleryItem(record)
   if (!saved || record.original === undefined || await isGalleryItemTombstoned(record.id)) return saved
+  const controller = new AbortController()
+  const timeout = setTimeout(() => { controller.abort() }, GALLERY_ORIGINAL_CLAIM_TIMEOUT_MS)
   try {
-    await syncVaultRefs([record.original.key])
+    await syncVaultRefs([record.original.key], controller.signal)
   } catch (error) {
     if ((error as { status?: unknown }).status === 410) await saveGalleryItem({ ...record, original: undefined })
+  } finally {
+    clearTimeout(timeout)
   }
   return saved
 }

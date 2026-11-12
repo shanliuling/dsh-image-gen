@@ -171,7 +171,9 @@ export interface GifEditInput {
   busy: { running: boolean; setRunning(running: boolean): void; controller: MutableRefObject<AbortController | undefined> }
   /** File a new version under the card and in the gallery; resolves whether the gallery kept it. */
   addRevision(revision: ConversationImageRevision): Promise<boolean>
-  /** The edit came back as a new version while its editor was not on screen: close the lightbox and say how it went. */
+  /** The originating card's preview can stay open after the user leaves frame editing. */
+  isPreviewOpen(): boolean
+  /** The edit came back as a new version while its preview was closed. */
   onSent(message: string): void
   /** Regenerate from a description instead, with the notes written into the prompt. */
   onFallback(prompt: string, hint: string): void
@@ -226,7 +228,7 @@ function revisionFromReply(payload: StudioGenerateResponse, request: StudioGener
 }
 
 /** The notes of the version on display and the edit request built from them. */
-export function useGifEdit({ gif, image, versionKey, busy, addRevision, onSent, onFallback }: GifEditInput): GifEdit {
+export function useGifEdit({ gif, image, versionKey, busy, addRevision, isPreviewOpen, onSent, onFallback }: GifEditInput): GifEdit {
   const { t, player } = gif
   const [comments, setCommentsState] = useState<GifComment[]>(() => (versionKey === undefined ? [] : notesByVersion.get(versionKey) ?? []))
   const [status] = useState(createGifEditStatus)
@@ -295,14 +297,12 @@ export function useGifEdit({ gif, image, versionKey, busy, addRevision, onSent, 
         run.finish()
         // The reply is paid for: from here a cancel no longer drops it, and the full bar shows before the new version is filed.
         await new Promise(resolve => { setTimeout(resolve, GIF_EDIT_FINISH_MS) })
-        // Read before filing and again after: closing the preview while the version is filed counts as leaving. The
-        // remount the new version causes reports no editor too, but only when React renders, after this has run.
-        const watched = editorOpen.current
         const revision = revisionFromReply(payload, request, image.prompt)
         const savedOk = await addRevision(revision)
+        if (controller.signal.aborted) return
         // The channel answered with a still: kept as a version so the result is not lost.
         const still = revision.original?.mediaType !== 'image/gif' && revision.attachment.mediaType !== 'image/gif'
-        if (!watched || !editorOpen.current) {
+        if (!isPreviewOpen()) {
           onSent(still ? t('gifEditStill') : savedOk ? t('gifEditDone') : t('gifEditSaveFailed'))
           return
         }

@@ -127,7 +127,12 @@ function ImageResultCard({
   const [url, setUrl] = useState<string>()
   const [blob, setBlob] = useState<Blob>()
   const [error, setError] = useState<string>()
-  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewOpen, setPreviewOpenState] = useState(false)
+  const previewOpenRef = useRef(false)
+  const setPreviewOpen = (open: boolean) => {
+    previewOpenRef.current = open
+    setPreviewOpenState(open)
+  }
   const [toast, setToast] = useState<string>()
   const [regenerateOpen, setRegenerateOpen] = useState(false)
   const [regeneratePrompt, setRegeneratePrompt] = useState('')
@@ -214,6 +219,7 @@ function ImageResultCard({
       if (originRef.current === originId) setRevisionChain(chain)
       return savedOk
     },
+    isPreviewOpen: () => originRef.current === originId && previewOpenRef.current,
     onSent: message => {
       // Said of the image the edit was made on; a card handed another image meanwhile has nothing to report.
       if (originRef.current !== originId) return
@@ -273,9 +279,8 @@ function ImageResultCard({
     return () => { window.removeEventListener('keydown', onKeyDown) }
   }, [previewOpen])
 
-  // A finished edit is told only in the preview it came back in: closing that preview drops it,
-  // and so does opening the next one, should it have landed just as the last one closed.
-  useEffect(() => { edit.dismissDone() }, [previewOpen])
+  // Keep the completion attached to the preview and the original image it came back to.
+  useEffect(() => { edit.dismissDone() }, [previewOpen, originId])
 
   const currentUrlRef = useRef<string | undefined>()
 

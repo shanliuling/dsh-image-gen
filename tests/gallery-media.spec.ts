@@ -142,4 +142,25 @@ describe('gallery record persistence with an animated original', () => {
     expect(stores.get('gallery_history')?.has(record.id)).toBe(false)
     expect(fetch).not.toHaveBeenCalled()
   })
+
+  it('finishes saving a GIF when its original claim never answers', async () => {
+    vi.useFakeTimers()
+    try {
+      const stores = installFakeIndexedDB()
+      const fetch = vi.fn((_url: string, init: RequestInit) => new Promise<Response>((_, reject) => {
+        init.signal?.addEventListener('abort', () => { reject(init.signal?.reason) }, { once: true })
+      }))
+      vi.stubGlobal('fetch', fetch)
+      const media = await load()
+      const saving = media.persistGalleryRecord(record)
+      await vi.advanceTimersByTimeAsync(20)
+      expect(fetch).toHaveBeenCalledOnce()
+      await vi.advanceTimersByTimeAsync(3_000)
+      expect(await saving).toBe(true)
+      expect(fetch.mock.calls[0]?.[1].signal?.aborted).toBe(true)
+      expect(stores.get('gallery_history')?.get(record.id)).toMatchObject({ original: record.original })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

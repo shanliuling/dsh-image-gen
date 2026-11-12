@@ -116,12 +116,14 @@ describe('sending a frame edit', () => {
   /** The card's edit hook, rendered once with notes on its version; its handlers run outside React, which is all a send needs. */
   function mount(filing: () => Promise<boolean> = async () => true) {
     const busy = { running: false, setRunning: vi.fn(), controller: { current: undefined as AbortController | undefined } }
+    let previewOpen = true
     const input = {
       gif,
       image,
       versionKey: `version-${String(++versions)}`,
       busy,
       addRevision: vi.fn(filing),
+      isPreviewOpen: () => previewOpen,
       onSent: vi.fn(),
       onFallback: vi.fn(),
     } satisfies GifEditInput
@@ -135,7 +137,7 @@ describe('sending a frame edit', () => {
     // Notes are kept per version outside the card, so the next render starts with them.
     renderToStaticMarkup(createElement(Probe))
     if (edit === undefined) throw new Error('the probe did not render')
-    return { edit, input, busy }
+    return { edit, input, busy, closePreview: () => { previewOpen = false } }
   }
 
   /** Filing a version (the gallery record, the new picture) that finishes when the test says so. */
@@ -228,30 +230,30 @@ describe('sending a frame edit', () => {
     expect(input.onSent).not.toHaveBeenCalled()
   })
 
-  it('hands a reply that came back after the editor was left to the card\'s onSent', async () => {
+  it('keeps the completed edit in an open preview after leaving frame editing', async () => {
     const server = studio()
     const { edit, input } = mount()
     edit.setEditorOpen(true)
     edit.send(sheet)
     await settle()
-    // The user left editing (or closed the preview) while waiting.
     edit.setEditorOpen(false)
     server.answer(reply('image/gif'))
     await settle()
     await vi.advanceTimersByTimeAsync(GIF_EDIT_FINISH_MS)
     expect(input.addRevision).toHaveBeenCalledOnce()
-    expect(input.onSent).toHaveBeenCalledWith(GIF_TEXT.zh.gifEditDone)
-    expect(edit.status.getSnapshot()).toEqual(idle)
+    expect(input.onSent).not.toHaveBeenCalled()
+    expect(edit.status.getSnapshot().done).toMatchObject({ still: false })
   })
 
   it('counts closing the preview while the new version is filed as leaving: the card says how it went and no outcome is left for the editor', async () => {
     const server = studio()
     const filing = heldFiling()
-    const { edit, input } = mount(filing.filing)
+    const { edit, input, closePreview } = mount(filing.filing)
     edit.setEditorOpen(true)
     await sendAndAnswer(edit, server)
     await vi.advanceTimersByTimeAsync(GIF_EDIT_FINISH_MS)
     expect(input.addRevision).toHaveBeenCalledOnce()
+    closePreview()
     edit.setEditorOpen(false)
     filing.release()
     await settle()
