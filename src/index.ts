@@ -136,18 +136,15 @@ function cleanImageToolArgs<T extends SingleGenerationArgs>(args: T): T {
   return clean
 }
 
-/** GIF output parameters shared by generate_image and generate_images (OpenAI images contract). */
-// A relay may front several upstreams for one model name and only some of
-// them honour output_format=svg, so a vector request is worth repeating. The
-// attempt cap and the wall-clock budget keep a slow relay from turning one
-// call into a multi-minute stall.
-const SVG_REQUEST_ATTEMPTS = 3
-const SVG_RETRY_BUDGET_MS = 200_000
-/** Channel extras that only describe a raster or GIF and have no meaning for an SVG. */
-const SVG_INCOMPATIBLE_EXTRAS: ReadonlySet<string> = new Set(['frame_count', 'frame_duration_ms', 'size'])
+/** The SVG endpoint produces one document and accepts no raster or streaming controls. */
+const SVG_INCOMPATIBLE_EXTRAS: ReadonlySet<string> = new Set([
+  'frame_count', 'frame_duration_ms', 'size', 'aspect_ratio', 'image_size',
+  'n', 'stream', 'partial_images', 'output_compression',
+])
 
+/** Image output parameters shared by generate_image and generate_images. */
 const gifToolParameters = {
-  output_format: { type: 'string', enum: ['gif', 'svg'], description: 'Optional. Only for provider=openai or openai-compat. gif produces a looping animation; svg produces a single vector document that is saved as a .svg file (DSH image attachments are raster-only, so an SVG result has no chat card image). For GIF, omit size unless the user asks for exact dimensions: all frames are tiled into one sheet whose longest edge must stay at or below 3840 px. To animate a subject from reference images, use edit_image with output_format=gif instead.' },
+  output_format: { type: 'string', enum: ['gif', 'svg'], description: 'Optional. Only for provider=openai or openai-compat. gif produces a looping animation. svg produces one vector document that the conversation card can preview and save as a .svg file. For GIF, omit size unless the user asks for exact dimensions: all frames are tiled into one sheet whose longest edge must stay at or below 3840 px. To animate a subject from reference images, use edit_image with output_format=gif instead.' },
   frame_count: { type: 'integer', description: 'Optional, GIF only: number of frames, 2-16. Omit to use the provider default.' },
   frame_duration_ms: { type: 'integer', description: 'Optional, GIF only: milliseconds per frame, 20-2000; the provider rounds to 10 ms. Omit to use the provider default.' },
 } as const
@@ -511,12 +508,8 @@ export function apply(ctx: Context, config: Config = {}): void {
       })
       return saveGenerated(ctx, generated, active.provider, active.model, 'subscription', current(), exec, knownWorkspaceRoots)
     }
-    // budgetMs caps the timeout below the configured one, e.g. for what is
-    // left of the SVG retry budget.
-    const runCloud = <T>(operation: (signal: AbortSignal) => Promise<T>, gif = false, budgetMs?: number): Promise<T> => {
-      const timeoutMs = cloudTimeoutFor(current().cloudTimeoutMs, gif)
-      return withGenerationTimeout(budgetMs === undefined ? timeoutMs : Math.min(timeoutMs, budgetMs), exec.signal, operation)
-    }
+    const runCloud = <T>(operation: (signal: AbortSignal) => Promise<T>, gif = false): Promise<T> =>
+      withGenerationTimeout(cloudTimeoutFor(current().cloudTimeoutMs, gif), exec.signal, operation)
     const credential = await requireApiKey(ctx, active.provider, 'generate_image', active.provider === 'openai-compat' ? resolveOpenAICompatChannel(requestConfig, args.channel).keyRef : undefined)
     if (active.provider === 'google') {
       const aspectRatio = (args.aspect_ratio ?? active.aspectRatio) as AspectRatio
@@ -567,24 +560,20 @@ export function apply(ctx: Context, config: Config = {}): void {
       ? Object.fromEntries(Object.entries(channelExtraBody).filter(([key]) => !SVG_INCOMPATIBLE_EXTRAS.has(key)))
       : channelExtraBody
     const extraBody = channelExtras !== undefined ? { ...channelExtras, ...outputFields } : Object.keys(outputFields).length === 0 ? undefined : outputFields
-    const requestOnce = (budgetMs?: number) => runCloud(signal => generateOpenAICompatibleImage({ strictImageDownloads: current().strictImageDownloads === true, provider: active.provider, apiKey: credential, baseURL: active.baseURL, model: active.model, prompt: args.prompt, ...(size === undefined ? {} : { size }), maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal, ...(quality === undefined ? {} : { quality }), ...(extraBody === undefined ? {} : { extraBody }), ...(arkOptions === undefined ? {} : { arkOptions }) }), gifRequested, budgetMs)
-    // A relay can route one model name to several upstreams, and only some of
-    // them honour output_format=svg. Since a bitmap cannot be turned into a
-    // vector, ask again instead of silently handing back a raster.
-    const retryStartedAt = Date.now()
-    let generated = await requestOnce()
-    for (let attempt = 1; svgRequested && attempt < SVG_REQUEST_ATTEMPTS && generated.mediaType !== 'image/svg+xml' && Date.now() - retryStartedAt < SVG_RETRY_BUDGET_MS; attempt++) {
-      // A retry only gets what is left of the budget, and one that fails or
-      // runs out of time keeps the raster already in hand (reported below as
-      // an SVG fallback) instead of losing it. A user cancel still propagates.
-      try {
-        generated = await requestOnce(SVG_RETRY_BUDGET_MS - (Date.now() - retryStartedAt))
-      } catch (error) {
-        if (exec.signal.aborted) throw error
-        ctx.logger.warn('dsh-image-gen: SVG retry failed; keeping the earlier raster result: ' + (error instanceof Error ? error.message : String(error)))
-        break
-      }
-    }
+    const generated = await runCloud(signal => generateOpenAICompatibleImage({
+      strictImageDownloads: current().strictImageDownloads === true,
+      provider: active.provider,
+      apiKey: credential,
+      baseURL: active.baseURL,
+      model: active.model,
+      prompt: args.prompt,
+      maxBytes: ctx.attachments.imageLimits.maxImageBytes,
+      signal,
+      ...(size === undefined ? {} : { size }),
+      ...(quality === undefined ? {} : { quality }),
+      ...(extraBody === undefined ? {} : { extraBody }),
+      ...(arkOptions === undefined ? {} : { arkOptions }),
+    }), gifRequested)
     // Report what the provider actually delivered: a relay that ignores
     // output_format returns a bitmap, and the card must not claim 'svg'.
     const deliveredSvg = generated.mediaType === 'image/svg+xml'
@@ -1002,7 +991,10 @@ async function saveGenerated(
   exec: { agent?: { session: { header: { cwd?: string } } }; signal: AbortSignal },
   knownRoots?: Set<string>,
 ): Promise<GeneratedValue> {
-  if (generated.mediaType === 'image/svg+xml') return saveGeneratedSvg({ ...generated, mediaType: 'image/svg+xml' }, provider, model, output, config, exec)
+  if (generated.mediaType === 'image/svg+xml') {
+    if (generated.data.byteLength > ctx.attachments.imageLimits.maxImageBytes) throw new Error('SVG response exceeds the image byte limit')
+    return saveGeneratedSvg({ ...generated, mediaType: 'image/svg+xml' }, provider, model, output, config, exec)
+  }
   const raster = { ...generated, mediaType: generated.mediaType as ImageAttachmentRef['mediaType'] }
   if (!ctx.attachments.imageLimits.mediaTypes.includes(raster.mediaType)) throw new Error(`This DSH deployment does not accept ${raster.mediaType} generated images`)
   const attachment = await ctx.attachments.saveImage({ data: raster.data, mediaType: raster.mediaType, name: 'generated-image' })

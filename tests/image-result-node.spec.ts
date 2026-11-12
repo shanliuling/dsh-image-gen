@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 
 import { createImageResultDefinition, imageResultFromMeta, imageResultsFromMeta, imageResultsFromPtcDispatch, originalFromMeta } from '../src/client/image-result-node.js'
+import { GeneratedImageCard, type ImageCardProps } from '../src/client/image-result-view.js'
 
 const attachment = {
   attachmentId: 'sha256:promoted-image',
@@ -316,6 +319,15 @@ describe('vector results in result metadata', () => {
   it('drops a result that carries neither an attachment nor markup', () => {
     expect(imageResultFromMeta({ kind: 'dsh-image-gen-svg', prompt: 'an icon' })).toBeUndefined()
     expect(imageResultFromMeta({ kind: 'dsh-image-gen', prompt: 'an icon', svg: 'not markup' })).toBeUndefined()
+  })
+
+  it('shows a completed SVG from a single tool call on the legacy host card', () => {
+    const meta = { kind: 'dsh-image-gen-svg', svg: markup, prompt: 'an icon', provider: 'openai-compat', model: 'relay', output: 'svg' }
+    const block = { kind: 'toolResult', resultView: { card: 'generic', meta, content: [{ type: 'text', text: markup }] } }
+    const props = { promoted: false, block } as unknown as ImageCardProps
+    const html = renderToStaticMarkup(createElement(GeneratedImageCard, props))
+    expect(html).toContain('data:image/svg+xml')
+    expect(html).not.toContain('dsh-ig-loading')
   })
 
   it('keeps markup and attachment apart inside a batch', () => {

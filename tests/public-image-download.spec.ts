@@ -61,6 +61,17 @@ describe('public result-image transport', () => {
     expect(streamed.destroyed).toBe(true)
   })
 
+  it('negotiates SVG when the generation asked for a vector result', async () => {
+    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>')
+    const t = transport(200, [svg], { 'content-type': 'image/svg+xml' })
+    await expect(downloadPublicImage('https://example.test/vector.svg', { maxBytes: 1024, acceptSvg: true }, t.deps)).resolves.toMatchObject({
+      data: new Uint8Array(svg),
+      contentType: 'image/svg+xml',
+    })
+    expect(t.options.headers.accept).toContain('image/svg+xml')
+    expect(t.options.headers.accept).toContain('image/png')
+  })
+
   it('does not send a request for an already aborted operation', async () => {
     const controller = new AbortController(); controller.abort()
     const t = transport()

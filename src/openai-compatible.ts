@@ -88,7 +88,7 @@ export async function generateOpenAICompatibleImage(input: {
       ...(input.extraBody ?? {}),
     }),
   }), input.apiKey)
-  return parseImageResponse(response, input.provider, input)
+  return parseImageResponse(response, input.provider, { ...input, acceptSvg: input.extraBody?.output_format === 'svg' })
 }
 
 /** How the edits endpoint expects its request body (#41). */
@@ -292,10 +292,19 @@ function rejectsResponseFormat(text: string): boolean {
   return /(?:response[_ -]?format|b64_json)/i.test(message) && /(?:unsupported|not\s+(?:support|allowed|permitted|accepted|implemented)|unknown|unrecognized|unexpected|invalid|extra\s+(?:field|input)|不支持|不允许|未知|无效|未识别)/i.test(message)
 }
 
+interface ImageResponseOptions {
+  baseURL: string
+  maxBytes: number
+  signal: AbortSignal
+  apiKey?: string
+  strictImageDownloads?: boolean
+  acceptSvg?: boolean
+}
+
 async function parseImageResponse(
   response: Response,
   provider: string,
-  input: { baseURL: string; maxBytes: number; signal: AbortSignal; apiKey?: string; strictImageDownloads?: boolean },
+  input: ImageResponseOptions,
 ): Promise<GeneratedCompatibleImage> {
   const text = await readBoundedText(response, Math.ceil(input.maxBytes * 1.4) + ERROR_LIMIT)
   if (!response.ok) throw new Error(`${provider} image request failed (${response.status}): ${redactSecrets(text, input.apiKey).slice(0, ERROR_LIMIT)}`)
@@ -343,7 +352,7 @@ function firstImage(value: unknown): { b64_json?: string; url?: string; mime_typ
 async function downloadImage(
   url: string | undefined,
   provider: string,
-  input: { baseURL: string; maxBytes: number; signal: AbortSignal; apiKey?: string; strictImageDownloads?: boolean },
+  input: ImageResponseOptions,
 ): Promise<GeneratedCompatibleImage> {
   if (url === undefined) throw new Error(`${provider} image request returned no image data`)
   if (url.startsWith('data:')) {
@@ -401,11 +410,11 @@ function imageDownloadCandidates(url: string, baseURL: string, provider: string)
 async function requestImageCandidate(
   candidate: string,
   provider: string,
-  input: { baseURL: string; maxBytes: number; signal: AbortSignal; apiKey?: string; strictImageDownloads?: boolean },
+  input: ImageResponseOptions,
 ): Promise<Response> {
   const sameOrigin = new URL(candidate).origin === new URL(input.baseURL).origin
   if (input.strictImageDownloads === true) {
-    const options = { maxBytes: input.maxBytes, signal: input.signal }
+    const options = { maxBytes: input.maxBytes, signal: input.signal, acceptSvg: input.acceptSvg === true }
     let result
     try {
       result = await downloadPublicImage(candidate, {

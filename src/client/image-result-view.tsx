@@ -34,9 +34,8 @@ export interface ImageResultNodeProps {
 export function GeneratedImageCard(props: ImageCardProps) {
   const result = imageResultFromBlock(props.block)
   if (props.promoted && result !== undefined) return <PromotedResultNotice locale={props.locale} />
-  // A tool-call block always carries a stored attachment; vector results only
-  // arrive through result metadata or a PTC dispatch.
-  return <ImageResultCard result={result !== undefined && isRasterResult(result) ? result : undefined} locale={props.locale} sessionId={props.sessionId} openFile={props.openFile} />
+  if (result === undefined) return <ImageResultCard locale={props.locale} />
+  return <ResultCard result={result} locale={props.locale} sessionId={props.sessionId} openFile={props.openFile} />
 }
 
 /** Suppress the folded duplicate on modern hosts; render every image on legacy hosts. */
@@ -629,13 +628,13 @@ function SvgResultCard({ result, locale, openFile }: {
 
 function imageResultFromBlock(block: ToolCallBlock): ImageResultPresentation | undefined {
   const attachment = imageRef(block)
-  if (attachment === undefined) return undefined
   const blockValue = block as unknown as {
     meta?: Record<string, unknown>
     resultView?: { meta?: Record<string, unknown> }
     call?: { args?: { prompt?: string; source_attachment_id?: string; source_attachment_ids?: string[] } }
   }
   const meta = blockValue.meta ?? blockValue.resultView?.meta
+  if (attachment === undefined) return imageResultsFromMeta(meta)[0]
   const sourceIds = Array.isArray(blockValue.call?.args?.source_attachment_ids)
     ? blockValue.call?.args?.source_attachment_ids
     : typeof blockValue.call?.args?.source_attachment_id === 'string'

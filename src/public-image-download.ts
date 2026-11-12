@@ -24,7 +24,7 @@ export function isPublicAddress(address: string): boolean {
     : family === 6 && public6.check(address, 'ipv6') && !denied6.check(address, 'ipv6')
 }
 
-interface DownloadOptions { maxBytes: number; signal?: AbortSignal; authorization?: string }
+interface DownloadOptions { maxBytes: number; signal?: AbortSignal; authorization?: string; acceptSvg?: boolean }
 interface DownloadDeps {
   lookup?: (host: string, options: { all: true; verbatim: true }) => Promise<LookupAddress[]>
   request?: typeof httpsRequest
@@ -68,10 +68,12 @@ export async function downloadPublicImage(value: string, options: DownloadOption
       callback(null, a.address, a.family)
     }
   }) as LookupFunction
+  const rasterTypes = 'image/png,image/jpeg,image/webp,image/gif'
+  const accept = options.acceptSvg === true ? `image/svg+xml,${rasterTypes}` : rasterTypes
   return await new Promise((resolveResult, reject) => {
     const req = request(url, {
       signal, lookup: pinnedLookup, agent: false,
-      headers: { accept: 'image/png,image/jpeg,image/webp,image/gif', ...(options.authorization ? { authorization: options.authorization } : {}) },
+      headers: { accept, ...(options.authorization ? { authorization: options.authorization } : {}) },
     }, res => {
       void (async () => {
         const status = res.statusCode ?? 0
