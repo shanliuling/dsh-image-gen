@@ -86,6 +86,10 @@ describe('conversation image models', () => {
     expect(result.attachment.attachmentId).toBe('saved-image')
     expect(ctx.attachments.saveImage).toHaveBeenCalledOnce()
     expect(ctx.llm.stream).toHaveBeenCalledWith(expect.objectContaining({ provider: 'doubao', model: 'image-gen' }))
+    // The request must carry DSH content blocks; a bare string is rejected by adapters.
+    expect(ctx.llm.stream).toHaveBeenCalledWith(expect.objectContaining({
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'a sailboat' }] }],
+    }))
   })
 
   it('rejects a model absent from the provider image catalog before streaming', async () => {

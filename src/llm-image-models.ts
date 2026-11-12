@@ -21,7 +21,8 @@ interface LlmService {
   stream(options: {
     provider: string
     model: string
-    messages: Array<{ role: 'user'; content: string }>
+    /** DSH request messages carry content blocks, never a bare string. */
+    messages: Array<{ role: 'user'; content: Array<{ type: 'text'; text: string }> }>
     signal: AbortSignal
   }): AsyncIterable<unknown>
 }
@@ -253,7 +254,7 @@ export async function fetchLlmImageBytes(
   for await (const chunk of llm.stream({
     provider,
     model: selected.id,
-    messages: [{ role: 'user', content: input.prompt }],
+    messages: [{ role: 'user', content: [{ type: 'text', text: input.prompt }] }],
     signal,
   })) {
     const part = chunk as { type?: string; text?: string }
@@ -266,7 +267,12 @@ export async function fetchLlmImageBytes(
     return { data: stored.data, mediaType: attachments[0]!.mediaType, model: selected.id }
   }
   const urls = imageUrlsFromText(text)
-  if (urls.length === 0) throw new Error('对话模型未返回图片，请确认在提供方中启用了生图模型')
+  if (urls.length === 0) {
+    const reply = text.trim()
+    throw new Error(reply.length === 0
+      ? '对话模型没有返回任何内容；请确认该生图模型在提供方中可用'
+      : `对话模型未返回图片；回复开头：${reply.slice(0, 120)}`)
+  }
   const downloaded = await downloadImage(urls[0]!, ctx.attachments.imageLimits.maxImageBytes, signal)
   return { ...downloaded, model: selected.id }
 }
