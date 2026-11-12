@@ -2,6 +2,10 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// The conversation-source tests download from fictional hosts; resolve them to
+// a public address so the SSRF guard runs its real check instead of failing DNS.
+vi.mock('node:dns/promises', () => ({ lookup: async () => [{ address: '93.184.216.34' }] }))
 import { createHash } from 'node:crypto'
 import { mkdtemp, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -895,7 +899,25 @@ describe('image tool registration', () => {
 
     expect(value).toMatchObject({ provider: 'llm:doubao', model: 'image-gen' })
     expect(stream).toHaveBeenCalledWith(expect.objectContaining({ provider: 'doubao', model: 'image-gen' }))
-    expect(fetchMock).toHaveBeenCalledWith('https://img.example/a.png', expect.objectContaining({ redirect: 'follow' }))
+    expect(fetchMock).toHaveBeenCalledWith('https://img.example/a.png', expect.objectContaining({ redirect: 'manual' }))
+  })
+
+  it('rejects GIF parameters on a conversation source before any generation', async () => {
+    const stream = vi.fn(async function* () { yield { type: 'text-delta', text: 'noop' } })
+    const { ctx, tools } = harnessContext({
+      llm: {
+        listProviders: () => [{ id: 'doubao', name: '豆包' }],
+        listModels: vi.fn(async () => [{ id: 'image-gen', name: '豆包 生图（Seedream 5.0）' }]),
+        stream,
+      },
+    })
+    apply(ctx, { provider: 'llm:doubao', llmImageModels: { doubao: 'image-gen' }, saveToWorkspace: false })
+
+    await expect(toolByName(tools, 'generate_image').execute(
+      { prompt: 'a sailboat', output_format: 'gif' } as never,
+      { signal: new AbortController().signal } as never,
+    )).rejects.toThrow('only supported with provider=openai or openai-compat')
+    expect(stream).not.toHaveBeenCalled()
   })
 
   it('falls back to the catalog first image model when no llm model is selected', async () => {

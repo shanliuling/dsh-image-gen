@@ -462,15 +462,22 @@ export function apply(ctx: Context, config: Config = {}): void {
     const overridden = withProviderOverrides(requestConfig, providerOverrideOf(args.provider), args.model)
     const llmProfile = resolveLlmProvider(overridden)
     if (llmProfile !== undefined) {
-      const generated = await fetchLlmImageBytes(ctx, {
+      // The conversation transport has no GIF contract: reject the parameters
+      // here, before a generation request is spent ignoring them.
+      if (args.output_format !== undefined || args.frame_count !== undefined || args.frame_duration_ms !== undefined) {
+        throw new Error('output_format, frame_count and frame_duration_ms are only supported with provider=openai or openai-compat.')
+      }
+      // Same watchdog as every other provider: a stalled stream or download
+      // must not pin the tool call past the configured cloud timeout.
+      const generated = await withGenerationTimeout(cloudTimeoutFor(current().cloudTimeoutMs, false), exec.signal, signal => fetchLlmImageBytes(ctx, {
         provider: llmProfile.provider,
         model: llmProfile.model,
         mode: 'generate',
         prompt: args.prompt,
-        ratio: args.aspect_ratio ?? '1:1',
+        ratio: 'default',
         quality: 'default',
         count: 1,
-      }, exec.signal)
+      }, signal))
       return saveGenerated(ctx, generated, llmProfile.provider, generated.model, '对话模型通道', current(), exec, knownWorkspaceRoots)
     }
     const active = resolveProvider(overridden)

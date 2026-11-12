@@ -437,8 +437,14 @@ export function ImageProviderPill(props: ProviderPillFace) {
     setError('')
     setPending(provider)
     void (async () => {
-      if (model !== undefined && isLlmImageProvider(provider)) {
-        await writeSetting(props.scope, 'llmImageModels', { ...(snapshot.value?.llmImageModels ?? {}), [llmProviderIdOf(provider)]: model }, t('writeRejected'))
+      if (isLlmImageProvider(provider)) {
+        // Picking the provider header must also pin a model: the menu shows the
+        // first catalog entry as selected, so saving the provider alone would
+        // leave a configuration that renders as chosen but generates nothing.
+        const chosen = model ?? snapshot.value?.llmImageModels?.[llmProviderIdOf(provider)] ?? llmRows.find(row => row.provider === provider)?.modelOptions[0]?.value
+        if (chosen !== undefined && chosen.length > 0) {
+          await writeSetting(props.scope, 'llmImageModels', { ...(snapshot.value?.llmImageModels ?? {}), [llmProviderIdOf(provider)]: chosen }, t('writeRejected'))
+        }
       } else if (model !== undefined && provider === 'comfyui') {
         const writes = comfyUIWorkflowWrites(snapshot.value, model)
         if (writes === undefined) throw new Error(t('writeRejected'))
