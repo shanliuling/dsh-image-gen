@@ -85,6 +85,15 @@ No parameters to learn, no pages to switch. Just say it in a DSH chat:
 
 ## Quick Start
 
+### Hardened downloads (opt-in)
+
+Two optional settings harden the paths that leave this machine, both off by default:
+
+- `strictImageDownloads`: result URLs must be public HTTPS on port 443. DNS answers are validated and pinned for the request, redirects from provider results are never followed, and responses respect the image byte limit.
+- `requireHostAdmission`: the plugin's web routes refuse requests with 503 whenever the host's connection admission service is absent or fails, instead of serving them unguarded.
+
+They stay off by default because a TUN proxy or a custom corporate resolver can intentionally answer with private-range addresses; enabling either setting assumes your egress is direct.
+
 ### 1. Install the plugin
 
 Requirements: DeepSeek Harness stable version, Node.js `^22.19.0` or `>= 24.0.0`.

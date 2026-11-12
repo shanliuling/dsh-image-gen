@@ -85,6 +85,15 @@ pnpm dsh plugin --profile web add dsh-image-gen@latest
 
 ## 快速开始
 
+### 加固下载（可选）
+
+两条可选设置加固离开本机的网络路径，默认全部关闭：
+
+- `strictImageDownloads`：结果 URL 必须是公网 HTTPS 443。DNS 解析结果会校验并固定用于本次请求，不跟随 provider 结果中的重定向，响应遵守图片字节上限。
+- `requireHostAdmission`：宿主 connection admission 服务缺失或异常时，插件 Web 路由一律 503 拒绝，而不是裸奔。
+
+默认关闭是因为 TUN 代理或自定义企业解析器可能故意返回内网地址；开启任一设置即假定你的出口是直连。
+
 ### 1. 安装插件
 
 环境要求：DeepSeek Harness 稳定版本，Node.js `^22.19.0` 或 `>= 24.0.0`。

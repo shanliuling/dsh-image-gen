@@ -90,6 +90,10 @@ export type ImageSize = typeof IMAGE_SIZES[number]
 
 /** Bundle configuration from the profile patch and the Web settings page. */
 export interface Config {
+  /** Opt in to public HTTPS:443 result downloads with pinned DNS and no redirects. */
+  strictImageDownloads?: boolean
+  /** Refuse web requests when the host connection admission service is absent. */
+  requireHostAdmission?: boolean
   provider?: ImageProvider
   cloudTimeoutMs?: number
   googleModel?: string
@@ -219,6 +223,8 @@ function volatile<T extends z>(schema: T): T {
 export const Config = z.object({
   provider: volatile(z.union(IMAGE_PROVIDERS).default('google')),
   cloudTimeoutMs: volatile(z.number().min(5_000).max(3_600_000).default(DEFAULT_CLOUD_TIMEOUT_MS)),
+  strictImageDownloads: volatile(z.boolean().default(false)),
+  requireHostAdmission: volatile(z.boolean().default(false)),
   googleModel: volatile(z.string().default(DEFAULT_GOOGLE_MODEL)),
   googleEndpoint: volatile(z.string().default(DEFAULT_GOOGLE_ENDPOINT)),
   googleNative: volatile(z.boolean().default(false)),

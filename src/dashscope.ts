@@ -1,5 +1,6 @@
 /** DashScope Qwen Image generation and editing adapter. */
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
+import { downloadPublicImage } from './public-image-download.js'
 import { guardedFetch, readResponseBody } from './fetch-diagnostics.js'
 import { redactSecrets } from './redact.js'
 import { detectImageMediaType } from './reference-image.js'
@@ -12,6 +13,7 @@ export interface DashScopeImageOptions {
   size?: string
   watermark?: boolean
   maxBytes: number
+  strictImageDownloads?: boolean
   signal?: AbortSignal
 }
 
@@ -144,6 +146,12 @@ async function downloadImageBlob(
   imageUrl: string,
   options: DashScopeImageOptions,
 ): Promise<{ data: Uint8Array; mediaType: ImageAttachmentRef['mediaType'] }> {
+  if (options.strictImageDownloads === true) {
+    const { data, contentType } = await downloadPublicImage(imageUrl, options)
+    const mediaType = detectImageMediaType(data) ?? imageMediaType(contentType)
+    if (mediaType === undefined) throw new Error('DashScope image download returned an unsupported content type')
+    return { data, mediaType }
+  }
   const imageResponse = await guardedFetch('DashScope image download', options.signal, () => fetch(imageUrl, {
     ...(options.signal ? { signal: options.signal } : {}),
   }), options.apiKey)

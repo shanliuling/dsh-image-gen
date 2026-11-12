@@ -1,5 +1,6 @@
 /** OpenAI Images API and compatible response adapter. */
 import type { ImageMediaType } from '@deepseek-ai/dsh-attachment'
+import { downloadPublicImage } from './public-image-download.js'
 import { guardedFetch, readResponseBody } from './fetch-diagnostics.js'
 import { redactSecrets } from './redact.js'
 import { detectImageMediaType } from './reference-image.js'
@@ -34,6 +35,7 @@ export async function generateOpenAICompatibleImage(input: {
   quality?: string
   /** Extra JSON fields merged last into the generations body (xAI aspect_ratio/resolution). */
   extraBody?: Readonly<Record<string, unknown>>
+  strictImageDownloads?: boolean
   maxBytes: number
   signal: AbortSignal
   /** Ark-only output controls; ignored by every other provider. */
@@ -67,6 +69,7 @@ export async function editOpenAICompatibleImage(input: {
   prompt: string
   sourceImages: CompatibleReferenceImage[]
   size?: string
+  strictImageDownloads?: boolean
   maxBytes: number
   signal: AbortSignal
   /**
@@ -260,7 +263,7 @@ function rejectsResponseFormat(text: string): boolean {
 async function parseImageResponse(
   response: Response,
   provider: string,
-  input: { baseURL: string; maxBytes: number; signal: AbortSignal; apiKey?: string },
+  input: { baseURL: string; maxBytes: number; signal: AbortSignal; apiKey?: string; strictImageDownloads?: boolean },
 ): Promise<GeneratedCompatibleImage> {
   const text = await readBoundedText(response, Math.ceil(input.maxBytes * 1.4) + ERROR_LIMIT)
   if (!response.ok) throw new Error(`${provider} image request failed (${response.status}): ${redactSecrets(text, input.apiKey).slice(0, ERROR_LIMIT)}`)
@@ -307,7 +310,7 @@ function firstImage(value: unknown): { b64_json?: string; url?: string; mime_typ
 async function downloadImage(
   url: string | undefined,
   provider: string,
-  input: { baseURL: string; maxBytes: number; signal: AbortSignal; apiKey?: string },
+  input: { baseURL: string; maxBytes: number; signal: AbortSignal; apiKey?: string; strictImageDownloads?: boolean },
 ): Promise<GeneratedCompatibleImage> {
   if (url === undefined) throw new Error(`${provider} image request returned no image data`)
   if (url.startsWith('data:')) {
@@ -362,9 +365,23 @@ function imageDownloadCandidates(url: string, baseURL: string, provider: string)
 async function requestImageCandidate(
   candidate: string,
   provider: string,
-  input: { baseURL: string; maxBytes: number; signal: AbortSignal; apiKey?: string },
+  input: { baseURL: string; maxBytes: number; signal: AbortSignal; apiKey?: string; strictImageDownloads?: boolean },
 ): Promise<Response> {
   const sameOrigin = new URL(candidate).origin === new URL(input.baseURL).origin
+  if (input.strictImageDownloads === true) {
+    const options = { maxBytes: input.maxBytes, signal: input.signal }
+    let result
+    try {
+      result = await downloadPublicImage(candidate, {
+        ...options,
+        ...(sameOrigin && input.apiKey !== undefined ? { authorization: 'Bearer ' + input.apiKey } : {}),
+      })
+    } catch (error) {
+      if (!sameOrigin || input.apiKey === undefined) throw error
+      result = await downloadPublicImage(candidate, options)
+    }
+    return new Response(result.data as BodyInit, { headers: result.contentType === undefined ? {} : { 'content-type': result.contentType } })
+  }
   let response = await guardedFetch(provider + ' image download', input.signal, () => fetch(candidate, {
     redirect: 'follow', signal: input.signal,
     ...(input.apiKey === undefined || !sameOrigin ? {} : { headers: { authorization: 'Bearer ' + input.apiKey } }),

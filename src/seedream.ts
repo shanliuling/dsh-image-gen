@@ -1,5 +1,6 @@
 /** Volcengine Ark Seedream image-editing adapter. */
 import type { ImageMediaType } from '@deepseek-ai/dsh-attachment'
+import { downloadPublicImage } from './public-image-download.js'
 import type { GeneratedCompatibleImage } from './openai-compatible.js'
 import { guardedFetch, readResponseBody } from './fetch-diagnostics.js'
 import { redactSecrets } from './redact.js'
@@ -17,6 +18,7 @@ export async function editSeedreamImage(input: {
   sourceImages: Array<{ data: Uint8Array; mediaType: ImageMediaType }>
   size?: string
   maxBytes: number
+  strictImageDownloads?: boolean
   signal: AbortSignal
   /**
    * Ark output controls. The edit path is the only one Ark lets request a
@@ -81,8 +83,14 @@ function firstImage(value: unknown): { b64_json?: string; url?: string; mime_typ
       : undefined
 }
 
-async function downloadImage(url: string | undefined, input: { maxBytes: number; signal: AbortSignal; apiKey: string }): Promise<GeneratedCompatibleImage> {
+async function downloadImage(url: string | undefined, input: { maxBytes: number; signal: AbortSignal; apiKey: string; strictImageDownloads?: boolean }): Promise<GeneratedCompatibleImage> {
   if (url === undefined) throw new Error('seedream image editing returned no image data')
+  if (input.strictImageDownloads === true) {
+    const { data, contentType } = await downloadPublicImage(url, input)
+    const mediaType = imageMediaType(contentType)
+    if (mediaType === undefined) throw new Error('seedream image download returned unsupported content type')
+    return { data, mediaType }
+  }
   const response = await guardedFetch('seedream image download', input.signal, () => fetch(url, { redirect: 'follow', signal: input.signal }), input.apiKey)
   if (!response.ok) {
     await response.body?.cancel().catch(() => undefined)
