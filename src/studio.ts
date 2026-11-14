@@ -104,8 +104,15 @@ function ratioPosition(ratio: string): number {
 export function openAIRequestSize(config: Config, ratio: string, quality: string): string {
   const group = openAICompatTable(config).find(entry => entry.ratio === ratio)
   if (group === undefined) {
-    if (ratio === '3:2') return '1536x1024'
-    if (ratio === '2:3') return '1024x1536'
+    // The built-in table only lists 1:1/3:2/2:3, while the tool schema and the
+    // ratio picker advertise the full ten. An unmapped ratio used to collapse to
+    // 1024x1024 — a 3:4 portrait request silently became a square. Orient the
+    // square instead: the generator honours one dimension per axis, so a
+    // portrait keeps the taller side and a landscape the wider one.
+    const [width, height] = ratio.split(':').map(Number)
+    if (width !== undefined && height !== undefined && Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+      return height > width ? '1024x1536' : width > height ? '1536x1024' : '1024x1024'
+    }
     return '1024x1024'
   }
   const requested = tierRank(quality)
