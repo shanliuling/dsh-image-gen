@@ -124,6 +124,42 @@ export function openAIRequestSize(config: Config, ratio: string, quality: string
   return withinBudget.reduce((best, entry) => (entry.rank > best.rank ? entry : best)).size
 }
 
+/**
+ * Decide the pixel size a chat-tool image request should carry.
+ *
+ * Lives here rather than in `index.ts` so the precedence rules can be tested
+ * without importing the whole plugin entry (which pulls in every provider
+ * adapter and drags unrelated suites past their timeouts). `index.ts` calls it.
+ *
+ * Order matters in two places:
+ *
+ * 1. **Format guards run before the ratio lookup.** A GIF without an explicit
+ *    size and an SVG both send no pixel size at all. `openAIRequestSize` throws
+ *    when a ratio's lowest configured tier is above the requested budget, so
+ *    resolving early would fail a request that used to reach the provider fine.
+ * 2. **The budget is the table's own baseline, not `'1K'`.** A ratio configured
+ *    with only a 2K tier would throw under a fixed 1K budget; an empty tier
+ *    resolves to the largest configured tier at or below the default instead.
+ *
+ * Precedence: explicit `size` → relay's configured table → profile default.
+ */
+export function chatToolSize(input: {
+  provider: string
+  config: Config
+  fallbackSize: string
+  args: { size?: string; aspect_ratio?: string }
+  gifRequested: boolean
+  svgRequested: boolean
+}): string | undefined {
+  const sizeDiscarded = input.svgRequested || (input.gifRequested && input.args.size === undefined)
+  if (sizeDiscarded) return undefined
+  if (input.args.size !== undefined) return input.args.size
+  const ratioSize = input.provider === 'openai-compat' && input.args.aspect_ratio !== undefined
+    ? openAIRequestSize(input.config, input.args.aspect_ratio, '')
+    : undefined
+  return ratioSize ?? input.fallbackSize
+}
+
 /** The relay table entry the user picked, if a table is configured and lists this ratio; otherwise nothing. */
 function configuredCompatSize(config: Config, input: Pick<StudioGenerateRequest, 'ratio' | 'quality' | 'resolution'>): string | undefined {
   const table = config.openaiCompatSizes
