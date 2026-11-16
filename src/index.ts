@@ -595,6 +595,13 @@ export function apply(ctx: Context, config: Config = {}): void {
       ...(quality === undefined ? {} : { quality }),
       ...(extraBody === undefined ? {} : { extraBody }),
       ...(arkOptions === undefined ? {} : { arkOptions }),
+      // Url-first for relays that inline multi-megabyte base64 (see the option's
+      // doc comment). Read from `requestConfig`, not `current()`: a channel-level
+      // `preferUrl` is only projected onto `requestConfig`, so reading the live
+      // config would make the channel setting a no-op — a channel opting in with
+      // a global `false`, or opting out with a global `true`, would be ignored.
+      // For every non-openai-compat provider both sources hold the same value.
+      preferUrl: active.provider === 'openai-compat' && requestConfig.openaiCompatPreferUrl === true,
     }), gifRequested)
     // Report what the provider actually delivered: a relay that ignores
     // output_format returns a bitmap, and the card must not claim 'svg'.

@@ -245,6 +245,11 @@ export interface OpenAICompatChannel {
   editFormat?: 'multipart' | 'jsonImageUrlArray' | 'formReferenceImages' | 'siliconflowJson'
   editExtra?: Record<string, unknown>
   sizes?: Record<string, Record<string, string>>
+  /**
+   * Whether this channel should ask for an image URL instead of inline base64.
+   * Unset inherits the global `openaiCompatPreferUrl`.
+   */
+  preferUrl?: boolean
 }
 
 export interface OpenAICompatChannelSource {
@@ -262,6 +267,8 @@ export interface OpenAICompatChannelSource {
   openaiCompatSizes?: Record<string, Record<string, string>>
   openaiCompatChannels?: readonly OpenAICompatChannel[]
   openaiCompatActiveChannel?: string
+  /** Global url-first switch; a channel's own `preferUrl` overrides it. */
+  openaiCompatPreferUrl?: boolean
 }
 
 export function openAICompatKeyRef(channelId: string): string {
@@ -310,6 +317,8 @@ export function resolveOpenAICompatChannels(source: OpenAICompatChannelSource): 
       editFormat: entry.editFormat ?? 'multipart',
       editExtra: entry.editExtra ?? {},
       sizes: entry.sizes ?? {},
+      // Kept as-is: `undefined` means "inherit the global switch".
+      ...(entry.preferUrl === undefined ? {} : { preferUrl: entry.preferUrl === true }),
     })
   }
   return channels

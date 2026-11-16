@@ -50,7 +50,7 @@ export interface CompatibleReferenceImage {
   mediaType: ImageMediaType
 }
 
-export async function generateOpenAICompatibleImage(input: {
+export interface OpenAICompatibleGenerateInput {
   provider: 'openai' | 'openai-compat' | 'seedream' | 'xai' | 'zhipu'
   apiKey: string
   baseURL: string
@@ -72,7 +72,44 @@ export async function generateOpenAICompatibleImage(input: {
   signal: AbortSignal
   /** Ark-only output controls; ignored by every other provider. */
   arkOptions?: ArkOutputOptions
-}): Promise<GeneratedCompatibleImage> {
+  /**
+   * Ask the relay for an image URL (`response_format: 'url'`) instead of an
+   * inline base64 payload.
+   *
+   * Some relays inline 1.5–3MB of base64; on a slow link the body is cut off
+   * mid-stream and the request fails with `invalid JSON` even though the image
+   * was generated and billed server-side. A URL response is a few hundred
+   * bytes, which removes that transfer bottleneck entirely.
+   *
+   * The URL can point at a CDN that is unreachable from here, so a download or
+   * parse failure falls back to a second request without the field (the relay
+   * then inlines base64). Omitted or `false` keeps the current behaviour.
+   */
+  preferUrl?: boolean
+}
+
+export async function generateOpenAICompatibleImage(input: OpenAICompatibleGenerateInput): Promise<GeneratedCompatibleImage> {
+  if (input.preferUrl !== true) return generateOpenAICompatibleImageOnce(input, undefined)
+  try {
+    return await generateOpenAICompatibleImageOnce(input, 'url')
+  } catch (error) {
+    // Only transfer/parse failures are worth a retry: a request the relay
+    // rejected (4xx/5xx) fails the same way a second time.
+    const message = error instanceof Error ? error.message : String(error)
+    if (!/download|no image|invalid JSON|no image data/i.test(message)) throw error
+    return generateOpenAICompatibleImageOnce(input, undefined)
+  }
+}
+
+/**
+ * One generation request. `responseFormat` decides whether `response_format`
+ * is injected into the body; the rest is the original request unchanged, so
+ * both modes share one body builder.
+ */
+async function generateOpenAICompatibleImageOnce(
+  input: OpenAICompatibleGenerateInput,
+  responseFormat: 'url' | undefined,
+): Promise<GeneratedCompatibleImage> {
   const response = await guardedFetch(`${input.provider} image request`, input.signal, () => fetch(imageEndpoint(input.baseURL, 'generations'), {
     method: 'POST', redirect: 'error', signal: input.signal,
     headers: { authorization: `Bearer ${input.apiKey}`, 'content-type': 'application/json' },
@@ -85,6 +122,9 @@ export async function generateOpenAICompatibleImage(input: {
       // outright (it needs exactly one input image), so it is the edit path's
       // option alone.
       ...(input.provider === 'seedream' ? { response_format: 'url', ...arkOutputBody(input.arkOptions, { background: false }) } : {}),
+      // Injected only on request, and never over a channel's own explicit
+      // `response_format` in extraBody.
+      ...(responseFormat !== undefined && input.extraBody?.response_format === undefined ? { response_format: responseFormat } : {}),
       ...(input.extraBody ?? {}),
     }),
   }), input.apiKey)

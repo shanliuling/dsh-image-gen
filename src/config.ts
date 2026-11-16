@@ -149,6 +149,15 @@ export interface Config {
    * fixed three. Generation sends the exact configured string.
    */
   openaiCompatSizes?: Record<string, Record<string, string>>
+  /**
+   * Ask relays for an image URL instead of inline base64, falling back to
+   * base64 when the URL cannot be downloaded.
+   *
+   * Some relays inline 1.5–3MB of base64; on a slow link the body is cut off
+   * mid-stream and the request fails with `invalid JSON` although the image was
+   * generated and billed server-side. Default `false` keeps current behaviour.
+   */
+  openaiCompatPreferUrl?: boolean
   seedreamBaseURL?: string
   seedreamModel?: string
   /**
@@ -250,6 +259,13 @@ export const Config = z.object({
     editFormat: z.union([z.const('multipart'), z.const('jsonImageUrlArray'), z.const('formReferenceImages'), z.const('siliconflowJson')]).default('multipart'),
     editExtra: z.dict(z.any()).default({}),
     sizes: z.dict(z.dict(z.string())).default({}),
+    // Per-channel override, deliberately tri-state: `true` / `false` / unset
+    // (inherit the global switch). No `.default()` here on purpose — schemastery
+    // fills a default in for a missing key, and a materialised `false` would
+    // make the "inherit the global setting" branch in `shared.ts` unreachable,
+    // silently overriding the global switch. `z.boolean()` preserves
+    // `undefined` as-is.
+    preferUrl: z.boolean(),
   })).default([])),
   openaiCompatActiveChannel: volatile(z.string().default('')),
   openaiCompatEditModel: volatile(z.string().default('')),
@@ -260,6 +276,7 @@ export const Config = z.object({
   openaiCompatEditFormat: volatile(z.union([z.const('multipart'), z.const('jsonImageUrlArray'), z.const('formReferenceImages'), z.const('siliconflowJson')]).default('multipart')),
   openaiCompatEditExtra: volatile(z.dict(z.any()).default({})),
   openaiCompatSizes: volatile(z.dict(z.dict(z.string())).default({})),
+  openaiCompatPreferUrl: volatile(z.boolean().default(false)),
   seedreamBaseURL: volatile(z.string().default(DEFAULT_SEEDREAM_BASE_URL)),
   seedreamModel: volatile(z.string().default(DEFAULT_SEEDREAM_MODEL)),
   seedreamOutputFormat: volatile(z.union(ARK_OUTPUT_FORMATS).default('jpeg')),
@@ -372,6 +389,8 @@ export function withOpenAICompatChannel(config: Config, channelId?: string): Con
     openaiCompatEditFormat: channel.editFormat ?? 'multipart',
     openaiCompatEditExtra: channel.editExtra ?? {},
     openaiCompatSizes: channel.sizes ?? {},
+    // Per-channel override; unset inherits the global `openaiCompatPreferUrl`.
+    ...(channel.preferUrl === undefined ? {} : { openaiCompatPreferUrl: channel.preferUrl === true }),
     openaiCompatActiveChannel: channel.id,
   }
 }
