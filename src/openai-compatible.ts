@@ -1,4 +1,5 @@
 /** OpenAI Images API and compatible response adapter. */
+import { brotliDecompressSync, gunzipSync, inflateSync, zstdDecompressSync } from 'node:zlib'
 import type { ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import { downloadPublicImage } from './public-image-download.js'
 import { guardedFetch, readResponseBody } from './fetch-diagnostics.js'
@@ -470,11 +471,56 @@ function imageMediaType(value: string | null | undefined): ImageMediaType | unde
 
 async function readBoundedText(response: Response, maxBytes: number): Promise<string> { return new TextDecoder().decode(await readBoundedBytes(response, maxBytes)) }
 
+/**
+ * Decode a response body a relay sent compressed while the runtime did not
+ * decode it itself.
+ *
+ * Some OpenAI-compatible relays answer with `content-encoding: zstd` (or gzip /
+ * br / deflate) and the fetch implementation in use does not always honour it.
+ * The compressed bytes then reach `JSON.parse` and surface as
+ * `openai-compat image request returned invalid JSON` — a message that points
+ * at the prompt or the site rather than at the transport, so the failure is
+ * routinely misdiagnosed.
+ *
+ * Detection order matters: the zstd magic (`28 b5 2f fd`) is checked first
+ * because a few relays compress without declaring the header. A decompression
+ * error means the declaration disagrees with the bytes (typically the runtime
+ * already decoded them, or the body was never compressed), so the input is
+ * returned unchanged and the caller's own parser reports the real problem.
+ * Returning the bytes untouched is deliberate: swallowing the original error
+ * here would hide the actual cause.
+ *
+ * `maxBytes` is enforced again on the decompressed result — a small compressed
+ * body can expand past the limit the caller thought it had already applied.
+ *
+ * Exported so the tests can drive each branch directly; at runtime it is only
+ * reached through `readBoundedBytes`.
+ */
+export function decodeCompressedBody(bytes: Uint8Array, encoding: string | null, maxBytes?: number): Uint8Array {
+  const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  const magic = buffer.subarray(0, 4).toString('hex')
+  const declared = String(encoding ?? '').toLowerCase()
+  let decoded: Buffer | undefined
+  try {
+    if (magic === '28b52ffd' || declared.includes('zstd')) decoded = zstdDecompressSync(buffer)
+    else if (declared.includes('br')) decoded = brotliDecompressSync(buffer)
+    else if (declared.includes('gzip')) decoded = gunzipSync(buffer)
+    else if (declared.includes('deflate')) decoded = inflateSync(buffer)
+    else return bytes
+  } catch {
+    return bytes
+  }
+  if (maxBytes !== undefined && decoded.byteLength > maxBytes) {
+    throw new Error(`Image response exceeded the ${String(maxBytes)} byte limit after decompression`)
+  }
+  return new Uint8Array(decoded)
+}
+
 async function readBoundedBytes(response: Response, maxBytes: number): Promise<Uint8Array> {
   if (response.body === null) return new Uint8Array()
   const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let bytes = 0
   try { for (;;) { const next = await readResponseBody(response, () => reader.read()); if (next.done) break; bytes += next.value.byteLength; if (bytes > maxBytes) throw new Error(`Image response exceeded the ${String(maxBytes)} byte limit`); chunks.push(next.value) } } catch (error) { await reader.cancel().catch(() => undefined); throw error } finally { reader.releaseLock() }
   const joined = new Uint8Array(bytes); let offset = 0
   for (const chunk of chunks) { joined.set(chunk, offset); offset += chunk.byteLength }
-  return joined
+  return decodeCompressedBody(joined, response.headers.get('content-encoding'), maxBytes)
 }
