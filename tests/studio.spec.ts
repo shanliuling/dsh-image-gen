@@ -1348,6 +1348,28 @@ describe('OpenAI studio dimensions, quality and generation extras (#73, #74)', (
     vi.stubGlobal('fetch', fetch)
     return { ctx, fetch }
   }
+  it('forwards the url-first switch to the workbench generation request', async () => {
+    const { ctx, fetch } = setup()
+    await generateFromStudio(ctx, { ...relayConfig, openaiCompatPreferUrl: true }, { mode: 'generate', provider: 'openai-compat', model: 'relay-image', prompt: 'lake', ratio: '16:9', quality: '2K' }, signal)
+    expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toMatchObject({ response_format: 'url' })
+  })
+
+  it('honours a channel-level url-first switch in the workbench', async () => {
+    const { ctx, fetch } = setup()
+    await generateFromStudio(ctx, {
+      ...relayConfig,
+      openaiCompatPreferUrl: false,
+      openaiCompatChannels: [{ id: 'relay-b', label: 'Relay B', baseURL: 'https://relay.example/v1', model: 'relay-image', models: ['relay-image'], sizes: { '16:9': { '2K': '2048x1152' } }, preferUrl: true }],
+    }, { mode: 'generate', provider: 'openai-compat', channel: 'relay-b', model: 'relay-image', prompt: 'lake', ratio: '16:9', quality: '2K' }, signal)
+    expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).toMatchObject({ response_format: 'url' })
+  })
+
+  it('leaves the workbench request unchanged when the switch is off', async () => {
+    const { ctx, fetch } = setup()
+    await generateFromStudio(ctx, relayConfig, { mode: 'generate', provider: 'openai-compat', model: 'relay-image', prompt: 'lake', ratio: '16:9', quality: '2K' }, signal)
+    expect(JSON.parse(String(fetch.mock.calls[0]?.[1]?.body))).not.toHaveProperty('response_format')
+  })
+
   it('changes quality without changing the selected official pixel dimensions', async () => {
     const { ctx, fetch } = setup()
     for (const quality of ['low', 'high']) await generateFromStudio(ctx, { saveToWorkspace: false }, { mode: 'generate', provider: 'openai', model: DEFAULT_OPENAI_MODEL, prompt: 'landscape', ratio: '16:9', quality, resolution: '2K' }, signal)

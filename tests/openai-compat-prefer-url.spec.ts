@@ -93,6 +93,37 @@ describe('preferUrl: fallback', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
+  it('does not retry when the rejection body merely looks like a download failure', async () => {
+    // `image request failed (status): <body>` embeds the relay's own text, so a
+    // naive message match would treat this 500 as a download failure and start a
+    // second, separately billed generation.
+    const fetchMock = vi.fn(async () => new Response('{"error":"image download failed"}', { status: 500 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(generationCall(true)).rejects.toThrow(/failed \(500\)/)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not retry when the rejection body mentions invalid JSON', async () => {
+    const fetchMock = vi.fn(async () => new Response('{"error":"upstream returned invalid JSON"}', { status: 502 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(generationCall(true)).rejects.toThrow(/failed \(502\)/)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it("makes a single attempt when the channel names the format itself", async () => {
+    // extraBody.response_format is the channel's own decision; retrying cannot
+    // change the format and would bill a second generation for the same failure.
+    let generationCalls = 0
+    const fetchMock = vi.fn(async (url: unknown) => {
+      if (String(url).includes('cdn.example')) return new Response('gone', { status: 404 })
+      generationCalls += 1
+      return new Response(JSON.stringify({ data: [{ url: 'https://cdn.example/a.png' }] }), { headers: { 'content-type': 'application/json' } })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(generationCall(true, { response_format: 'url' })).rejects.toThrow(/download failed/)
+    expect(generationCalls).toBe(1)
+  })
+
   it('does not retry a request failure when the option is off', async () => {
     const fetchMock = vi.fn(async () => new Response('{"error":"boom"}', { status: 500 }))
     vi.stubGlobal('fetch', fetchMock)

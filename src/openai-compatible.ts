@@ -89,14 +89,20 @@ export interface OpenAICompatibleGenerateInput {
 }
 
 export async function generateOpenAICompatibleImage(input: OpenAICompatibleGenerateInput): Promise<GeneratedCompatibleImage> {
-  if (input.preferUrl !== true) return generateOpenAICompatibleImageOnce(input, undefined)
+  // A channel that names the format itself has already decided; retrying with a
+  // different one would contradict it, and the second request would be billed
+  // too. One attempt, exactly like before this option existed.
+  const explicitFormat = input.extraBody !== undefined && Object.prototype.hasOwnProperty.call(input.extraBody, 'response_format')
+  if (input.preferUrl !== true || explicitFormat) return generateOpenAICompatibleImageOnce(input, undefined)
   try {
     return await generateOpenAICompatibleImageOnce(input, 'url')
   } catch (error) {
-    // Only transfer/parse failures are worth a retry: a request the relay
-    // rejected (4xx/5xx) fails the same way a second time.
-    const message = error instanceof Error ? error.message : String(error)
-    if (!/download|no image|invalid JSON|no image data/i.test(message)) throw error
+    // Only failures that happened after the relay accepted the request are
+    // worth a retry. A rejected request (4xx/5xx) fails identically the second
+    // time, and its message embeds the relay's response body — matching on text
+    // would let "image download failed" inside a 500 body trigger a second,
+    // separately billed generation.
+    if (!isTransferFailure(error)) throw error
     return generateOpenAICompatibleImageOnce(input, undefined)
   }
 }
@@ -341,6 +347,29 @@ interface ImageResponseOptions {
   acceptSvg?: boolean
 }
 
+/**
+ * Marks a failure that happened **after** the relay accepted the request:
+ * reading the image bytes back from a URL, or parsing the response body it
+ * returned. `preferUrl` retries exactly these and nothing else.
+ *
+ * A marker rather than a wrapper class: the original error is rethrown
+ * untouched, so its message handle, `cause` chain and diagnostics survive.
+ * Classifying by type matters because `image request failed (500): <body>`
+ * carries the relay's own text, so a body that happens to contain "download"
+ * must not be mistaken for a download failure — that would start a second,
+ * separately billed generation.
+ */
+const TRANSFER_FAILURE = Symbol('imageTransferFailure')
+
+function markTransferFailure<T extends Error>(error: T): T {
+  Object.defineProperty(error, TRANSFER_FAILURE, { value: true, enumerable: false })
+  return error
+}
+
+function isTransferFailure(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as Record<symbol, unknown>)[TRANSFER_FAILURE] === true
+}
+
 async function parseImageResponse(
   response: Response,
   provider: string,
@@ -349,9 +378,9 @@ async function parseImageResponse(
   const text = await readBoundedText(response, Math.ceil(input.maxBytes * 1.4) + ERROR_LIMIT)
   if (!response.ok) throw new Error(`${provider} image request failed (${response.status}): ${redactSecrets(text, input.apiKey).slice(0, ERROR_LIMIT)}`)
   let payload: unknown
-  try { payload = JSON.parse(text) } catch { throw new Error(`${provider} image request returned invalid JSON`) }
+  try { payload = JSON.parse(text) } catch { throw markTransferFailure(new Error(`${provider} image request returned invalid JSON`)) }
   const image = firstImage(payload)
-  if (image === undefined) throw new Error(`${provider} image request returned no image: ${redactSecrets(text, input.apiKey).slice(0, ERROR_LIMIT)}`)
+  if (image === undefined) throw markTransferFailure(new Error(`${provider} image request returned no image: ${redactSecrets(text, input.apiKey).slice(0, ERROR_LIMIT)}`))
   if (image.b64_json !== undefined) {
     // Relays may omit mime_type while returning non-PNG bytes (Ark jpeg), so
     // sniff before trusting the header to avoid IMAGE_TYPE_MISMATCH (#61).
@@ -359,7 +388,12 @@ async function parseImageResponse(
     if (isSvgDocument(data)) return { data, mediaType: 'image/svg+xml' }
     return { data, mediaType: detectImageMediaType(data) ?? imageMediaType(image.mime_type) ?? 'image/png' }
   }
-  return downloadImage(image.url, provider, input)
+  try {
+    return await downloadImage(image.url, provider, input)
+  } catch (error) {
+    // Re-throw the same object so the transport diagnostics stay intact.
+    throw error instanceof Error ? markTransferFailure(error) : error
+  }
 }
 
 function imageEndpoint(baseURL: string, operation: 'generations' | 'edits'): string {
