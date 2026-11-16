@@ -1038,6 +1038,47 @@ describe('GIF output through the conversation tools', () => {
     expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({ model: 'relay', prompt: 'icon', watermark: false, output_format: 'svg' })
   })
 
+  // #137: some chat models fill every optional parameter, so an SVG call arrives with frame fields too.
+  it('drops per-call frame fields from an SVG request and tells the user instead of failing (#137)', async () => {
+    const { ctx, tools } = harnessContext()
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"/>'
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: [{ b64_json: Buffer.from(svg).toString('base64') }] }), { headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    apply(ctx, { ...compatConfig })
+    const value = await toolByName(tools, 'generate_image').execute({ prompt: 'icon', output_format: 'svg', frame_count: 4, frame_duration_ms: 120 }, exec()) as { output: string; notice?: string }
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({ model: 'relay', prompt: 'icon', output_format: 'svg' })
+    expect(value.output).toBe('svg')
+    expect(value.notice).toContain('frame_count/frame_duration_ms')
+  })
+
+  it('keeps a whole SVG batch alive when every item carries frame fields (#137)', async () => {
+    const { ctx, tools } = harnessContext()
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"/>'
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: [{ b64_json: Buffer.from(svg).toString('base64') }] }), { headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    apply(ctx, { ...compatConfig })
+    const value = await toolByName(tools, 'generate_images').execute({ prompts: ['tent', 'stove', 'sleeping bag'], output_format: 'svg', frame_count: 8, frame_duration_ms: 100, aspect_ratio: '3:4' }, exec()) as { images: unknown[]; failures: unknown[] }
+    expect(value.failures).toEqual([])
+    expect(value.images).toHaveLength(3)
+  })
+
+  it('tells the model how to recover when frame fields arrive without a GIF', async () => {
+    const { ctx, tools } = harnessContext()
+    vi.stubGlobal('fetch', vi.fn())
+    apply(ctx, { ...compatConfig })
+    await expect(toolByName(tools, 'generate_image').execute({ prompt: 'lake', frame_count: 4 }, exec())).rejects.toThrow('omit frame_count and frame_duration_ms')
+  })
+
+  it('tells the model to omit output_format for an ordinary still image', () => {
+    const { ctx, tools } = harnessContext()
+    apply(ctx, { ...compatConfig })
+    for (const name of ['generate_image', 'generate_images']) {
+      const properties = (toolByName(tools, name) as unknown as { parameters: { properties: Record<string, { description: string }> } }).parameters.properties
+      expect(properties.output_format?.description, name).toContain('Omit for an ordinary still image')
+      expect(properties.frame_count?.description, name).toContain('Omit unless output_format=gif')
+    }
+  })
+
   it('appends the batch prompt to each SVG summary and leaves the markup block a valid document', async () => {
     const { ctx, tools } = harnessContext()
     const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8"/></svg>'
