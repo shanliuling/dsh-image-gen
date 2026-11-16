@@ -35,7 +35,7 @@ import { generateSubscriptionImage, registerSubscriptionRoutes, subscriptionTool
 import { CANVAS_STATE_ROUTE, DEFAULT_CLOUD_TIMEOUT_MS, IMAGE_GENERATION_NAMESPACE, cloudTimeoutFor, IMAGE_PROVIDERS, IMPORT_ROUTE, INSPIRATION_ROUTE, PREVIEW_ROUTE, STORAGE_STATS_ROUTE, STUDIO_ROUTE, TEST_CONNECTION_ROUTE, THUMB_ROUTE, VAULT_DELETE_ROUTE, VAULT_REFS_ROUTE, VAULT_ROUTE, ZIP_CANCEL_ROUTE, ZIP_PROGRESS_ROUTE, ZIP_ROUTE, mergeComfyUIPrompt, resolveOpenAICompatChannel, type ImageProvider } from './shared.js'
 import { createInspirationRoute } from './inspiration-route.js'
 import { BUNDLED_INSPIRATION_CATALOG, searchInspirationCases } from './inspiration.js'
-import { channelSelectsGif, generateFromStudio, describeStudio } from './studio.js'
+import { channelSelectsGif, chatToolSize, generateFromStudio, describeStudio } from './studio.js'
 import { serveStudio } from './studio-route.js'
 import { serveTestConnection } from './test-route.js'
 import { describeSettingsHealth, serveSettingsHealth } from './settings-health.js'
@@ -539,7 +539,18 @@ export function apply(ctx: Context, config: Config = {}): void {
     // A GIF without an explicit size leaves the frame size to the provider:
     // the still-image default of 1024x1024 overflows the frame sheet. An SVG
     // has no pixel grid at all, so a still-image size would only be rejected.
-    const size = svgRequested ? undefined : gifRequested && args.size === undefined ? undefined : args.size ?? active.imageSize
+    // A relay's `aspect_ratio` maps through the same configured size table the
+    // workbench uses, so the chat tools and the studio agree on one resolution.
+    // The whole decision lives in `chatToolSize` so it can be unit-tested
+    // without standing up a Context.
+    const size = chatToolSize({
+      provider: active.provider,
+      config: requestConfig,
+      fallbackSize: active.imageSize,
+      args,
+      gifRequested,
+      svgRequested,
+    })
     // Ark output controls exist only on the Seedream profile; every other
     // provider in this branch ignores them.
     const arkOptions = active.provider === 'seedream' ? active.arkOptions : undefined

@@ -104,8 +104,15 @@ function ratioPosition(ratio: string): number {
 export function openAIRequestSize(config: Config, ratio: string, quality: string): string {
   const group = openAICompatTable(config).find(entry => entry.ratio === ratio)
   if (group === undefined) {
-    if (ratio === '3:2') return '1536x1024'
-    if (ratio === '2:3') return '1024x1536'
+    // The built-in table only lists 1:1/3:2/2:3, while the tool schema and the
+    // ratio picker advertise the full ten. An unmapped ratio used to collapse to
+    // 1024x1024 — a 3:4 portrait request silently became a square. Orient the
+    // square instead: the generator honours one dimension per axis, so a
+    // portrait keeps the taller side and a landscape the wider one.
+    const [width, height] = ratio.split(':').map(Number)
+    if (width !== undefined && height !== undefined && Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+      return height > width ? '1024x1536' : width > height ? '1536x1024' : '1024x1024'
+    }
     return '1024x1024'
   }
   const requested = tierRank(quality)
@@ -115,6 +122,42 @@ export function openAIRequestSize(config: Config, ratio: string, quality: string
     throw new Error(`该比例不支持 ${quality} 清晰度，请降低清晰度或更换比例`)
   }
   return withinBudget.reduce((best, entry) => (entry.rank > best.rank ? entry : best)).size
+}
+
+/**
+ * Decide the pixel size a chat-tool image request should carry.
+ *
+ * Lives here rather than in `index.ts` so the precedence rules can be tested
+ * without importing the whole plugin entry (which pulls in every provider
+ * adapter and drags unrelated suites past their timeouts). `index.ts` calls it.
+ *
+ * Order matters in two places:
+ *
+ * 1. **Format guards run before the ratio lookup.** A GIF without an explicit
+ *    size and an SVG both send no pixel size at all. `openAIRequestSize` throws
+ *    when a ratio's lowest configured tier is above the requested budget, so
+ *    resolving early would fail a request that used to reach the provider fine.
+ * 2. **The budget is the table's own baseline, not `'1K'`.** A ratio configured
+ *    with only a 2K tier would throw under a fixed 1K budget; an empty tier
+ *    resolves to the largest configured tier at or below the default instead.
+ *
+ * Precedence: explicit `size` → relay's configured table → profile default.
+ */
+export function chatToolSize(input: {
+  provider: string
+  config: Config
+  fallbackSize: string
+  args: { size?: string; aspect_ratio?: string }
+  gifRequested: boolean
+  svgRequested: boolean
+}): string | undefined {
+  const sizeDiscarded = input.svgRequested || (input.gifRequested && input.args.size === undefined)
+  if (sizeDiscarded) return undefined
+  if (input.args.size !== undefined) return input.args.size
+  const ratioSize = input.provider === 'openai-compat' && input.args.aspect_ratio !== undefined
+    ? openAIRequestSize(input.config, input.args.aspect_ratio, '')
+    : undefined
+  return ratioSize ?? input.fallbackSize
 }
 
 /** The relay table entry the user picked, if a table is configured and lists this ratio; otherwise nothing. */
