@@ -74,11 +74,11 @@ type GifRequestFields = {
  */
 export function outputRequestFields(options: GifRequestOptions): OutputRequestFields {
   if (options.outputFormat === undefined) {
-    if (options.frameCount !== undefined || options.frameDurationMs !== undefined) throw new Error('frame_count / frame_duration_ms 仅在 output_format=gif 时有效')
+    if (options.frameCount !== undefined || options.frameDurationMs !== undefined) throw new Error('frame_count / frame_duration_ms 仅在 output_format=gif 时有效。For an ordinary still image, omit frame_count and frame_duration_ms; for an animation, also set output_format=gif.')
     return {}
   }
   if (options.outputFormat === 'svg') {
-    if (options.frameCount !== undefined || options.frameDurationMs !== undefined) throw new Error('frame_count / frame_duration_ms 仅用于 GIF；SVG 是单张矢量图')
+    if (options.frameCount !== undefined || options.frameDurationMs !== undefined) throw new Error('frame_count / frame_duration_ms 仅用于 GIF；SVG 是单张矢量图。Omit frame_count and frame_duration_ms for an SVG.')
     return { output_format: 'svg' }
   }
   if (options.outputFormat !== 'gif') throw new Error(`不支持的 output_format: ${options.outputFormat}；仅支持 gif 与 svg`)

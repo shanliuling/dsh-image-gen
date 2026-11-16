@@ -144,9 +144,9 @@ const SVG_INCOMPATIBLE_EXTRAS: ReadonlySet<string> = new Set([
 
 /** Image output parameters shared by generate_image and generate_images. */
 const gifToolParameters = {
-  output_format: { type: 'string', enum: ['gif', 'svg'], description: 'Optional. Only for provider=openai or openai-compat. gif produces a looping animation. svg produces one vector document that the conversation card can preview and save as a .svg file. For GIF, omit size unless the user asks for exact dimensions: all frames are tiled into one sheet whose longest edge must stay at or below 3840 px. To animate a subject from reference images, use edit_image with output_format=gif instead.' },
-  frame_count: { type: 'integer', description: 'Optional, GIF only: number of frames, 2-16. Omit to use the provider default.' },
-  frame_duration_ms: { type: 'integer', description: 'Optional, GIF only: milliseconds per frame, 20-2000; the provider rounds to 10 ms. Omit to use the provider default.' },
+  output_format: { type: 'string', enum: ['gif', 'svg'], description: 'Optional. Omit for an ordinary still image (the default PNG/JPEG); set it only when the user explicitly asks for an animation/GIF or a vector/SVG file. Only for provider=openai or openai-compat. gif produces a looping animation. svg produces one vector document that the conversation card can preview and save as a .svg file. For GIF, omit size unless the user asks for exact dimensions: all frames are tiled into one sheet whose longest edge must stay at or below 3840 px. To animate a subject from reference images, use edit_image with output_format=gif instead.' },
+  frame_count: { type: 'integer', description: 'Optional, GIF only: number of frames, 2-16. Omit unless output_format=gif; omit it then too to use the provider default.' },
+  frame_duration_ms: { type: 'integer', description: 'Optional, GIF only: milliseconds per frame, 20-2000; the provider rounds to 10 ms. Omit unless output_format=gif; omit it then too to use the provider default.' },
 } as const
 
 /** The same GIF parameters on edit_image, which animates the reference images. */
@@ -533,7 +533,15 @@ export function apply(ctx: Context, config: Config = {}): void {
     // call may tune the frames alone.
     const channelExtraBody = active.provider === 'openai-compat' ? requestConfig.openaiCompatExtraBody ?? {} : undefined
     const channelFormat = channelExtraBody?.output_format
-    const outputFields = outputRequestFields({ outputFormat: args.output_format ?? (channelFormat === 'gif' || channelFormat === 'svg' ? channelFormat : undefined), frameCount: args.frame_count, frameDurationMs: args.frame_duration_ms })
+    const requestedFormat = args.output_format ?? (channelFormat === 'gif' || channelFormat === 'svg' ? channelFormat : undefined)
+    // Some chat models fill every optional parameter, so an SVG call can carry
+    // frame fields it never meant (#137). The channel's own frame extras are
+    // already dropped for SVG below; per-call ones are dropped the same way
+    // and reported, instead of failing the whole request.
+    const svgFramesDropped = requestedFormat === 'svg' && (args.frame_count !== undefined || args.frame_duration_ms !== undefined)
+    const outputFields = outputRequestFields(svgFramesDropped
+      ? { outputFormat: 'svg' }
+      : { outputFormat: requestedFormat, frameCount: args.frame_count, frameDurationMs: args.frame_duration_ms })
     const gifRequested = outputFields.output_format === 'gif'
     const svgRequested = outputFields.output_format === 'svg'
     // A GIF without an explicit size leaves the frame size to the provider:
@@ -551,6 +559,9 @@ export function apply(ctx: Context, config: Config = {}): void {
     // forwarded; say so instead of letting the relay ignore it silently.
     const sizeNotice = svgRequested && (args.size !== undefined || args.aspect_ratio !== undefined || args.image_size !== undefined)
       ? `Note for the user: size/aspect_ratio/image_size do not apply to an SVG result, so the requested ${args.size ?? args.aspect_ratio ?? args.image_size ?? ''} was not sent.`
+      : undefined
+    const frameNotice = svgFramesDropped
+      ? 'Note for the user: frame_count/frame_duration_ms only apply to a GIF, so they were not sent with this SVG request.'
       : undefined
     const quality = active.provider === 'openai-compat' ? compatRequestQuality(requestConfig, args.quality) : active.provider === 'openai' ? args.quality : undefined
     if (active.provider === 'openai' && quality !== undefined && !officialQualityOptions(active.model).some(option => option.value === quality)) throw new Error('该 OpenAI 模型不支持所选生成质量')
@@ -580,6 +591,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     const output = deliveredSvg ? 'svg' : size ?? 'auto'
     const value = await saveGenerated(ctx, generated, active.provider, active.model, quality === undefined ? output : `${output}, quality=${quality}`, current(), exec, knownWorkspaceRoots)
     if (sizeNotice !== undefined) value.notice = value.notice === undefined ? sizeNotice : `${value.notice} ${sizeNotice}`
+    if (frameNotice !== undefined) value.notice = value.notice === undefined ? frameNotice : `${value.notice} ${frameNotice}`
     const svgFallback = svgRequested && !deliveredSvg
       ? `Note for the user: an SVG was requested, but the provider returned a ${generated.mediaType.replace('image/', '').toUpperCase()} raster image; the result is a bitmap, not a vector document.`
       : undefined
