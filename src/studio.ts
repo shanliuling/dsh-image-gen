@@ -139,9 +139,11 @@ export function openAIRequestSize(config: Config, ratio: string, quality: string
  *    resolving early would fail a request that used to reach the provider fine.
  * 2. **The budget is the table's own baseline, not `'1K'`.** A ratio configured
  *    with only a 2K tier would throw under a fixed 1K budget; an empty tier
- *    resolves to the largest configured tier at or below the default instead.
+ *    label is unparseable, so `openAIRequestSize` picks the ratio's lowest
+ *    configured tier instead, the cheapest size the relay lists for it.
  *
- * Precedence: explicit `size` → relay's configured table → profile default.
+ * Precedence: explicit `size` → relay's configured table → orientation
+ * fallback → profile default.
  */
 export function chatToolSize(input: {
   provider: string
