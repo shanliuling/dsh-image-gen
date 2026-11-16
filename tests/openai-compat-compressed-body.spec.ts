@@ -76,10 +76,53 @@ describe('decodeCompressedBody: pass-through cases', () => {
   })
 })
 
+describe('decodeCompressedBody: compound headers', () => {
+  it('decodes every declared coding, in reverse application order', () => {
+    // `Content-Encoding: gzip, zstd` means gzip was applied first, then zstd.
+    const nested = zstdCompressSync(gzipSync(payload))
+    const decoded = decodeCompressedBody(asBytes(nested), 'gzip, zstd')
+    expect(Buffer.from(decoded).toString('utf8')).toBe(payload.toString('utf8'))
+  })
+
+  it('handles three stacked codings', () => {
+    const nested = zstdCompressSync(brotliCompressSync(gzipSync(payload)))
+    const decoded = decodeCompressedBody(asBytes(nested), 'gzip, br, zstd')
+    expect(Buffer.from(decoded).toString('utf8')).toBe(payload.toString('utf8'))
+  })
+
+  it('ignores identity in the list', () => {
+    const decoded = decodeCompressedBody(asBytes(gzipSync(payload)), 'gzip, identity')
+    expect(Buffer.from(decoded).toString('utf8')).toBe(payload.toString('utf8'))
+  })
+
+  it('falls back to the zstd magic when the header names an unknown coding', () => {
+    const decoded = decodeCompressedBody(asBytes(zstdCompressSync(payload)), 'something-new')
+    expect(Buffer.from(decoded).toString('utf8')).toBe(payload.toString('utf8'))
+  })
+})
+
 describe('decodeCompressedBody: decompressed size limit', () => {
   it('rejects a body that expands past the limit', () => {
     const compressed = asBytes(zstdCompressSync(payload))
     expect(() => decodeCompressedBody(compressed, 'zstd', 8)).toThrow(/exceeded the 8 byte limit after decompression/)
+  })
+
+  it('rejects before allocating: the limit is passed to the decompressor', () => {
+    // 64MiB of zeros compresses to a few KiB. Without `maxOutputLength` the
+    // whole 64MiB would be allocated before the size check could reject it.
+    const bomb = asBytes(zstdCompressSync(Buffer.alloc(64 * 1024 * 1024)))
+    expect(bomb.byteLength).toBeLessThan(64 * 1024)
+    expect(() => decodeCompressedBody(bomb, 'zstd', 1024 * 1024)).toThrow(/exceeded the 1048576 byte limit after decompression/)
+  })
+
+  it('applies the limit to gzip as well', () => {
+    const bomb = asBytes(gzipSync(Buffer.alloc(64 * 1024 * 1024)))
+    expect(() => decodeCompressedBody(bomb, 'gzip', 1024 * 1024)).toThrow(/after decompression/)
+  })
+
+  it('applies the limit on the undeclared-magic path', () => {
+    const bomb = asBytes(zstdCompressSync(Buffer.alloc(64 * 1024 * 1024)))
+    expect(() => decodeCompressedBody(bomb, null, 1024 * 1024)).toThrow(/after decompression/)
   })
 
   it('accepts a body within the limit', () => {

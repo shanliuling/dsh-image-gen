@@ -472,6 +472,31 @@ function imageMediaType(value: string | null | undefined): ImageMediaType | unde
 async function readBoundedText(response: Response, maxBytes: number): Promise<string> { return new TextDecoder().decode(await readBoundedBytes(response, maxBytes)) }
 
 /**
+ * Decoders for the content codings a relay may declare. A header may list
+ * several (RFC 9110 §8.4.1): they are applied in the order listed, so they are
+ * decoded in reverse — see `decodeCompressedBody`.
+ */
+const CONTENT_DECODERS: Record<string, (input: Buffer, options: { maxOutputLength?: number }) => Buffer> = {
+  zstd: zstdDecompressSync,
+  br: brotliDecompressSync,
+  gzip: gunzipSync,
+  deflate: inflateSync,
+}
+
+/** `maxOutputLength` trips this rather than returning a short result. */
+function isOutputLimitError(error: unknown): boolean {
+  return error instanceof RangeError && (error as { code?: unknown }).code === 'ERR_BUFFER_TOO_LARGE'
+}
+
+/** Raised when the decoded body is larger than the caller allows. */
+class ImageResponseTooLarge extends Error {
+  constructor(maxBytes: number) {
+    super(`Image response exceeded the ${String(maxBytes)} byte limit after decompression`)
+    this.name = 'ImageResponseTooLarge'
+  }
+}
+
+/**
  * Decode a response body a relay sent compressed while the runtime did not
  * decode it itself.
  *
@@ -482,38 +507,69 @@ async function readBoundedText(response: Response, maxBytes: number): Promise<st
  * at the prompt or the site rather than at the transport, so the failure is
  * routinely misdiagnosed.
  *
- * Detection order matters: the zstd magic (`28 b5 2f fd`) is checked first
- * because a few relays compress without declaring the header. A decompression
- * error means the declaration disagrees with the bytes (typically the runtime
- * already decoded them, or the body was never compressed), so the input is
- * returned unchanged and the caller's own parser reports the real problem.
- * Returning the bytes untouched is deliberate: swallowing the original error
- * here would hide the actual cause.
+ * Two details matter beyond the single-coding case:
  *
- * `maxBytes` is enforced again on the decompressed result — a small compressed
- * body can expand past the limit the caller thought it had already applied.
+ * - A header may list several codings (`gzip, zstd`). HTTP applies them in the
+ *   order listed, so decoding runs in reverse — decoding only the last one
+ *   would hand gzip bytes to the parser and still report invalid JSON.
+ * - The zstd magic (`28 b5 2f fd`) is also checked on its own, because a few
+ *   relays compress without declaring the header, and because a header that
+ *   disagrees with the body (the runtime already decoded it) must not stop a
+ *   body that is plainly zstd from being decoded.
+ *
+ * A decompression error means the declaration disagrees with the bytes
+ * (typically the runtime already decoded them, or the body was never
+ * compressed), so the input is returned unchanged and the caller's own parser
+ * reports the real problem. Returning the bytes untouched is deliberate:
+ * swallowing the original error here would hide the actual cause.
+ *
+ * `maxOutputLength` is passed to every decompression call so a small body that
+ * expands to hundreds of MiB is rejected *before* the buffer is allocated, and
+ * `maxBytes` is checked again afterwards. An output-limit failure is a real
+ * error and is propagated; it must not be mistaken for an encoding mismatch.
  *
  * Exported so the tests can drive each branch directly; at runtime it is only
  * reached through `readBoundedBytes`.
  */
 export function decodeCompressedBody(bytes: Uint8Array, encoding: string | null, maxBytes?: number): Uint8Array {
   const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
-  const magic = buffer.subarray(0, 4).toString('hex')
-  const declared = String(encoding ?? '').toLowerCase()
-  let decoded: Buffer | undefined
+  const options = maxBytes === undefined ? {} : { maxOutputLength: maxBytes }
+  // HTTP lists content codings in application order, so decode them backwards.
+  const codings = String(encoding ?? '')
+    .split(',')
+    .map(coding => coding.trim().toLowerCase())
+    .filter(coding => coding.length > 0 && coding !== 'identity')
+    .reverse()
+
+  const decodeByMagic = (): Uint8Array | undefined => {
+    if (buffer.subarray(0, 4).toString('hex') !== '28b52ffd') return undefined
+    try {
+      return new Uint8Array(zstdDecompressSync(buffer, options))
+    } catch (error) {
+      if (isOutputLimitError(error) && maxBytes !== undefined) throw new ImageResponseTooLarge(maxBytes)
+      return undefined
+    }
+  }
+
+  if (codings.length === 0) return decodeByMagic() ?? bytes
+
   try {
-    if (magic === '28b52ffd' || declared.includes('zstd')) decoded = zstdDecompressSync(buffer)
-    else if (declared.includes('br')) decoded = brotliDecompressSync(buffer)
-    else if (declared.includes('gzip')) decoded = gunzipSync(buffer)
-    else if (declared.includes('deflate')) decoded = inflateSync(buffer)
-    else return bytes
-  } catch {
-    return bytes
+    let current = buffer
+    for (const coding of codings) {
+      const decode = CONTENT_DECODERS[coding]
+      // An unknown coding is a declaration problem, not something to guess at.
+      if (decode === undefined) return decodeByMagic() ?? bytes
+      current = decode(current, options)
+    }
+    if (maxBytes !== undefined && current.byteLength > maxBytes) throw new ImageResponseTooLarge(maxBytes)
+    return new Uint8Array(current)
+  } catch (error) {
+    // A size violation is a real failure; anything else means the header
+    // disagrees with the body, so hand the bytes back for the parser to report.
+    if (error instanceof ImageResponseTooLarge) throw error
+    if (isOutputLimitError(error) && maxBytes !== undefined) throw new ImageResponseTooLarge(maxBytes)
+    return decodeByMagic() ?? bytes
   }
-  if (maxBytes !== undefined && decoded.byteLength > maxBytes) {
-    throw new Error(`Image response exceeded the ${String(maxBytes)} byte limit after decompression`)
-  }
-  return new Uint8Array(decoded)
 }
 
 async function readBoundedBytes(response: Response, maxBytes: number): Promise<Uint8Array> {
