@@ -155,6 +155,36 @@ describe('ModelScope async image tasks (#140)', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
+  it('hard-stops an in-flight result download at the poll budget', async () => {
+    vi.useFakeTimers()
+    try {
+      const fetchMock = vi.fn(async (url: unknown, init?: RequestInit) => {
+        const request = String(url)
+        if (request === `${BASE}/images/generations`) return json({ task_id: 'task-1' })
+        if (request === `${BASE}/tasks/task-1`) return json({ task_status: 'SUCCEED', output_images: ['https://cdn.modelscope.example/stuck.png'] })
+        // The result download hangs until the watchdog aborts it.
+        const downloadSignal = init?.signal
+        return new Promise<Response>((_, reject) => {
+          downloadSignal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
+        })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const pending = generateOpenAICompatibleImage({
+        provider: 'openai-compat', apiKey: 'key', baseURL: BASE,
+        model: 'MiniMax/MiniMax-H3-Image', prompt: 'a cat', asyncImages: true, maxBytes: 1024, signal,
+        pollIntervalMs: 1000, pollBudgetMs: 2000,
+      })
+      const assertion = expect(pending).rejects.toThrow(/did not finish within 2 seconds \(last status: SUCCEED/)
+      await vi.advanceTimersByTimeAsync(1)
+      await vi.advanceTimersByTimeAsync(3_000)
+      await assertion
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('edits through the same async flow with image_url data URLs', async () => {
     const fetchMock = vi.fn(async (url: unknown, init?: RequestInit) => {
       const request = String(url)

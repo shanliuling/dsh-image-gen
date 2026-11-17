@@ -448,7 +448,9 @@ async function runModelScopeAsyncTask(input: ModelScopeAsyncInput): Promise<Gene
         if (imageUrl === undefined) throw new Error(`modelscope image task ${taskId} succeeded but returned no output_images: ${redactSecrets(pollText, input.apiKey).slice(0, ERROR_LIMIT)}`)
         // Reuse the shared downloader: data: URLs, relative URLs, strict mode,
         // byte caps and SVG sniffing all behave exactly like the sync paths.
-        return downloadImage(imageUrl, 'modelscope', { ...input, acceptSvg: input.acceptSvg === true, signal })
+        // Await it inside the try so the deadline watchdog still covers the
+        // download — `return` alone would clear the timer before it settles.
+        return await downloadImage(imageUrl, 'modelscope', { ...input, acceptSvg: input.acceptSvg === true, signal })
       }
       await modelScopeDelay(pollIntervalMs, signal)
     }
