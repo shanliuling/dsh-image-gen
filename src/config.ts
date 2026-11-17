@@ -128,10 +128,12 @@ export interface Config {
     * relays take OpenAI's multipart form; some (e.g. SenseNova) accept the
     * generations endpoint but run edits on their own JSON contract with
     * `images: [{ image_url }]` objects; some take a multipart form whose
-    * `reference_images` field is a JSON array of base64 strings. Defaults to
-    * `multipart`.
+    * `reference_images` field is a JSON array of base64 strings; ModelScope
+    * API-Inference (#140) submits an async image task and polls
+    * `/v1/tasks/{task_id}` — that format also switches generation itself to
+    * the async task flow. Defaults to `multipart`.
     */
-  openaiCompatEditFormat?: 'multipart' | 'jsonImageUrlArray' | 'formReferenceImages' | 'siliconflowJson'
+  openaiCompatEditFormat?: 'multipart' | 'jsonImageUrlArray' | 'formReferenceImages' | 'siliconflowJson' | 'modelscopeAsync'
   /**
    * Extra JSON fields merged into the JSON edit body last (can override the
    * built-in defaults), e.g. SenseNova's `watermark`/`prompt_extend`.
@@ -247,7 +249,7 @@ export const Config = z.object({
     qualityOptions: z.array(z.string()).default([]),
     extraBody: z.dict(z.any()).default({}),
     editSizeMode: z.union(['auto', 'selected']).default('auto'),
-    editFormat: z.union([z.const('multipart'), z.const('jsonImageUrlArray'), z.const('formReferenceImages'), z.const('siliconflowJson')]).default('multipart'),
+    editFormat: z.union([z.const('multipart'), z.const('jsonImageUrlArray'), z.const('formReferenceImages'), z.const('siliconflowJson'), z.const('modelscopeAsync')]).default('multipart'),
     editExtra: z.dict(z.any()).default({}),
     sizes: z.dict(z.dict(z.string())).default({}),
   })).default([])),
@@ -257,7 +259,7 @@ export const Config = z.object({
   openaiCompatQualityOptions: volatile(z.array(z.string()).default(['auto', 'low', 'medium', 'high'])),
   openaiCompatExtraBody: volatile(z.dict(z.any()).default({})),
   openaiCompatEditSizeMode: volatile(z.union(['auto', 'selected']).default('auto')),
-  openaiCompatEditFormat: volatile(z.union([z.const('multipart'), z.const('jsonImageUrlArray'), z.const('formReferenceImages'), z.const('siliconflowJson')]).default('multipart')),
+  openaiCompatEditFormat: volatile(z.union([z.const('multipart'), z.const('jsonImageUrlArray'), z.const('formReferenceImages'), z.const('siliconflowJson'), z.const('modelscopeAsync')]).default('multipart')),
   openaiCompatEditExtra: volatile(z.dict(z.any()).default({})),
   openaiCompatSizes: volatile(z.dict(z.dict(z.string())).default({})),
   seedreamBaseURL: volatile(z.string().default(DEFAULT_SEEDREAM_BASE_URL)),

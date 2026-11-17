@@ -111,8 +111,8 @@ interface ImageSettings {
   openaiCompatQualityOptions?: string[]
   openaiCompatExtraBody?: Record<string, unknown>
   openaiCompatEditSizeMode?: 'auto' | 'selected'
-  /** Edit-request shape for the openai-compat relay (#41); see src/config.ts. */
-  openaiCompatEditFormat?: 'multipart' | 'jsonImageUrlArray' | 'formReferenceImages' | 'siliconflowJson'
+  /** Edit-request shape for the openai-compat relay (#41); see src/config.ts. `modelscopeAsync` also switches generation to the async task flow (#140). */
+  openaiCompatEditFormat?: 'multipart' | 'jsonImageUrlArray' | 'formReferenceImages' | 'siliconflowJson' | 'modelscopeAsync'
   /** Extra JSON fields merged into the JSON edit body; ignored in multipart mode. */
   openaiCompatEditExtra?: Record<string, unknown>
   seedreamBaseURL?: string
@@ -540,8 +540,8 @@ interface ProviderRowState {
   workflows: ComfyUIWorkflowEntry[]
   activeWorkflow: string
   timeoutSeconds: number
-  /** openai-compat only: edits request shape (#41). Other rows keep the default. */
-  editFormat: 'multipart' | 'jsonImageUrlArray' | 'formReferenceImages' | 'siliconflowJson'
+  /** openai-compat only: edits request shape (#41). `modelscopeAsync` also switches generation to the async task flow (#140). Other rows keep the default. */
+  editFormat: 'multipart' | 'jsonImageUrlArray' | 'formReferenceImages' | 'siliconflowJson' | 'modelscopeAsync'
   /** openai-compat only: extra JSON fields for the JSON edit body, as user text. */
   editExtraText: string
   sizeTableText: string
@@ -649,7 +649,7 @@ function editExtraTextOf(value: Record<string, unknown> | undefined): string {
 
 /** Persisted or selected edit-format value → row state; unknown values fall back to standard multipart. */
 function parseEditFormat(value: string | undefined): ProviderRowState['editFormat'] {
-  return value === 'jsonImageUrlArray' || value === 'formReferenceImages' || value === 'siliconflowJson' ? value : 'multipart'
+  return value === 'jsonImageUrlArray' || value === 'formReferenceImages' || value === 'siliconflowJson' || value === 'modelscopeAsync' ? value : 'multipart'
 }
 
 function compatChannelRowKey(channelId: string): `openai-compat:${string}` {
@@ -1506,8 +1506,9 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
                 <option value="jsonImageUrlArray">{t('editFormatJsonImageUrlArray')}</option>
                 <option value="formReferenceImages">{t('editFormatFormReferenceImages')}</option>
                 <option value="siliconflowJson">{t('editFormatSiliconFlow')}</option>
+                <option value="modelscopeAsync">{t('editFormatModelScope')}</option>
               </select>
-              <span className="dsh-ig-hint">{t(editFormat === 'siliconflowJson' ? 'editFormatSiliconFlowHint' : 'editFormatHint')}</span>
+              <span className="dsh-ig-hint">{t(editFormat === 'siliconflowJson' ? 'editFormatSiliconFlowHint' : editFormat === 'modelscopeAsync' ? 'editFormatModelScopeHint' : 'editFormatHint')}</span>
             </label>
           ) : null}
           {provider === 'seedream' ? (
@@ -1578,7 +1579,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
               </label>
             </>
           ) : null}
-          {provider === 'openai-compat' && (editFormat === 'jsonImageUrlArray' || editFormat === 'qwenJson' || editFormat === 'siliconflowJson') ? (
+          {provider === 'openai-compat' && (editFormat === 'jsonImageUrlArray' || editFormat === 'qwenJson' || editFormat === 'siliconflowJson' || editFormat === 'modelscopeAsync') ? (
             <>
             {editFormat === 'jsonImageUrlArray' ? (
             <label className="dsh-ig-field">

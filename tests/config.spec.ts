@@ -189,6 +189,28 @@ describe('openai-compat provider', () => {
     expect(resolveOpenAICompatChannel({ ...config, openaiCompatActiveChannel: 'relay-b' }).id).toBe('relay-b')
     expect(() => resolveOpenAICompatChannel(config, 'missing')).toThrow('Unknown OpenAI-compatible channel')
   })
+
+  it('passes the ModelScope async edit format through channels and resolveProvider (#140)', () => {
+    const config: Config = {
+      provider: 'openai-compat',
+      openaiCompatBaseURL: 'https://api-inference.modelscope.cn/v1',
+      openaiCompatModel: 'MiniMax/MiniMax-H3-Image',
+      openaiCompatEditFormat: 'modelscopeAsync',
+    }
+    expect(resolveProvider(config)).toMatchObject({ provider: 'openai-compat', model: 'MiniMax/MiniMax-H3-Image', editFormat: 'modelscopeAsync' })
+    const channelConfig: Config = {
+      provider: 'openai-compat',
+      openaiCompatChannels: [{
+        id: 'modelscope', label: 'ModelScope', keyRef: '', baseURL: 'https://api-inference.modelscope.cn/v1',
+        model: 'MiniMax/MiniMax-H3-Image', editFormat: 'modelscopeAsync',
+      }],
+    }
+    const scoped = withOpenAICompatChannel(channelConfig, 'modelscope')
+    expect(scoped.openaiCompatEditFormat).toBe('modelscopeAsync')
+    expect(resolveProvider(scoped)).toMatchObject({ baseURL: 'https://api-inference.modelscope.cn/v1', editFormat: 'modelscopeAsync' })
+    // Unrelated channels keep the standard multipart default.
+    expect(resolveProvider({ provider: 'openai-compat', openaiCompatBaseURL: 'https://relay.example/v1', openaiCompatModel: 'm' }).editFormat).toBe('multipart')
+  })
 })
 
 describe('xai and zhipu providers', () => {
