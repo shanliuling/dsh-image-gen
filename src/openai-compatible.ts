@@ -365,7 +365,10 @@ interface ModelScopeAsyncInput extends ImageResponseOptions {
   pollBudgetMs?: number
 }
 
-const MODELSCOPE_POLL_INTERVAL_MS = 4000
+// The official example sleeps 5 s between polls; API-Inference is a free,
+// dynamically rate-limited service, so stay on that cadence. Batch and studio
+// requests run one loop per image concurrently, which multiplies the rate.
+const MODELSCOPE_POLL_INTERVAL_MS = 5000
 const MODELSCOPE_POLL_BUDGET_MS = 300_000
 const MODELSCOPE_ASYNC_HEADER = 'X-ModelScope-Async-Mode'
 const MODELSCOPE_TASK_TYPE_HEADER = 'X-ModelScope-Task-Type'
