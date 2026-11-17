@@ -441,6 +441,13 @@ dsh --profile web --dump-config
 </details>
 
 <details>
+<summary><strong>从 GitHub 安装时，pnpm 拦截构建脚本怎么办？</strong></summary>
+
+如果报 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`，打开 DSH 提示的 profile 下的 `pnpm-workspace.yaml`，把 pnpm 输出的完整键加入 `allowBuilds` 并设为 `true`，然后重跑 GitHub 安装命令。如果换了 Git 提交后再次遇到该错误，用新输出的键。日常安装可直接使用预构建的 npm 包。
+
+</details>
+
+<details>
 <summary><strong>如何升级？</strong></summary>
 
 ```bash

@@ -441,6 +441,13 @@ No. Deleting a gallery record does not modify the original chat message. You may
 </details>
 
 <details>
+<summary><strong>What if pnpm blocks build scripts during a GitHub install?</strong></summary>
+
+If pnpm reports `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`, open the profile's `pnpm-workspace.yaml` at the path shown by DSH. Set the exact key printed by pnpm to `true` under `allowBuilds`, then rerun the GitHub install command. If a later commit triggers the error again, use the new key. The npm package is prebuilt and ready to install.
+
+</details>
+
+<details>
 <summary><strong>How do I upgrade?</strong></summary>
 
 ```bash
