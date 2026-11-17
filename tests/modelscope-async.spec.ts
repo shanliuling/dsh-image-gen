@@ -111,16 +111,48 @@ describe('ModelScope async image tasks (#140)', () => {
   })
 
   it('gives up after the polling budget with the last known status', async () => {
+    vi.useFakeTimers()
+    try {
+      const fetchMock = vi.fn(async (url: unknown) => {
+        if (String(url) === `${BASE}/images/generations`) return json({ task_id: 'task-1' })
+        return json({ task_status: 'RUNNING' })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const pending = generateOpenAICompatibleImage({
+        provider: 'openai-compat', apiKey: 'key', baseURL: BASE,
+        model: 'MiniMax/MiniMax-H3-Image', prompt: 'a cat', asyncImages: true, maxBytes: 1024, signal,
+        pollIntervalMs: 1000, pollBudgetMs: 3000,
+      })
+      const assertion = expect(pending).rejects.toThrow(/did not finish within 3 seconds \(last status: RUNNING/)
+      await vi.advanceTimersByTimeAsync(2_000)
+      await vi.advanceTimersByTimeAsync(1_001)
+      await assertion
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('propagates cancellation from the polling sleep without further requests', async () => {
+    const controller = new AbortController()
+    let polls = 0
     const fetchMock = vi.fn(async (url: unknown) => {
       if (String(url) === `${BASE}/images/generations`) return json({ task_id: 'task-1' })
+      polls += 1
       return json({ task_status: 'RUNNING' })
     })
     vi.stubGlobal('fetch', fetchMock)
-    await expect(generateOpenAICompatibleImage({
+    const pending = generateOpenAICompatibleImage({
       provider: 'openai-compat', apiKey: 'key', baseURL: BASE,
-      model: 'MiniMax/MiniMax-H3-Image', prompt: 'a cat', asyncImages: true, maxBytes: 1024, signal,
-      pollIntervalMs: 1, pollBudgetMs: 30,
-    })).rejects.toThrow(/did not finish within .* seconds \(last status: RUNNING\)/)
+      model: 'MiniMax/MiniMax-H3-Image', prompt: 'a cat', asyncImages: true, maxBytes: 1024,
+      signal: controller.signal, pollIntervalMs: 60_000, pollBudgetMs: 600_000,
+    })
+    // Wait for the first poll to settle, then cancel during the sleep.
+    await vi.waitFor(() => expect(polls).toBe(1))
+    controller.abort(new Error('user cancelled'))
+    await expect(pending).rejects.toThrow('user cancelled')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
   it('edits through the same async flow with image_url data URLs', async () => {

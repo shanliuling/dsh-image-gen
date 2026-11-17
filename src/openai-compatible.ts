@@ -410,8 +410,9 @@ async function runModelScopeAsyncTask(input: ModelScopeAsyncInput): Promise<Gene
   for (;;) {
     // Budget first: a poll that would start after the deadline never fires,
     // so the loop cannot outlive the caller's generation timeout unnoticed.
+    // The last status response rides along for diagnosis.
     if (Date.now() >= deadline) {
-      throw new Error(`modelscope image task ${taskId} did not finish within ${String(Math.round(pollBudgetMs / 1000))} seconds (last status: ${describeModelScopeStatus(lastStatus)}); 请调大「云端超时」后重试`)
+      throw new Error(`modelscope image task ${taskId} did not finish within ${String(Math.round(pollBudgetMs / 1000))} seconds (last status: ${describeModelScopeStatus(lastStatus)}: ${redactSecrets(lastBody, input.apiKey).slice(0, 512)}); 请调大「云端超时」后重试`)
     }
     const pollResponse = await guardedFetch('modelscope image task poll', input.signal, () => fetch(taskEndpoint, {
       method: 'GET', redirect: 'error', signal: input.signal,

@@ -147,6 +147,54 @@ describe('image tool registration', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
+  it('switches both chat tools to the ModelScope async flow when the channel selects that format (#140)', async () => {
+    vi.useFakeTimers()
+    try {
+      const { ctx, tools } = harnessContext()
+      let polls = 0
+      const fetchMock = vi.fn(async (url: unknown, init?: RequestInit) => {
+        const request = String(url)
+        if (request === 'https://api-inference.modelscope.cn/v1/images/generations') {
+          expect((init?.headers as Record<string, string>)['X-ModelScope-Async-Mode']).toBe('true')
+          return Response.json({ task_id: 'task-1' })
+        }
+        if (request === 'https://api-inference.modelscope.cn/v1/tasks/task-1') {
+          polls += 1
+          // One PENDING poll proves the loop; every later poll succeeds.
+          return Response.json(polls === 1 ? { task_status: 'PENDING' } : { task_status: 'SUCCEED', output_images: ['data:image/png;base64,iVBORw0KGgo='] })
+        }
+        throw new Error(`unexpected fetch ${request}`)
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      apply(ctx, {
+        provider: 'openai-compat',
+        openaiCompatBaseURL: 'https://api-inference.modelscope.cn/v1',
+        openaiCompatModel: 'MiniMax/MiniMax-H3-Image',
+        openaiCompatEditFormat: 'modelscopeAsync',
+        saveToWorkspace: false,
+      })
+      const exec = { signal: new AbortController().signal } as never
+      const generating = toolByName(tools, 'generate_image').execute({ prompt: 'one' }, exec)
+      // The first poll answers PENDING; stepping past the 5 s interval frees the loop.
+      await vi.advanceTimersByTimeAsync(5_001)
+      await generating
+      expect(fetchMock.mock.calls[0]?.[0]).toBe('https://api-inference.modelscope.cn/v1/images/generations')
+      expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({ model: 'MiniMax/MiniMax-H3-Image', prompt: 'one', size: '1024x1024' })
+      // Editing rides the same flow through the shared edit format, without the
+      // multipart /images/edits endpoint.
+      vi.mocked(ctx.attachments.readImage).mockResolvedValue({ data: new Uint8Array([137, 80, 78, 71]), ref: attachment('source') } as never)
+      await toolByName(tools, 'edit_image').execute({ prompt: 'edit' }, execWithUserImages('source'))
+      const editCalls = fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/images/generations'))
+      expect(editCalls).toHaveLength(2)
+      expect(JSON.parse(String(editCalls[1]![1]?.body)).image_url).toHaveLength(1)
+      expect(fetchMock.mock.calls.every(([url]) => !String(url).endsWith('/images/edits'))).toBe(true)
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('applies the configured cloud timeout to conversation generation', async () => {
     vi.useFakeTimers()
     try {
