@@ -384,63 +384,81 @@ async function runModelScopeAsyncTask(input: ModelScopeAsyncInput): Promise<Gene
   const pollIntervalMs = input.pollIntervalMs ?? MODELSCOPE_POLL_INTERVAL_MS
   const pollBudgetMs = input.pollBudgetMs ?? MODELSCOPE_POLL_BUDGET_MS
   const deadline = Date.now() + pollBudgetMs
-  // Submit the async task. ModelScope answers `{"task_id": ...}`; a non-2xx
-  // or a body without `task_id` (e.g. an endpoint that never heard of async
-  // mode) must fail before any polling starts.
-  const submitEndpoint = imageEndpoint(input.baseURL, 'generations')
-  const submitResponse = await guardedFetch('modelscope image task submission', input.signal, () => fetch(submitEndpoint, {
-    method: 'POST', redirect: 'error', signal: input.signal,
-    headers: {
-      authorization: `Bearer ${input.apiKey}`,
-      'content-type': 'application/json',
-      [MODELSCOPE_ASYNC_HEADER]: 'true',
-    },
-    body: JSON.stringify(input.body),
-  }), input.apiKey)
-  const submitText = await readBoundedText(submitResponse, ERROR_LIMIT)
-  if (!submitResponse.ok) throw new Error(`modelscope image task submission failed (${String(submitResponse.status)}): ${redactSecrets(submitText, input.apiKey).slice(0, ERROR_LIMIT)}`)
-  let submitted: ModelScopeTaskResponse
-  try { submitted = JSON.parse(submitText) as ModelScopeTaskResponse } catch { throw new Error('modelscope image task submission returned invalid JSON') }
-  const taskId = typeof submitted.task_id === 'string' ? submitted.task_id : undefined
-  if (taskId === undefined || taskId.length === 0) throw new Error(`modelscope image task submission returned no task_id: ${redactSecrets(submitText, input.apiKey).slice(0, ERROR_LIMIT)}`)
-
-  const taskEndpoint = taskStatusEndpoint(input.baseURL, taskId)
+  // A watchdog hard-stops every in-flight operation at the deadline — the
+  // submission, polls, body reads, the result download and the sleeps all run
+  // on the combined signal. The loop-top check alone only gates new
+  // iterations; a fetch that started just before expiry would otherwise run
+  // past the budget (CodeRabbit on PR #143).
+  const watchdog = new AbortController()
+  const deadlineTimer = setTimeout(() => { watchdog.abort(new Error('deadline')) }, pollBudgetMs)
+  deadlineTimer.unref?.()
+  const signal = AbortSignal.any([input.signal, watchdog.signal])
+  let taskId = ''
   let lastStatus = ''
-  let lastBody = submitText
-  for (;;) {
-    // Budget first: a poll that would start after the deadline never fires,
-    // so the loop cannot outlive the caller's generation timeout unnoticed.
-    // The last status response rides along for diagnosis.
-    if (Date.now() >= deadline) {
-      throw new Error(`modelscope image task ${taskId} did not finish within ${String(Math.round(pollBudgetMs / 1000))} seconds (last status: ${describeModelScopeStatus(lastStatus)}: ${redactSecrets(lastBody, input.apiKey).slice(0, 512)}); 请调大「云端超时」后重试`)
-    }
-    const pollResponse = await guardedFetch('modelscope image task poll', input.signal, () => fetch(taskEndpoint, {
-      method: 'GET', redirect: 'error', signal: input.signal,
+  let lastBody = ''
+  const budgetExceeded = (): Error =>
+    new Error(`modelscope image task ${taskId.length > 0 ? taskId : '(no task_id yet)'} did not finish within ${String(Math.round(pollBudgetMs / 1000))} seconds (last status: ${describeModelScopeStatus(lastStatus)}${lastBody === '' ? '' : `: ${redactSecrets(lastBody, input.apiKey).slice(0, 512)}`}); 请调大「云端超时」后重试`)
+  try {
+    // Submit the async task. ModelScope answers `{"task_id": ...}`; a non-2xx
+    // or a body without `task_id` (e.g. an endpoint that never heard of async
+    // mode) must fail before any polling starts.
+    const submitEndpoint = imageEndpoint(input.baseURL, 'generations')
+    const submitResponse = await guardedFetch('modelscope image task submission', signal, () => fetch(submitEndpoint, {
+      method: 'POST', redirect: 'error', signal,
       headers: {
         authorization: `Bearer ${input.apiKey}`,
-        [MODELSCOPE_TASK_TYPE_HEADER]: 'image_generation',
+        'content-type': 'application/json',
+        [MODELSCOPE_ASYNC_HEADER]: 'true',
       },
+      body: JSON.stringify(input.body),
     }), input.apiKey)
-    const pollText = await readBoundedText(pollResponse, ERROR_LIMIT)
-    // A failed poll is a transport/config problem, not a task state; unlike
-    // PENDING/RUNNING it gives no reason to wait longer.
-    if (!pollResponse.ok) throw new Error(`modelscope image task poll failed (${String(pollResponse.status)}): ${redactSecrets(pollText, input.apiKey).slice(0, ERROR_LIMIT)}`)
-    let payload: ModelScopeTaskResponse
-    try { payload = JSON.parse(pollText) as ModelScopeTaskResponse } catch { throw new Error('modelscope image task poll returned invalid JSON') }
-    lastStatus = typeof payload.task_status === 'string' ? payload.task_status : lastStatus
-    lastBody = pollText
-    if (lastStatus === 'FAILED') {
-      const failureDetail = typeof payload.message === 'string' && payload.message.length > 0 ? payload.message : pollText
-      throw new Error(`modelscope image task ${taskId} failed: ${redactSecrets(failureDetail, input.apiKey).slice(0, ERROR_LIMIT)}`)
+    const submitText = await readBoundedText(submitResponse, ERROR_LIMIT)
+    if (!submitResponse.ok) throw new Error(`modelscope image task submission failed (${String(submitResponse.status)}): ${redactSecrets(submitText, input.apiKey).slice(0, ERROR_LIMIT)}`)
+    let submitted: ModelScopeTaskResponse
+    try { submitted = JSON.parse(submitText) as ModelScopeTaskResponse } catch { throw new Error('modelscope image task submission returned invalid JSON') }
+    taskId = typeof submitted.task_id === 'string' ? submitted.task_id : ''
+    if (taskId.length === 0) throw new Error(`modelscope image task submission returned no task_id: ${redactSecrets(submitText, input.apiKey).slice(0, ERROR_LIMIT)}`)
+    lastBody = submitText
+
+    const taskEndpoint = taskStatusEndpoint(input.baseURL, taskId)
+    for (;;) {
+      // Fast path: skip one more poll when the budget is already spent.
+      if (Date.now() >= deadline) throw budgetExceeded()
+      const pollResponse = await guardedFetch('modelscope image task poll', signal, () => fetch(taskEndpoint, {
+        method: 'GET', redirect: 'error', signal,
+        headers: {
+          authorization: `Bearer ${input.apiKey}`,
+          [MODELSCOPE_TASK_TYPE_HEADER]: 'image_generation',
+        },
+      }), input.apiKey)
+      const pollText = await readBoundedText(pollResponse, ERROR_LIMIT)
+      // A failed poll is a transport/config problem, not a task state; unlike
+      // PENDING/RUNNING it gives no reason to wait longer.
+      if (!pollResponse.ok) throw new Error(`modelscope image task poll failed (${String(pollResponse.status)}): ${redactSecrets(pollText, input.apiKey).slice(0, ERROR_LIMIT)}`)
+      let payload: ModelScopeTaskResponse
+      try { payload = JSON.parse(pollText) as ModelScopeTaskResponse } catch { throw new Error('modelscope image task poll returned invalid JSON') }
+      lastStatus = typeof payload.task_status === 'string' ? payload.task_status : lastStatus
+      lastBody = pollText
+      if (lastStatus === 'FAILED') {
+        const failureDetail = typeof payload.message === 'string' && payload.message.length > 0 ? payload.message : pollText
+        throw new Error(`modelscope image task ${taskId} failed: ${redactSecrets(failureDetail, input.apiKey).slice(0, ERROR_LIMIT)}`)
+      }
+      if (lastStatus === 'SUCCEED') {
+        const imageUrl = firstModelScopeOutputImage(payload.output_images)
+        if (imageUrl === undefined) throw new Error(`modelscope image task ${taskId} succeeded but returned no output_images: ${redactSecrets(pollText, input.apiKey).slice(0, ERROR_LIMIT)}`)
+        // Reuse the shared downloader: data: URLs, relative URLs, strict mode,
+        // byte caps and SVG sniffing all behave exactly like the sync paths.
+        return downloadImage(imageUrl, 'modelscope', { ...input, acceptSvg: input.acceptSvg === true, signal })
+      }
+      await modelScopeDelay(pollIntervalMs, signal)
     }
-    if (lastStatus === 'SUCCEED') {
-      const imageUrl = firstModelScopeOutputImage(payload.output_images)
-      if (imageUrl === undefined) throw new Error(`modelscope image task ${taskId} succeeded but returned no output_images: ${redactSecrets(pollText, input.apiKey).slice(0, ERROR_LIMIT)}`)
-      // Reuse the shared downloader: data: URLs, relative URLs, strict mode,
-      // byte caps and SVG sniffing all behave exactly like the sync paths.
-      return downloadImage(imageUrl, 'modelscope', { ...input, acceptSvg: input.acceptSvg === true })
-    }
-    await modelScopeDelay(pollIntervalMs, input.signal)
+  } catch (error) {
+    // The watchdog fired on a live task while the caller did not cancel:
+    // surface it as the polling budget, not as a bare abort.
+    if (watchdog.signal.aborted && !input.signal.aborted) throw budgetExceeded()
+    throw error
+  } finally {
+    clearTimeout(deadlineTimer)
   }
 }
 
@@ -463,6 +481,9 @@ function taskStatusEndpoint(baseURL: string, taskId: string): string {
 
 /** Abort-aware sleep for the task polling loop; mirrors comfyui.ts's delay. */
 async function modelScopeDelay(milliseconds: number, signal: AbortSignal): Promise<void> {
+  // An already-aborted signal never fires 'abort' again, so a late listener
+  // would sleep the full interval before anyone noticed.
+  if (signal.aborted) throw signal.reason
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(done, milliseconds)
     const abort = (): void => { clearTimeout(timer); signal.removeEventListener('abort', abort); reject(signal.reason) }

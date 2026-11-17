@@ -195,6 +195,37 @@ describe('image tool registration', () => {
     }
   })
 
+  it('bounds a ModelScope chat edit by the configured cloud timeout (#140)', async () => {
+    vi.useFakeTimers()
+    try {
+      const { ctx, tools } = harnessContext()
+      vi.stubGlobal('fetch', vi.fn(async (url: unknown) => {
+        const request = String(url)
+        if (request === 'https://api-inference.modelscope.cn/v1/images/generations') return Response.json({ task_id: 'task-1' })
+        if (request === 'https://api-inference.modelscope.cn/v1/tasks/task-1') return Response.json({ task_status: 'RUNNING' })
+        throw new Error(`unexpected fetch ${request}`)
+      }))
+      apply(ctx, {
+        provider: 'openai-compat',
+        openaiCompatBaseURL: 'https://api-inference.modelscope.cn/v1',
+        openaiCompatModel: 'MiniMax/MiniMax-H3-Image',
+        openaiCompatEditFormat: 'modelscopeAsync',
+        cloudTimeoutMs: 5_000,
+        saveToWorkspace: false,
+      })
+      vi.mocked(ctx.attachments.readImage).mockResolvedValue({ data: new Uint8Array([137, 80, 78, 71]), ref: attachment('source') } as never)
+      const executing = toolByName(tools, 'edit_image').execute({ prompt: 'edit' }, execWithUserImages('source'))
+      const rejection = expect(executing).rejects.toThrow('生图超时（5 秒未返回）')
+      await vi.advanceTimersByTimeAsync(4_999)
+      await vi.advanceTimersByTimeAsync(1)
+      await rejection
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('applies the configured cloud timeout to conversation generation', async () => {
     vi.useFakeTimers()
     try {
