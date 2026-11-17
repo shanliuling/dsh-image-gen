@@ -28,3 +28,34 @@ jobs:
       - run: pnpm run build
       - run: pnpm run pack:check
       - run: pnpm run test:package
+
+  # Publish a rolling test build of this feature branch to GitHub Releases
+  # (prerelease tag "test") so it can be installed and tried directly.
+  # Scoped to this fork + branch; a no-op on the upstream repository.
+  release:
+    if: >-
+      github.event_name == 'push' &&
+      github.repository == 'xixka/dsh-image-gen' &&
+      github.ref == 'refs/heads/feat/modelscope-async'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - run: mkdir dist && pnpm pack --pack-destination dist
+      - name: Publish rolling test release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          NOTES=$(printf 'Rolling test build of feat/modelscope-async (ModelScope async image generation).\n\n- Commit: %s\n- Built: %s UTC\n- Workflow run: %s\n\nInstall the attached dsh-image-gen-*.tgz with DSH to try it out.\n' "$GITHUB_SHA" "$(date -u '+%Y-%m-%d %H:%M:%SZ')" "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}")
+          gh release delete test --yes --cleanup-tag || true
+          gh release create test dist/*.tgz --title "Test build (feat/modelscope-async)" --notes "$NOTES" --prerelease --target "$GITHUB_SHA"
