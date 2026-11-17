@@ -595,6 +595,8 @@ export function apply(ctx: Context, config: Config = {}): void {
       ...(quality === undefined ? {} : { quality }),
       ...(extraBody === undefined ? {} : { extraBody }),
       ...(arkOptions === undefined ? {} : { arkOptions }),
+      // The ModelScope async format also switches generation to the task flow (#140).
+      ...(active.provider === 'openai-compat' && active.editFormat === 'modelscopeAsync' ? { asyncImages: true } : {}),
     }), gifRequested)
     // Report what the provider actually delivered: a relay that ignores
     // output_format returns a bitmap, and the card must not claim 'svg'.
