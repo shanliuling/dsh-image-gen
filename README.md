@@ -15,14 +15,17 @@
 <p>
   <a href="https://www.npmjs.com/package/dsh-image-gen"><img src="https://img.shields.io/npm/v/dsh-image-gen?style=flat-square&color=4f6ef7" alt="npm version" /></a>
   <a href="https://www.npmjs.com/package/dsh-image-gen"><img src="https://img.shields.io/npm/dm/dsh-image-gen?style=flat-square&color=10b981" alt="npm downloads" /></a>
-  <a href="https://github.com/shanliuling/dsh-image-gen/actions/workflows/ci.yml"><img src="https://github.com/shanliuling/dsh-image-gen/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="https://dsh-insights.com/p/shanliuling/dsh-image-gen"><img src="https://dsh-insights.com/badge/shanliuling/dsh-image-gen.svg" alt="DSH Insights health" /></a>
+  <a href="https://trendoday.com/github/repo/shanliuling/dsh-image-gen"><img src="https://trendoday.com/badge/github/repo/shanliuling/dsh-image-gen.svg?style=flat" alt="Trendoday · GitHub Trending TypeScript 日榜第 8 名" /></a>
+  <a href="https://dshmarket.com/categories/workflow/"><img src="https://img.shields.io/badge/DSH%20Market-Workflow%20%E4%B8%8B%E8%BD%BD%E6%A6%9C%20%232-A45023?style=flat-square" alt="DSH Market Workflow 分类下载榜第 2 名" /></a>
+  <a href="https://github.com/dshworks/awesome-dsh-plugins#models--providers"><img src="https://img.shields.io/badge/Awesome%20DSH%20Plugins-%E5%B7%B2%E6%94%B6%E5%BD%95-176B65?style=flat-square" alt="已收录到 Awesome DSH Plugins" /></a>
   <a href="https://github.com/shanliuling/dsh-image-gen/stargazers"><img src="https://img.shields.io/github/stars/shanliuling/dsh-image-gen?style=flat-square" alt="GitHub stars" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-f5c542?style=flat-square" alt="License: Apache-2.0" /></a>
   <a href="https://linux.do/"><img src="https://img.shields.io/badge/LINUX%20DO-社区友链-555?style=flat-square" alt="LINUX DO" /></a>
 </p>
 
 <p>
+  <a href="https://trendshift.io/repositories/167406"><img src="https://trendshift.io/api/badge/repositories/167406" alt="GitHub Trending TypeScript 日榜第 8 名 · Trendshift" width="250" height="55" /></a>
+  <a href="https://trendoday.com/github/repo/shanliuling/dsh-image-gen"><img src="https://trendoday.com/badge/github/repo/shanliuling/dsh-image-gen.svg" alt="GitHub Trending TypeScript 日榜第 8 名 · Trendoday" height="55" /></a>
   <a href="https://atomgit.com/shanliuling/dsh-image-gen"><img src="https://atomgit.com/shanliuling/dsh-image-gen/star/new_badge.svg" alt="AtomGit" height="55" /></a>
 </p>
 
