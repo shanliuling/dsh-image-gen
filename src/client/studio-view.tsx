@@ -69,7 +69,12 @@ const MODEL_DISCOVERY_POLL_MS = 1_000
 const MODEL_DISCOVERY_WINDOW_MS = 12_000
 
 /** Below this workbench width the recent-generations rail folds automatically. */
-const WORKBENCH_NARROW_WIDTH = 560
+// A laptop's right-sidebar seat (#130) is wider than 560 px yet too narrow for
+// three columns: with the rail open the canvas column shrank to ~200 px and its
+// toolbar labels wrapped one glyph per line.
+const WORKBENCH_NARROW_WIDTH = 760
+/** Below this canvas-column width the toolbar drops its labels and keeps icons, with the text in each title. */
+const CANVAS_TOOLBAR_COMPACT_WIDTH = 520
 
 type Mode = 'generate' | 'edit'
 type BatchKind = StudioViewState['batchKind'] & string
@@ -232,6 +237,8 @@ export const StudioView: FC<{
   const [generateCollapsed, setGenerateCollapsed] = useState(initialCanvasSurface === 'infinite' && initialPrompt === undefined)
   /** Workbench root, observed so a narrow column (right sidebar) can fold the recent rail. */
   const workbenchRootRef = useRef<HTMLElement | null>(null)
+  const canvasColumnRef = useRef<HTMLElement | null>(null)
+  const [canvasToolbarCompact, setCanvasToolbarCompact] = useState(false)
   /** Set once the user toggles the rail by hand; auto-folding then stands down for this mount. */
   const railToggledByUserRef = useRef(false)
   const [visibleLimit, setVisibleLimit] = useState(30)
@@ -346,6 +353,20 @@ export const StudioView: FC<{
       }
     })
     observer.observe(root)
+    return () => { observer.disconnect() }
+  }, [])
+
+  // The canvas column is what the toolbar must fit, whatever the panels beside it do.
+  useEffect(() => {
+    const column = canvasColumnRef.current
+    if (column === null || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const compact = entry.contentRect.width < CANVAS_TOOLBAR_COMPACT_WIDTH
+        setCanvasToolbarCompact(prev => (prev === compact ? prev : compact))
+      }
+    })
+    observer.observe(column)
     return () => { observer.disconnect() }
   }, [])
 
@@ -1489,8 +1510,8 @@ export const StudioView: FC<{
           </div>
         )}
 
-        <main className="dsh-ig-canvas-column">
-          <div className="dsh-ig-canvas-toolbar">
+        <main ref={canvasColumnRef} className="dsh-ig-canvas-column">
+          <div className={`dsh-ig-canvas-toolbar${canvasToolbarCompact ? ' is-compact' : ''}`}>
             <div className="dsh-ig-canvas-toolbar-left">
               {sidebarCollapsed && (
                 <button
@@ -1503,7 +1524,11 @@ export const StudioView: FC<{
                 </button>
               )}
               <div className="dsh-ig-status-badge-wrap">
-                <div className="dsh-ig-status-badge">
+                <div className="dsh-ig-status-badge" title={configuredCount > 0
+                  ? (subscriptionSignedInCount > 0
+                      ? t('configuredSplit', { api: String(apiConfiguredCount), sub: String(subscriptionSignedInCount) })
+                      : t('configuredCount', { count: String(apiConfiguredCount) }))
+                  : t('unconfiguredStatus')}>
                   <span className={`dsh-ig-status-dot ${configuredCount > 0 ? 'is-ready' : 'is-muted'}`} />
                   <span className="dsh-ig-status-text">
                     {configuredCount > 0
