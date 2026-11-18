@@ -44,7 +44,7 @@ import { compatGenerationExtraBody, compatQualityOptions, compatRequestQuality, 
 import { keepGifOriginal } from './vault-registry.js'
 import { vaultConfigOf } from './vault-store.js'
 import { refreshProfileModels, widenProfileModels, withCachedChannelModels } from './channel-model-discovery.js'
-import { compatEditExtraBody, selectedWatermark, watermarkProfile } from './watermark.js'
+import { compatEditExtraBody, compatEditFormat, selectedWatermark, watermarkProfile } from './watermark.js'
 
 const LEGACY_OPENAI_TABLE: Record<string, Record<string, string>> = {
   '1:1': { '1K': '1024x1024' },
@@ -290,6 +290,11 @@ const SUBSCRIPTION_DISPLAY_LABELS: Record<SubscriptionProvider, string> = {
   'chatgpt-sub': 'ChatGPT 订阅',
   'grok-sub': 'Grok 订阅',
   'google-sub': 'Google 订阅',
+}
+
+/** A channel on ModelScope's async task flow (#140) polls for minutes, so it gets the long timeout like a GIF. */
+export function channelPollsTask(config: Config, input: Pick<StudioGenerateRequest, 'provider' | 'channel'>): boolean {
+  return input.provider === 'openai-compat' && compatEditFormat(withOpenAICompatChannel(config, input.channel)) === 'modelscopeAsync'
 }
 
 /** A generation on an OpenAI-compatible channel whose extras select GIF is a GIF request even when it carries no `output`. */

@@ -43,9 +43,11 @@ function officialContract(config: Config, mode: Mode): 'sensenova' | 'qwen' | un
 export function compatEditFormat(config: Config): CompatEditFormat {
   try {
     const url = new URL(config.openaiCompatBaseURL ?? '')
-    if (url.protocol === 'https:' && !url.port && !url.search && !url.hash
-      && (url.hostname === 'api.siliconflow.cn' || url.hostname === 'api.siliconflow.com')
-      && url.pathname.replace(/\/+$/, '') === '/v1') return 'siliconflowJson'
+    const official = url.protocol === 'https:' && !url.port && !url.search && !url.hash && url.pathname.replace(/\/+$/, '') === '/v1'
+    if (official && (url.hostname === 'api.siliconflow.cn' || url.hostname === 'api.siliconflow.com')) return 'siliconflowJson'
+    // ModelScope API-Inference only runs image jobs as async tasks (#140), so
+    // its official address selects the task flow without a settings choice.
+    if (official && url.hostname === 'api-inference.modelscope.cn') return 'modelscopeAsync'
   } catch { /* Custom relays can select the protocol explicitly. */ }
   const contract = officialContract(config, 'edit')
   if (contract === 'sensenova') return 'jsonImageUrlArray'

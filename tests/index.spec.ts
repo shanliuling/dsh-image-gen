@@ -170,7 +170,6 @@ describe('image tool registration', () => {
         provider: 'openai-compat',
         openaiCompatBaseURL: 'https://api-inference.modelscope.cn/v1',
         openaiCompatModel: 'MiniMax/MiniMax-H3-Image',
-        openaiCompatEditFormat: 'modelscopeAsync',
         saveToWorkspace: false,
       })
       const exec = { signal: new AbortController().signal } as never
@@ -209,7 +208,6 @@ describe('image tool registration', () => {
         provider: 'openai-compat',
         openaiCompatBaseURL: 'https://api-inference.modelscope.cn/v1',
         openaiCompatModel: 'MiniMax/MiniMax-H3-Image',
-        openaiCompatEditFormat: 'modelscopeAsync',
         cloudTimeoutMs: 5_000,
         saveToWorkspace: false,
       })

@@ -1506,7 +1506,6 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
                 <option value="jsonImageUrlArray">{t('editFormatJsonImageUrlArray')}</option>
                 <option value="formReferenceImages">{t('editFormatFormReferenceImages')}</option>
                 <option value="siliconflowJson">{t('editFormatSiliconFlow')}</option>
-                <option value="modelscopeAsync">{t('editFormatModelScope')}</option>
               </select>
               <span className="dsh-ig-hint">{t(editFormat === 'siliconflowJson' ? 'editFormatSiliconFlowHint' : editFormat === 'modelscopeAsync' ? 'editFormatModelScopeHint' : 'editFormatHint')}</span>
             </label>
