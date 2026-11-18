@@ -35,7 +35,7 @@ import { generateSubscriptionImage, registerSubscriptionRoutes, subscriptionTool
 import { CANVAS_STATE_ROUTE, DEFAULT_CLOUD_TIMEOUT_MS, IMAGE_GENERATION_NAMESPACE, cloudTimeoutFor, IMAGE_PROVIDERS, IMPORT_ROUTE, INSPIRATION_ROUTE, PREVIEW_ROUTE, STORAGE_STATS_ROUTE, STUDIO_ROUTE, TEST_CONNECTION_ROUTE, THUMB_ROUTE, VAULT_DELETE_ROUTE, VAULT_REFS_ROUTE, VAULT_ROUTE, ZIP_CANCEL_ROUTE, ZIP_PROGRESS_ROUTE, ZIP_ROUTE, mergeComfyUIPrompt, resolveOpenAICompatChannel, type ImageProvider } from './shared.js'
 import { createInspirationRoute } from './inspiration-route.js'
 import { BUNDLED_INSPIRATION_CATALOG, searchInspirationCases } from './inspiration.js'
-import { channelSelectsGif, chatToolSize, generateFromStudio, describeStudio } from './studio.js'
+import { channelPollsTask, channelSelectsGif, chatToolSize, generateFromStudio, describeStudio } from './studio.js'
 import { serveStudio } from './studio-route.js'
 import { serveTestConnection } from './test-route.js'
 import { describeSettingsHealth, serveSettingsHealth } from './settings-health.js'
@@ -460,6 +460,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         maxBodyBytes: Math.ceil(ctx.attachments.imageLimits.maxImageBytes * 1.4 * 5) + 256 * 1024,
         timeoutMs: current().cloudTimeoutMs ?? DEFAULT_CLOUD_TIMEOUT_MS,
         channelSelectsGif: input => channelSelectsGif(current(), input),
+      channelPollsTask: input => channelPollsTask(current(), input),
       }),
     }), 'dsh-image-gen: studio route')
     const serveInspiration = createInspirationRoute()
@@ -582,6 +583,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       ? Object.fromEntries(Object.entries(channelExtraBody).filter(([key]) => !SVG_INCOMPATIBLE_EXTRAS.has(key)))
       : channelExtraBody
     const extraBody = channelExtras !== undefined ? { ...channelExtras, ...outputFields } : Object.keys(outputFields).length === 0 ? undefined : outputFields
+    const asyncTask = active.provider === 'openai-compat' && active.editFormat === 'modelscopeAsync'
     const generated = await runCloud(signal => generateOpenAICompatibleImage({
       strictImageDownloads: current().strictImageDownloads === true,
       provider: active.provider,
@@ -595,7 +597,10 @@ export function apply(ctx: Context, config: Config = {}): void {
       ...(quality === undefined ? {} : { quality }),
       ...(extraBody === undefined ? {} : { extraBody }),
       ...(arkOptions === undefined ? {} : { arkOptions }),
-    }), gifRequested)
+      // The ModelScope async format also switches generation to the task flow (#140).
+      ...(asyncTask ? { asyncImages: true } : {}),
+      // A polled task can run for minutes, so it gets the long default timeout like a GIF.
+    }), gifRequested || asyncTask)
     // Report what the provider actually delivered: a relay that ignores
     // output_format returns a bitmap, and the card must not claim 'svg'.
     const deliveredSvg = generated.mediaType === 'image/svg+xml'
@@ -833,7 +838,13 @@ export function apply(ctx: Context, config: Config = {}): void {
         const quality = active.provider === 'openai-compat' ? compatRequestQuality(requestConfig, args.quality) : active.provider === 'openai' ? args.quality : undefined
         if (active.provider === 'openai' && quality !== undefined && !officialQualityOptions(active.model).some(option => option.value === quality)) throw new Error('该 OpenAI 模型不支持所选生成质量')
         const xaiExtraBody = active.provider === 'xai' ? xaiToolParameters({ ...(args.aspect_ratio !== undefined ? { aspectRatio: args.aspect_ratio } : {}), ...(args.image_size !== undefined ? { imageSize: args.image_size } : {}), ...(args.size !== undefined ? { size: args.size } : {}) }) : undefined
-        const generated = await editOpenAICompatibleImage({ strictImageDownloads: current().strictImageDownloads === true, apiKey: credential, baseURL: active.baseURL, model: active.model, prompt: args.prompt, sourceImages, ...(active.provider === 'xai' || editSize === undefined ? {} : { size: editSize }), ...(quality === undefined ? {} : { quality }), maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal: exec.signal, ...(gifRequested ? { extraBody: gifFields } : {}), ...(active.provider === 'openai-compat' ? { editFormat: active.editFormat, editExtra: active.editExtra, editSizeMode: requestConfig.openaiCompatEditSizeMode ?? 'auto', editResponseFormat: 'auto' as const, onResponseFormatRetry: status => { ctx.logger.warn('dsh-image-gen: openai-compatible relay rejected response_format=b64_json (' + String(status) + '); retrying without it') } } : active.provider === 'xai' ? { editFormat: 'xaiJson' as const, ...(xaiExtraBody === undefined ? {} : { extraBody: xaiExtraBody }) } : {}) })
+        const editRequest = { strictImageDownloads: current().strictImageDownloads === true, apiKey: credential, baseURL: active.baseURL, model: active.model, prompt: args.prompt, sourceImages, ...(active.provider === 'xai' || editSize === undefined ? {} : { size: editSize }), ...(quality === undefined ? {} : { quality }), maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal: exec.signal, ...(gifRequested ? { extraBody: gifFields } : {}), ...(active.provider === 'openai-compat' ? { editFormat: active.editFormat, editExtra: active.editExtra, editSizeMode: requestConfig.openaiCompatEditSizeMode ?? 'auto', editResponseFormat: 'auto' as const, onResponseFormatRetry: (status: number) => { ctx.logger.warn('dsh-image-gen: openai-compatible relay rejected response_format=b64_json (' + String(status) + '); retrying without it') } } : active.provider === 'xai' ? { editFormat: 'xaiJson' as const, ...(xaiExtraBody === undefined ? {} : { extraBody: xaiExtraBody }) } : {}) }
+        // ModelScope edits poll for minutes, so the configured cloud timeout
+        // must bound them exactly like generation (#143 review). Other edit
+        // formats are single synchronous requests and stay unchanged.
+        const generated = active.provider === 'openai-compat' && active.editFormat === 'modelscopeAsync'
+          ? await withGenerationTimeout(cloudTimeoutFor(current().cloudTimeoutMs, true), exec.signal, signal => editOpenAICompatibleImage({ ...editRequest, signal }))
+          : await editOpenAICompatibleImage(editRequest)
         const output = editSize ?? 'auto'
         const value = await saveGenerated(ctx, generated, active.provider, active.model, active.provider === 'xai' ? (xaiExtraBody?.aspect_ratio ?? 'auto') : quality === undefined ? output : `${output}, quality=${quality}`, current(), exec, knownWorkspaceRoots)
         return active.provider === 'openai-compat' ? { ...value, channel: resolveOpenAICompatChannel(requestConfig, args.channel).id } : value

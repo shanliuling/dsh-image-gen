@@ -24,6 +24,8 @@ export interface StudioRouteDeps {
   timeoutMs?: number
   /** Whether the selected channel asks for a GIF by itself, so a request without `output` still gets the GIF timeout. */
   channelSelectsGif?(input: StudioGenerateRequest): boolean
+  /** A channel that polls an async task (ModelScope, #140) and needs the long timeout. */
+  channelPollsTask?(input: StudioGenerateRequest): boolean
   /** Heartbeat cadence for the streaming generation response; tests shrink it. */
   heartbeatMs?: number
 }
@@ -75,7 +77,8 @@ export async function serveStudio(req: IncomingMessage, res: ServerResponse, dep
     // timeout is left at its default).
     const subscriptionChannel = isSubscriptionProvider(input.provider)
     const gif = input.output?.format === 'gif' || deps.channelSelectsGif?.(input) === true
-    const timeoutMs = subscriptionChannel ? SUBSCRIPTION_TIMEOUT_MS : cloudTimeoutFor(deps.timeoutMs, gif)
+    const slow = gif || deps.channelPollsTask?.(input) === true
+    const timeoutMs = subscriptionChannel ? SUBSCRIPTION_TIMEOUT_MS : cloudTimeoutFor(deps.timeoutMs, slow)
     const timeout = setTimeout(() => { watchdog.abort() }, timeoutMs)
     timeout.unref?.()
     // Respond with headers immediately and heartbeat newlines while the
