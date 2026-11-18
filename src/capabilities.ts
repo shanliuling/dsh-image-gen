@@ -71,7 +71,7 @@ const SEEDREAM_SIZE_TABLE: Record<string, Record<string, string>> = {
 }
 
 /**
- * Seedream 5.0 pro / flash tier × ratio table (Ark docs, seedream-5-0-pro):
+ * Seedream 5.0 pro / flash and 5.5 tier × ratio table (Ark docs, seedream-5-0-pro):
  * these models take 1K / 1.5K / 2K only, within 921600–4624220 pixels.
  */
 const SEEDREAM_PRO_SIZE_TABLE: Record<string, Record<string, string>> = {
@@ -178,7 +178,7 @@ export const CLOUD_CAPABILITIES: Record<Exclude<CloudImageProvider, 'openai-comp
   ),
 }
 
-/** Seedream 5.0 pro / flash: a different tier set from the earlier Seedream models. */
+/** Seedream 5.0 pro / flash and 5.5: a different tier set from the earlier Seedream models. */
 const SEEDREAM_PRO_CAPABILITY = capability(
   ['auto', ...Object.keys(SEEDREAM_PRO_SIZE_TABLE)],
   ['1K', '1.5K', '2K'].map(value => ({ value, label: value })),
@@ -189,7 +189,7 @@ const SEEDREAM_PRO_CAPABILITY = capability(
 
 /** The pickers of a cloud row for the model it runs; only Seedream differs by model today. */
 export function cloudCapability(provider: Exclude<CloudImageProvider, 'openai-compat'>, model: string): ProviderCapability {
-  if (provider === 'seedream' && /seedream-5-0-(?:pro|flash)(?:$|-)/.test(model)) return SEEDREAM_PRO_CAPABILITY
+  if (provider === 'seedream' && /seedream-5-(?:0-(?:pro|flash)(?:$|-)|5(?:-\d+)?$)/.test(model)) return SEEDREAM_PRO_CAPABILITY
   return CLOUD_CAPABILITIES[provider]
 }
 

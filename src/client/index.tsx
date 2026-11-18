@@ -121,7 +121,7 @@ interface ImageSettings {
   seedreamOutputFormat?: 'png' | 'jpeg'
   /** Ark `watermark`; off removes the baked-in "AI generated" mark. */
   seedreamWatermark?: boolean
-  /** Ark `background`; `transparent` needs an alpha-bearing edit reference. */
+  /** Ark `background`; before Seedream 5.5 `transparent` needs an alpha-bearing edit reference. */
   seedreamBackground?: 'opaque' | 'transparent'
   dashscopeEndpoint?: string
   dashscopeModel?: string

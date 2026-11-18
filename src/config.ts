@@ -165,8 +165,9 @@ export interface Config {
    */
   seedreamWatermark?: boolean
   /**
-   * Ark `background`. Only the edit path can honour `transparent`, and only
-   * when every reference image already carries an alpha channel.
+   * Ark `background`. Before Seedream 5.5 only the edit path can honour
+   * `transparent`, and only when every reference image already carries an
+   * alpha channel.
    */
   seedreamBackground?: ArkBackgroundMode
   dashscopeEndpoint?: string

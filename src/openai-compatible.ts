@@ -5,7 +5,7 @@ import { downloadPublicImage } from './public-image-download.js'
 import { guardedFetch, readResponseBody } from './fetch-diagnostics.js'
 import { redactSecrets } from './redact.js'
 import { detectImageMediaType } from './reference-image.js'
-import { arkOutputBody, type ArkOutputOptions } from './shared.js'
+import { arkOutputBody, seedreamGeneratesTransparent, type ArkOutputOptions } from './shared.js'
 
 const ERROR_LIMIT = 4096
 
@@ -103,10 +103,8 @@ export async function generateOpenAICompatibleImage(input: {
       prompt: input.prompt,
       ...(input.size === undefined ? {} : { size: input.size }),
       ...(input.quality === undefined ? {} : { quality: input.quality }),
-      // `background: false` — Ark rejects `transparent` on this endpoint
-      // outright (it needs exactly one input image), so it is the edit path's
-      // option alone.
-      ...(input.provider === 'seedream' ? { response_format: 'url', ...arkOutputBody(input.arkOptions, { background: false }) } : {}),
+      // Only Seedream 5.5 accepts `transparent` on text-to-image.
+      ...(input.provider === 'seedream' ? { response_format: 'url', ...arkOutputBody(input.arkOptions, { background: seedreamGeneratesTransparent(input.model) }) } : {}),
       ...(input.extraBody ?? {}),
     }),
   }), input.apiKey)

@@ -21,9 +21,9 @@ export async function editSeedreamImage(input: {
   strictImageDownloads?: boolean
   signal: AbortSignal
   /**
-   * Ark output controls. The edit path is the only one Ark lets request a
-   * transparent background, and it requires every reference image to carry an
-   * alpha channel — see `arkOutputBody`.
+   * Ark output controls. Before Seedream 5.5 the edit path is the only one Ark
+   * lets request a transparent background, and it requires every reference
+   * image to carry an alpha channel — see `arkOutputBody`.
    */
   arkOptions?: ArkOutputOptions
 }): Promise<GeneratedCompatibleImage> {
