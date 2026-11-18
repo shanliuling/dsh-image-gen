@@ -1,4 +1,5 @@
 /** OpenAI Images API and compatible response adapter. */
+import { brotliDecompressSync, gunzipSync, inflateSync, zstdDecompressSync } from 'node:zlib'
 import type { ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import { downloadPublicImage } from './public-image-download.js'
 import { guardedFetch, readResponseBody } from './fetch-diagnostics.js'
@@ -72,7 +73,28 @@ export async function generateOpenAICompatibleImage(input: {
   signal: AbortSignal
   /** Ark-only output controls; ignored by every other provider. */
   arkOptions?: ArkOutputOptions
+  /**
+   * ModelScope-style async task mode (#140): the generations endpoint answers
+   * `{"task_id": ...}` and the image URLs only appear after polling
+   * `/v1/tasks/{task_id}`. Opt-in per channel through the `modelscopeAsync`
+   * edit format, so every other relay keeps today's request shape untouched.
+   */
+  asyncImages?: boolean
 }): Promise<GeneratedCompatibleImage> {
+  if (input.asyncImages === true) {
+    return runModelScopeAsyncTask({
+      ...input,
+      acceptSvg: input.extraBody?.output_format === 'svg',
+      // ModelScope's contract has no `quality` field; extraBody rides last so
+      // users can still add `negative_prompt`/`seed`/`steps` per channel.
+      body: {
+        model: input.model,
+        prompt: input.prompt,
+        ...(input.size === undefined ? {} : { size: input.size }),
+        ...(input.extraBody ?? {}),
+      },
+    })
+  }
   const response = await guardedFetch(`${input.provider} image request`, input.signal, () => fetch(imageEndpoint(input.baseURL, 'generations'), {
     method: 'POST', redirect: 'error', signal: input.signal,
     headers: { authorization: `Bearer ${input.apiKey}`, 'content-type': 'application/json' },
@@ -91,8 +113,12 @@ export async function generateOpenAICompatibleImage(input: {
   return parseImageResponse(response, input.provider, { ...input, acceptSvg: input.extraBody?.output_format === 'svg' })
 }
 
-/** How the edits endpoint expects its request body (#41). */
-export type CompatEditFormat = 'multipart' | 'jsonImageUrlArray' | 'formReferenceImages' | 'siliconflowJson' | 'xaiJson' | 'qwenJson'
+/**
+ * How the edits endpoint expects its request body (#41). `modelscopeAsync`
+ * additionally switches generation itself to ModelScope's async task flow
+ * (#140): submit → poll `/v1/tasks/{id}` → download `output_images`.
+ */
+export type CompatEditFormat = 'multipart' | 'jsonImageUrlArray' | 'formReferenceImages' | 'siliconflowJson' | 'xaiJson' | 'qwenJson' | 'modelscopeAsync'
 
 export async function editOpenAICompatibleImage(input: {
   apiKey: string
@@ -135,6 +161,25 @@ export async function editOpenAICompatibleImage(input: {
    */
   extraBody?: Readonly<Record<string, unknown>>
 }): Promise<GeneratedCompatibleImage> {
+  if (input.editFormat === 'modelscopeAsync') {
+    // ModelScope edits through the same async generations endpoint (#140):
+    // references ride the JSON body as `image_url`, never multipart /edits.
+    // ModelScope derives output framing itself; the generic picker defaults
+    // must not turn into unsupported size/quality fields (same rule as the
+    // SiliconFlow contract below).
+    if (['size', 'image_size', 'quality'].some(key => key in (input.editExtra ?? {}))) throw new Error('魔搭 ModelScope 图生图格式不发送 size、image_size 或 quality；请从图生图额外字段中移除这些字段')
+    return runModelScopeAsyncTask({
+      ...input,
+      acceptSvg: false,
+      body: {
+        model: input.model,
+        prompt: input.prompt,
+        image_url: input.sourceImages.map(toDataUrl),
+        ...(input.editExtra ?? {}),
+        ...(input.extraBody ?? {}),
+      },
+    })
+  }
   if (input.editFormat === 'siliconflowJson') {
     const body: Record<string, unknown> = { model: input.model, prompt: input.prompt, ...(input.editExtra ?? {}), ...(input.extraBody ?? {}) }
     const model = typeof body.model === 'string' ? body.model.trim() : ''
@@ -301,6 +346,182 @@ interface ImageResponseOptions {
   acceptSvg?: boolean
 }
 
+/**
+ * ModelScope API-Inference async task flow (#140): the OpenAI-shaped
+ * generations endpoint only accepts async submissions — it answers
+ * `{"task_id": ...}` with no image fields, the result surfaces at
+ * `GET /v1/tasks/{task_id}` (which requires the `X-ModelScope-Task-Type`
+ * header) as `output_images`. See the official contract at
+ * <https://modelscope.ai/docs/model-service/API-Inference/intro>.
+ */
+interface ModelScopeAsyncInput extends ImageResponseOptions {
+  apiKey: string
+  model: string
+  signal: AbortSignal
+  /** Complete JSON request body for the async submission. */
+  body: Record<string, unknown>
+  /** Milliseconds between task-status polls; test hook. */
+  pollIntervalMs?: number
+  /** Total wall-clock budget for the whole task; test hook. */
+  pollBudgetMs?: number
+}
+
+// The official example sleeps 5 s between polls; API-Inference is a free,
+// dynamically rate-limited service, so stay on that cadence. Batch and studio
+// requests run one loop per image concurrently, which multiplies the rate.
+const MODELSCOPE_POLL_INTERVAL_MS = 5000
+const MODELSCOPE_POLL_BUDGET_MS = 300_000
+const MODELSCOPE_ASYNC_HEADER = 'X-ModelScope-Async-Mode'
+const MODELSCOPE_TASK_TYPE_HEADER = 'X-ModelScope-Task-Type'
+
+interface ModelScopeTaskResponse {
+  task_id?: unknown
+  task_status?: unknown
+  message?: unknown
+  output_images?: unknown
+}
+
+async function runModelScopeAsyncTask(input: ModelScopeAsyncInput): Promise<GeneratedCompatibleImage> {
+  // Submit the async task. ModelScope answers `{"task_id": ...}`; a non-2xx
+  // or a body without `task_id` (e.g. an endpoint that never heard of async
+  // mode) must fail before any polling starts.
+  const submitEndpoint = imageEndpoint(input.baseURL, 'generations')
+  const submitResponse = await guardedFetch('modelscope image task submission', input.signal, () => fetch(submitEndpoint, {
+    method: 'POST', redirect: 'error', signal: input.signal,
+    headers: {
+      authorization: `Bearer ${input.apiKey}`,
+      'content-type': 'application/json',
+      [MODELSCOPE_ASYNC_HEADER]: 'true',
+    },
+    body: JSON.stringify(input.body),
+  }), input.apiKey)
+  const submitText = await readBoundedText(submitResponse, ERROR_LIMIT)
+  if (!submitResponse.ok) throw new Error(`modelscope image task submission failed (${String(submitResponse.status)}): ${redactSecrets(submitText, input.apiKey).slice(0, ERROR_LIMIT)}`)
+  let submitted: ModelScopeTaskResponse
+  try { submitted = JSON.parse(submitText) as ModelScopeTaskResponse } catch { throw new Error('modelscope image task submission returned invalid JSON') }
+  const taskId = typeof submitted.task_id === 'string' ? submitted.task_id : ''
+  if (taskId.length === 0) throw new Error(`modelscope image task submission returned no task_id: ${redactSecrets(submitText, input.apiKey).slice(0, ERROR_LIMIT)}`)
+  return await pollModelScopeTask({ ...input, taskId })
+}
+
+/** Input of {@link pollModelScopeTask}: the task coordinates plus the shared response options. */
+interface ModelScopePollInput extends ImageResponseOptions {
+  apiKey: string
+  taskId: string
+  /** Milliseconds between task-status polls; test hook. */
+  pollIntervalMs?: number
+  /** Total wall-clock budget for the polls and the result download; test hook. */
+  pollBudgetMs?: number
+}
+
+/**
+ * Poll a submitted ModelScope task until it settles and download the first
+ * `output_images` entry. A watchdog hard-stops every in-flight operation at
+ * the budget — the polls, body reads, the result download and the sleeps all
+ * run on the combined signal. The loop-top check alone only gates new
+ * iterations; a fetch that started just before expiry would otherwise run
+ * past the budget (CodeRabbit on PR #143).
+ */
+async function pollModelScopeTask(input: ModelScopePollInput): Promise<GeneratedCompatibleImage> {
+  const pollIntervalMs = input.pollIntervalMs ?? MODELSCOPE_POLL_INTERVAL_MS
+  const pollBudgetMs = input.pollBudgetMs ?? MODELSCOPE_POLL_BUDGET_MS
+  const deadline = Date.now() + pollBudgetMs
+  const watchdog = new AbortController()
+  const deadlineTimer = setTimeout(() => { watchdog.abort(new Error('deadline')) }, pollBudgetMs)
+  deadlineTimer.unref?.()
+  const signal = AbortSignal.any([input.signal, watchdog.signal])
+  const taskId = input.taskId
+  let lastStatus = ''
+  let lastBody = ''
+  const budgetExceeded = (): Error =>
+    new Error(`modelscope image task ${taskId} did not finish within ${String(Math.round(pollBudgetMs / 1000))} seconds (last status: ${describeModelScopeStatus(lastStatus)}${lastBody === '' ? '' : `: ${redactSecrets(lastBody, input.apiKey).slice(0, 512)}`}); 请调大「云端超时」后重试`)
+  try {
+    const taskEndpoint = taskStatusEndpoint(input.baseURL, taskId)
+    for (;;) {
+      // Fast path: skip one more poll when the budget is already spent.
+      if (Date.now() >= deadline) throw budgetExceeded()
+      const pollResponse = await guardedFetch('modelscope image task poll', signal, () => fetch(taskEndpoint, {
+        method: 'GET', redirect: 'error', signal,
+        headers: {
+          authorization: `Bearer ${input.apiKey}`,
+          [MODELSCOPE_TASK_TYPE_HEADER]: 'image_generation',
+        },
+      }), input.apiKey)
+      const pollText = await readBoundedText(pollResponse, ERROR_LIMIT)
+      // A failed poll is a transport/config problem, not a task state; unlike
+      // PENDING/RUNNING it gives no reason to wait longer.
+      if (!pollResponse.ok) throw new Error(`modelscope image task poll failed (${String(pollResponse.status)}): ${redactSecrets(pollText, input.apiKey).slice(0, ERROR_LIMIT)}`)
+      let payload: ModelScopeTaskResponse
+      try { payload = JSON.parse(pollText) as ModelScopeTaskResponse } catch { throw new Error('modelscope image task poll returned invalid JSON') }
+      lastStatus = typeof payload.task_status === 'string' ? payload.task_status : lastStatus
+      lastBody = pollText
+      if (lastStatus === 'FAILED') {
+        const failureDetail = typeof payload.message === 'string' && payload.message.length > 0 ? payload.message : pollText
+        throw new Error(`modelscope image task ${taskId} failed: ${redactSecrets(failureDetail, input.apiKey).slice(0, ERROR_LIMIT)}`)
+      }
+      if (lastStatus === 'SUCCEED') {
+        const imageUrl = firstModelScopeOutputImage(payload.output_images)
+        if (imageUrl === undefined) throw new Error(`modelscope image task ${taskId} succeeded but returned no output_images: ${redactSecrets(pollText, input.apiKey).slice(0, ERROR_LIMIT)}`)
+        // Reuse the shared downloader: data: URLs, relative URLs, strict mode,
+        // byte caps and SVG sniffing all behave exactly like the sync paths.
+        // Await it inside the try so the deadline watchdog still covers the
+        // download — `return` alone would clear the timer before it settles.
+        return await downloadImage(imageUrl, 'modelscope', { ...input, acceptSvg: input.acceptSvg === true, signal })
+      }
+      await modelScopeDelay(pollIntervalMs, signal)
+    }
+  } catch (error) {
+    // The watchdog fired on a live task while the caller did not cancel:
+    // surface it as the polling budget, not as a bare abort.
+    if (watchdog.signal.aborted && !input.signal.aborted) throw budgetExceeded()
+    throw error
+  } finally {
+    clearTimeout(deadlineTimer)
+  }
+}
+
+/** First usable entry of the task's `output_images` array, or undefined. */
+function firstModelScopeOutputImage(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined
+  for (const entry of value) {
+    if (typeof entry === 'string' && entry.length > 0) return entry
+  }
+  return undefined
+}
+
+/**
+ * The task id of a ModelScope-style envelope — `{task_id, task_status}` with
+ * no image fields — that answered a synchronous request, or undefined. Both
+ * fields are required: relays that answer `task_id` alone for other async
+ * protocols must not be mistaken for a ModelScope task.
+ */
+function modelScopeTaskEnvelopeTaskId(payload: unknown): string | undefined {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) return undefined
+  const record = payload as { task_id?: unknown; task_status?: unknown }
+  return typeof record.task_id === 'string' && record.task_id.length > 0 && typeof record.task_status === 'string' ? record.task_id : undefined
+}
+
+function describeModelScopeStatus(status: string): string {
+  return status.length > 0 ? status : 'unknown'
+}
+
+function taskStatusEndpoint(baseURL: string, taskId: string): string {
+  try { return new URL(`tasks/${encodeURIComponent(taskId)}`, baseURL.endsWith('/') ? baseURL : `${baseURL}/`).toString() } catch { throw new Error('Image endpoint must be an absolute URL') }
+}
+
+/** Abort-aware sleep for the task polling loop; mirrors comfyui.ts's delay. */
+async function modelScopeDelay(milliseconds: number, signal: AbortSignal): Promise<void> {
+  // An already-aborted signal never fires 'abort' again, so a late listener
+  // would sleep the full interval before anyone noticed.
+  if (signal.aborted) throw signal.reason
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(done, milliseconds)
+    const abort = (): void => { clearTimeout(timer); signal.removeEventListener('abort', abort); reject(signal.reason) }
+    function done(): void { signal.removeEventListener('abort', abort); resolve() }
+    signal.addEventListener('abort', abort, { once: true })
+  })
+}
+
 async function parseImageResponse(
   response: Response,
   provider: string,
@@ -311,7 +532,21 @@ async function parseImageResponse(
   let payload: unknown
   try { payload = JSON.parse(text) } catch { throw new Error(`${provider} image request returned invalid JSON`) }
   const image = firstImage(payload)
-  if (image === undefined) throw new Error(`${provider} image request returned no image: ${redactSecrets(text, input.apiKey).slice(0, ERROR_LIMIT)}`)
+  if (image === undefined) {
+    // ModelScope's generations endpoint answers even a plain sync request —
+    // with or without the async header, on generation and JSON edits alike —
+    // with a task envelope (`task_id` + `task_status`, no image fields); the
+    // image only exists at the task endpoint (#140). Poll it instead of
+    // failing, so channels that never selected the explicit `modelscopeAsync`
+    // format still work.
+    const envelopeTaskId = modelScopeTaskEnvelopeTaskId(payload)
+    if (envelopeTaskId !== undefined && input.apiKey !== undefined) {
+      // `apiKey` must be passed explicitly: under exactOptionalPropertyTypes
+      // the spread alone keeps the optional `string | undefined` type.
+      return await pollModelScopeTask({ ...input, apiKey: input.apiKey, taskId: envelopeTaskId })
+    }
+    throw new Error(`${provider} image request returned no image: ${redactSecrets(text, input.apiKey).slice(0, ERROR_LIMIT)}`)
+  }
   if (image.b64_json !== undefined) {
     // Relays may omit mime_type while returning non-PNG bytes (Ark jpeg), so
     // sniff before trusting the header to avoid IMAGE_TYPE_MISMATCH (#61).
@@ -470,11 +705,112 @@ function imageMediaType(value: string | null | undefined): ImageMediaType | unde
 
 async function readBoundedText(response: Response, maxBytes: number): Promise<string> { return new TextDecoder().decode(await readBoundedBytes(response, maxBytes)) }
 
+/**
+ * Decoders for the content codings a relay may declare. A header may list
+ * several (RFC 9110 §8.4.1): they are applied in the order listed, so they are
+ * decoded in reverse — see `decodeCompressedBody`.
+ */
+const CONTENT_DECODERS: Record<string, (input: Buffer, options: { maxOutputLength?: number }) => Buffer> = {
+  zstd: zstdDecompressSync,
+  br: brotliDecompressSync,
+  gzip: gunzipSync,
+  deflate: inflateSync,
+}
+
+/** `maxOutputLength` trips this rather than returning a short result. */
+function isOutputLimitError(error: unknown): boolean {
+  return error instanceof RangeError && (error as { code?: unknown }).code === 'ERR_BUFFER_TOO_LARGE'
+}
+
+/** Raised when the decoded body is larger than the caller allows. */
+class ImageResponseTooLarge extends Error {
+  constructor(maxBytes: number) {
+    super(`Image response exceeded the ${String(maxBytes)} byte limit after decompression`)
+    this.name = 'ImageResponseTooLarge'
+  }
+}
+
+/**
+ * Decode a response body a relay sent compressed while the runtime did not
+ * decode it itself.
+ *
+ * Some OpenAI-compatible relays answer with `content-encoding: zstd` (or gzip /
+ * br / deflate) and the fetch implementation in use does not always honour it.
+ * The compressed bytes then reach `JSON.parse` and surface as
+ * `openai-compat image request returned invalid JSON` — a message that points
+ * at the prompt or the site rather than at the transport, so the failure is
+ * routinely misdiagnosed.
+ *
+ * Two details matter beyond the single-coding case:
+ *
+ * - A header may list several codings (`gzip, zstd`). HTTP applies them in the
+ *   order listed, so decoding runs in reverse — decoding only the last one
+ *   would hand gzip bytes to the parser and still report invalid JSON.
+ * - The zstd magic (`28 b5 2f fd`) is also checked on its own, because a few
+ *   relays compress without declaring the header, and because a header that
+ *   disagrees with the body (the runtime already decoded it) must not stop a
+ *   body that is plainly zstd from being decoded.
+ *
+ * A decompression error means the declaration disagrees with the bytes
+ * (typically the runtime already decoded them, or the body was never
+ * compressed), so the input is returned unchanged and the caller's own parser
+ * reports the real problem. Returning the bytes untouched is deliberate:
+ * swallowing the original error here would hide the actual cause.
+ *
+ * `maxOutputLength` is passed to every decompression call so a small body that
+ * expands to hundreds of MiB is rejected *before* the buffer is allocated, and
+ * `maxBytes` is checked again afterwards. An output-limit failure is a real
+ * error and is propagated; it must not be mistaken for an encoding mismatch.
+ *
+ * Exported so the tests can drive each branch directly; at runtime it is only
+ * reached through `readBoundedBytes`.
+ */
+export function decodeCompressedBody(bytes: Uint8Array, encoding: string | null, maxBytes?: number): Uint8Array {
+  const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  const options = maxBytes === undefined ? {} : { maxOutputLength: maxBytes }
+  // HTTP lists content codings in application order, so decode them backwards.
+  const codings = String(encoding ?? '')
+    .split(',')
+    .map(coding => coding.trim().toLowerCase())
+    .filter(coding => coding.length > 0 && coding !== 'identity')
+    .reverse()
+
+  const decodeByMagic = (): Uint8Array | undefined => {
+    if (buffer.subarray(0, 4).toString('hex') !== '28b52ffd') return undefined
+    try {
+      return new Uint8Array(zstdDecompressSync(buffer, options))
+    } catch (error) {
+      if (isOutputLimitError(error) && maxBytes !== undefined) throw new ImageResponseTooLarge(maxBytes)
+      return undefined
+    }
+  }
+
+  if (codings.length === 0) return decodeByMagic() ?? bytes
+
+  try {
+    let current = buffer
+    for (const coding of codings) {
+      const decode = CONTENT_DECODERS[coding]
+      // An unknown coding is a declaration problem, not something to guess at.
+      if (decode === undefined) return decodeByMagic() ?? bytes
+      current = decode(current, options)
+    }
+    if (maxBytes !== undefined && current.byteLength > maxBytes) throw new ImageResponseTooLarge(maxBytes)
+    return new Uint8Array(current)
+  } catch (error) {
+    // A size violation is a real failure; anything else means the header
+    // disagrees with the body, so hand the bytes back for the parser to report.
+    if (error instanceof ImageResponseTooLarge) throw error
+    if (isOutputLimitError(error) && maxBytes !== undefined) throw new ImageResponseTooLarge(maxBytes)
+    return decodeByMagic() ?? bytes
+  }
+}
+
 async function readBoundedBytes(response: Response, maxBytes: number): Promise<Uint8Array> {
   if (response.body === null) return new Uint8Array()
   const reader = response.body.getReader(); const chunks: Uint8Array[] = []; let bytes = 0
   try { for (;;) { const next = await readResponseBody(response, () => reader.read()); if (next.done) break; bytes += next.value.byteLength; if (bytes > maxBytes) throw new Error(`Image response exceeded the ${String(maxBytes)} byte limit`); chunks.push(next.value) } } catch (error) { await reader.cancel().catch(() => undefined); throw error } finally { reader.releaseLock() }
   const joined = new Uint8Array(bytes); let offset = 0
   for (const chunk of chunks) { joined.set(chunk, offset); offset += chunk.byteLength }
-  return joined
+  return decodeCompressedBody(joined, response.headers.get('content-encoding'), maxBytes)
 }

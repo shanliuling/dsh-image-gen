@@ -136,9 +136,13 @@ export const PLUGIN_STYLE = `
 .dsh-ig-studio-tab-btn.is-active{color:var(--dsw-alias-brand-primary,#2563eb);font-weight:600;background:rgba(37,99,235,0.08)}
 
 /* 2. Secondary Filter & Search Toolbar */
-.dsh-ig-studio-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 24px;background:var(--dsw-alias-bg-layer-1,#ffffff);border-bottom:1px solid var(--dsw-alias-border-l2,#f1f5f9);flex-shrink:0;flex-wrap:nowrap;min-width:0}
-.dsh-ig-studio-toolbar-left{display:flex;align-items:center;gap:10px;flex-wrap:nowrap;flex:1;min-width:0}
-.dsh-ig-studio-toolbar-right{display:flex;align-items:center;gap:10px;flex-shrink:0}
+.dsh-ig-studio-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 24px;background:var(--dsw-alias-bg-layer-1,#ffffff);border-bottom:1px solid var(--dsw-alias-border-l2,#f1f5f9);flex-shrink:0;flex-wrap:wrap;row-gap:8px;min-width:0}
+/* Controls that do not fit move to the next row instead of sliding under each other (#130); a wide page still fits one row. */
+.dsh-ig-studio-toolbar-left{display:flex;align-items:center;gap:10px;flex-wrap:wrap;flex:1 1 auto;min-width:0}
+.dsh-ig-studio-toolbar-right{display:flex;align-items:center;gap:10px;flex-shrink:0;margin-left:auto}
+.dsh-ig-studio-toolbar-left>*,.dsh-ig-studio-toolbar-right>*{flex-shrink:0;white-space:nowrap}
+.dsh-ig-studio-toolbar-left>.dsh-ig-studio-search-wrap{flex:1 1 140px;flex-shrink:1}
+.dsh-ig-page-in-sidebar .dsh-ig-studio-toolbar{padding:10px 14px}
 
 /* Modern Custom Select (Removes OS default arrows & ugly borders) */
 .dsh-ig-studio-select{appearance:none;-webkit-appearance:none;-moz-appearance:none;height:32px;line-height:30px;padding:0 28px 0 12px;font-size:12.5px;color:var(--dsw-alias-label-primary,#334155);background-color:var(--dsw-alias-bg-layer-2,#ffffff);background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 9px center;border:1px solid var(--dsw-alias-border-l2,#e2e8f0);border-radius:6px;outline:none;cursor:pointer;box-sizing:border-box;transition:border-color .15s ease,box-shadow .15s ease,background-color .15s ease}

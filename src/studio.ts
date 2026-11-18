@@ -44,7 +44,7 @@ import { compatGenerationExtraBody, compatQualityOptions, compatRequestQuality, 
 import { keepGifOriginal } from './vault-registry.js'
 import { vaultConfigOf } from './vault-store.js'
 import { refreshProfileModels, widenProfileModels, withCachedChannelModels } from './channel-model-discovery.js'
-import { compatEditExtraBody, selectedWatermark, watermarkProfile } from './watermark.js'
+import { compatEditExtraBody, compatEditFormat, selectedWatermark, watermarkProfile } from './watermark.js'
 
 const LEGACY_OPENAI_TABLE: Record<string, Record<string, string>> = {
   '1:1': { '1K': '1024x1024' },
@@ -292,6 +292,11 @@ const SUBSCRIPTION_DISPLAY_LABELS: Record<SubscriptionProvider, string> = {
   'google-sub': 'Google 订阅',
 }
 
+/** A channel on ModelScope's async task flow (#140) polls for minutes, so it gets the long timeout like a GIF. */
+export function channelPollsTask(config: Config, input: Pick<StudioGenerateRequest, 'provider' | 'channel'>): boolean {
+  return input.provider === 'openai-compat' && compatEditFormat(withOpenAICompatChannel(config, input.channel)) === 'modelscopeAsync'
+}
+
 /** A generation on an OpenAI-compatible channel whose extras select GIF is a GIF request even when it carries no `output`. */
 export function channelSelectsGif(config: Config, input: Pick<StudioGenerateRequest, 'provider' | 'mode' | 'channel'>): boolean {
   return input.provider === 'openai-compat' && input.mode === 'generate'
@@ -392,7 +397,8 @@ export async function generateFromStudio(
       if (extraBody?.output_format === 'svg') throw new Error('该渠道默认输出 SVG；工作台仅支持位图，请更换渠道或调整渠道输出格式')
       generated = rasterOnly(input.mode === 'edit'
         ? await editOpenAICompatibleImage({ strictImageDownloads: requestConfig.strictImageDownloads === true, apiKey: credential, baseURL: wired.baseURL, model: wired.model, prompt: input.prompt, sourceImages, ...(size === undefined ? {} : { size }), maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal, ...(quality === undefined ? {} : { quality }), ...(extraBody === undefined ? {} : { extraBody }), ...(p === 'openai-compat' ? { editFormat: wired.editFormat, editExtra: wired.editExtra, editSizeMode: requestConfig.openaiCompatEditSizeMode ?? 'auto' } : p === 'xai' ? { editFormat: 'xaiJson' as const } : {}) })
-        : await generateOpenAICompatibleImage({ strictImageDownloads: requestConfig.strictImageDownloads === true, provider: p, apiKey: credential, baseURL: wired.baseURL, model: wired.model, prompt: input.prompt, ...(size === undefined ? {} : { size }), maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal, ...(quality === undefined ? {} : { quality }), ...(extraBody === undefined ? {} : { extraBody }) }))
+        : await generateOpenAICompatibleImage({ strictImageDownloads: requestConfig.strictImageDownloads === true, provider: p, apiKey: credential, baseURL: wired.baseURL, model: wired.model, prompt: input.prompt, ...(size === undefined ? {} : { size }), maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal, ...(quality === undefined ? {} : { quality }), ...(extraBody === undefined ? {} : { extraBody }), // The ModelScope async format also switches generation to the task flow (#140).
+          ...(p === 'openai-compat' && wired.editFormat === 'modelscopeAsync' ? { asyncImages: true } : {}) }))
       output = size ?? `${input.ratio}, ${input.quality}`
     } else if (wired.provider === 'seedream') {
       const size = cloudCapability('seedream', wired.model).sizeFor?.(input.ratio, input.quality) ?? input.quality

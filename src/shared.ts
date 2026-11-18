@@ -242,7 +242,8 @@ export interface OpenAICompatChannel {
   qualityOptions?: string[]
   extraBody?: Record<string, unknown>
   editSizeMode?: 'auto' | 'selected'
-  editFormat?: 'multipart' | 'jsonImageUrlArray' | 'formReferenceImages' | 'siliconflowJson'
+  /** `modelscopeAsync` also switches generation to the async task flow (#140). */
+  editFormat?: 'multipart' | 'jsonImageUrlArray' | 'formReferenceImages' | 'siliconflowJson' | 'modelscopeAsync'
   editExtra?: Record<string, unknown>
   sizes?: Record<string, Record<string, string>>
 }
@@ -257,7 +258,7 @@ export interface OpenAICompatChannelSource {
   openaiCompatQualityOptions?: readonly string[]
   openaiCompatExtraBody?: Record<string, unknown>
   openaiCompatEditSizeMode?: 'auto' | 'selected'
-  openaiCompatEditFormat?: 'multipart' | 'jsonImageUrlArray' | 'formReferenceImages' | 'siliconflowJson'
+  openaiCompatEditFormat?: 'multipart' | 'jsonImageUrlArray' | 'formReferenceImages' | 'siliconflowJson' | 'modelscopeAsync'
   openaiCompatEditExtra?: Record<string, unknown>
   openaiCompatSizes?: Record<string, Record<string, string>>
   openaiCompatChannels?: readonly OpenAICompatChannel[]
