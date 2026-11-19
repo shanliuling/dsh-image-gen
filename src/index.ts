@@ -117,6 +117,8 @@ interface SingleGenerationArgs {
   image_size?: string
   size?: string
   quality?: string
+  /** OpenAI/OpenAI-compatible background; transparent yields an alpha PNG. */
+  background?: 'auto' | 'opaque' | 'transparent'
   workflow?: string
   output_format?: string
   frame_count?: number
@@ -127,7 +129,7 @@ interface SingleGenerationArgs {
 function cleanImageToolArgs<T extends SingleGenerationArgs>(args: T): T {
   const clean = { ...args }
   const fields = clean as Record<string, unknown>
-  for (const key of ['model', 'channel', 'size', 'aspect_ratio', 'image_size', 'quality', 'workflow', 'output_format']) {
+  for (const key of ['model', 'channel', 'size', 'aspect_ratio', 'image_size', 'quality', 'background', 'workflow', 'output_format']) {
     const value = fields[key]
     if (typeof value !== 'string') continue
     if (value.trim().length === 0) delete fields[key]
@@ -480,6 +482,10 @@ export function apply(ctx: Context, config: Config = {}): void {
     const requestConfig = configForToolCall(current(), providerOverrideOf(args.provider), args.channel)
     const active = resolveProvider(withProviderOverrides(requestConfig, providerOverrideOf(args.provider), args.model))
     assertGifProvider(args, active.provider)
+    if (args.background !== undefined) {
+      if (args.background !== 'auto' && args.background !== 'opaque' && args.background !== 'transparent') throw new Error('background must be "auto", "opaque" or "transparent"')
+      if (active.provider !== 'openai' && active.provider !== 'openai-compat') throw new Error('background is only supported with provider=openai or openai-compat')
+    }
     if (active.provider === 'comfyui') {
       const workflow = selectComfyUIWorkflow(active, args.workflow)
       const slots = comfyUIWorkflowSlots(workflow.json)
@@ -582,7 +588,13 @@ export function apply(ctx: Context, config: Config = {}): void {
     const channelExtras = svgRequested && channelExtraBody !== undefined
       ? Object.fromEntries(Object.entries(channelExtraBody).filter(([key]) => !SVG_INCOMPATIBLE_EXTRAS.has(key)))
       : channelExtraBody
-    const extraBody = channelExtras !== undefined ? { ...channelExtras, ...outputFields } : Object.keys(outputFields).length === 0 ? undefined : outputFields
+    // A per-call background is merged after the channel defaults, so a call
+    // can ask for a transparent PNG without changing the channel's default.
+    const perCallBackground = args.background !== undefined ? { background: args.background } : undefined
+    const mergedExtras = channelExtras === undefined && perCallBackground === undefined
+      ? undefined
+      : { ...(channelExtras ?? {}), ...(perCallBackground ?? {}) }
+    const extraBody = mergedExtras !== undefined ? { ...mergedExtras, ...outputFields } : Object.keys(outputFields).length === 0 ? undefined : outputFields
     const asyncTask = active.provider === 'openai-compat' && active.editFormat === 'modelscopeAsync'
     const generated = await runCloud(signal => generateOpenAICompatibleImage({
       strictImageDownloads: current().strictImageDownloads === true,
@@ -627,6 +639,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       image_size: { type: 'string', enum: ['1K', '2K', '4K'], description: 'Optional output resolution for Google Gemini, xAI Grok, Grok subscription (1K/2K), or Google subscription (1K/4K). NEVER send this for chatgpt-sub; omit unused fields entirely.' },
       size: { type: 'string', description: 'Optional dimensions or size tier for OpenAI, Seedream, or DashScope; WIDTHxHEIGHT maps to aspect_ratio for xAI Grok and sets the frame of ComfyUI workflows with {{width}}/{{height}} placeholders. Do not combine with aspect_ratio; omit instead of using an empty string.' },
       quality: { type: 'string', description: 'Optional generation quality for OpenAI or compatible APIs, independent of pixel size (e.g. auto, low, medium, high). Omit to use the configured default.' },
+      background: { type: 'string', enum: ['auto', 'opaque', 'transparent'], description: 'Optional output background for provider=openai or openai-compat. Use "transparent" only when the user explicitly asks for a transparent PNG / transparent background; omit otherwise. When transparency is requested, pass it instead of generating on a solid background and removing the background yourself.' },
       workflow: { type: 'string', description: 'Optional name of the ComfyUI workflow to run; omit to use the active workflow from settings. Only meaningful when the ComfyUI provider is selected.' },
       ...gifToolParameters,
     },
@@ -649,6 +662,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       image_size: { type: 'string', enum: ['1K', '2K', '4K'], description: 'Optional output resolution for Google Gemini, xAI Grok, Grok subscription (1K/2K), or Google subscription (1K/4K). NEVER send this for chatgpt-sub; omit unused fields entirely.' },
       size: { type: 'string', description: 'Optional dimensions or size tier for OpenAI, Seedream, or DashScope; WIDTHxHEIGHT maps to aspect_ratio for xAI Grok and sets the frame of ComfyUI workflows with {{width}}/{{height}} placeholders.' },
       quality: { type: 'string', description: 'Optional OpenAI or compatible generation quality, applied to every item independently of size.' },
+      background: { type: 'string', enum: ['auto', 'opaque', 'transparent'], description: 'Optional output background for provider=openai or openai-compat. Use "transparent" only when the user explicitly asks for a transparent PNG / transparent background; omit otherwise. When transparency is requested, pass it instead of generating on a solid background and removing the background yourself.' },
       workflow: { type: 'string', description: 'Optional name of the ComfyUI workflow to run; omit to use the active workflow from settings.' },
       ...gifToolParameters,
     },
@@ -710,6 +724,7 @@ export function apply(ctx: Context, config: Config = {}): void {
             ...(args.image_size !== undefined ? { image_size: args.image_size } : {}),
             ...(args.size !== undefined ? { size: args.size } : {}),
             ...(args.quality !== undefined ? { quality: args.quality } : {}),
+            ...(args.background !== undefined ? { background: args.background } : {}),
             ...(args.workflow !== undefined ? { workflow: args.workflow } : {}),
             ...(args.output_format !== undefined ? { output_format: args.output_format } : {}),
             ...(args.frame_count !== undefined ? { frame_count: args.frame_count } : {}),
@@ -742,6 +757,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       image_size: { type: 'string', enum: ['1K', '2K', '4K'], description: 'Optional output resolution for Google Gemini, xAI Grok, Grok subscription (1K/2K), or Google subscription (1K/4K). NEVER send this for chatgpt-sub; omit unused fields entirely.' },
       size: { type: 'string', description: 'Optional output size for OpenAI, Seedream, or DashScope; WIDTHxHEIGHT maps to aspect_ratio for xAI Grok and sets the frame of ComfyUI workflows with {{width}}/{{height}} placeholders.' },
       quality: { type: 'string', description: 'Optional generation quality for OpenAI or compatible edits, independent of size.' },
+      background: { type: 'string', enum: ['auto', 'opaque', 'transparent'], description: 'Optional output background for provider=openai or openai-compat. Use "transparent" only when the user explicitly asks for a transparent PNG / transparent background; omit otherwise. When transparency is requested, pass it instead of generating on a solid background and removing the background yourself.' },
       workflow: { type: 'string', description: 'Optional name of the ComfyUI workflow to run; omit to use the active workflow from settings. Only meaningful when the ComfyUI provider is selected. The source images fill the workflow\'s {{image}} inputs in node order, so pass as many images as it has inputs.' },
       ...editGifToolParameters,
     },
@@ -751,6 +767,10 @@ export function apply(ctx: Context, config: Config = {}): void {
       const requestConfig = configForToolCall(current(), providerOverrideOf(args.provider), args.channel)
       const active = resolveProvider(withProviderOverrides(requestConfig, providerOverrideOf(args.provider), args.model, 'edit'))
       assertGifProvider(args, active.provider)
+      if (args.background !== undefined) {
+        if (args.background !== 'auto' && args.background !== 'opaque' && args.background !== 'transparent') throw new Error('background must be "auto", "opaque" or "transparent"')
+        if (active.provider !== 'openai' && active.provider !== 'openai-compat') throw new Error('background is only supported with provider=openai or openai-compat')
+      }
       const canvasSelection = args.source === 'canvas_selection'
       if (canvasSelection && (
         args.source_attachment_id !== undefined
@@ -830,6 +850,10 @@ export function apply(ctx: Context, config: Config = {}): void {
         // leaves the frame size to the provider.
         const gifFields = gifRequestFields({ outputFormat: args.output_format, frameCount: args.frame_count, frameDurationMs: args.frame_duration_ms })
         const gifRequested = gifFields.output_format === 'gif'
+        const perCallBackground = args.background !== undefined ? { background: args.background } : undefined
+        const editExtraBody = gifRequested || perCallBackground !== undefined
+          ? { ...(gifRequested ? gifFields : {}), ...(perCallBackground ?? {}) }
+          : undefined
         const editSize = gifRequested && args.size === undefined ? undefined : size
         if (active.provider === 'openai' && editSize !== undefined) {
           if (gifRequested) validateGifFrameSize(editSize)
@@ -838,7 +862,7 @@ export function apply(ctx: Context, config: Config = {}): void {
         const quality = active.provider === 'openai-compat' ? compatRequestQuality(requestConfig, args.quality) : active.provider === 'openai' ? args.quality : undefined
         if (active.provider === 'openai' && quality !== undefined && !officialQualityOptions(active.model).some(option => option.value === quality)) throw new Error('该 OpenAI 模型不支持所选生成质量')
         const xaiExtraBody = active.provider === 'xai' ? xaiToolParameters({ ...(args.aspect_ratio !== undefined ? { aspectRatio: args.aspect_ratio } : {}), ...(args.image_size !== undefined ? { imageSize: args.image_size } : {}), ...(args.size !== undefined ? { size: args.size } : {}) }) : undefined
-        const editRequest = { strictImageDownloads: current().strictImageDownloads === true, apiKey: credential, baseURL: active.baseURL, model: active.model, prompt: args.prompt, sourceImages, ...(active.provider === 'xai' || editSize === undefined ? {} : { size: editSize }), ...(quality === undefined ? {} : { quality }), maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal: exec.signal, ...(gifRequested ? { extraBody: gifFields } : {}), ...(active.provider === 'openai-compat' ? { editFormat: active.editFormat, editExtra: active.editExtra, editSizeMode: requestConfig.openaiCompatEditSizeMode ?? 'auto', editResponseFormat: 'auto' as const, onResponseFormatRetry: (status: number) => { ctx.logger.warn('dsh-image-gen: openai-compatible relay rejected response_format=b64_json (' + String(status) + '); retrying without it') } } : active.provider === 'xai' ? { editFormat: 'xaiJson' as const, ...(xaiExtraBody === undefined ? {} : { extraBody: xaiExtraBody }) } : {}) }
+        const editRequest = { strictImageDownloads: current().strictImageDownloads === true, apiKey: credential, baseURL: active.baseURL, model: active.model, prompt: args.prompt, sourceImages, ...(active.provider === 'xai' || editSize === undefined ? {} : { size: editSize }), ...(quality === undefined ? {} : { quality }), maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal: exec.signal, ...(editExtraBody === undefined ? {} : { extraBody: editExtraBody }), ...(active.provider === 'openai-compat' ? { editFormat: active.editFormat, editExtra: active.editExtra, editSizeMode: requestConfig.openaiCompatEditSizeMode ?? 'auto', editResponseFormat: 'auto' as const, onResponseFormatRetry: (status: number) => { ctx.logger.warn('dsh-image-gen: openai-compatible relay rejected response_format=b64_json (' + String(status) + '); retrying without it') } } : active.provider === 'xai' ? { editFormat: 'xaiJson' as const, ...(xaiExtraBody === undefined ? {} : { extraBody: xaiExtraBody }) } : {}) }
         // ModelScope edits poll for minutes, so the configured cloud timeout
         // must bound them exactly like generation (#143 review). Other edit
         // formats are single synchronous requests and stay unchanged.

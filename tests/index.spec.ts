@@ -114,6 +114,27 @@ describe('image tool registration', () => {
     vi.unstubAllGlobals()
   })
 
+  it('forwards a per-call background and lets it override the channel default', async () => {
+    const { ctx, tools } = harnessContext()
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: [{ b64_json: 'iVBORw0KGgo=' }] }), { headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    apply(ctx, { provider: 'openai-compat', openaiCompatBaseURL: 'https://relay.example/v1', openaiCompatModel: 'relay', openaiCompatExtraBody: { watermark: false, background: 'opaque' }, saveToWorkspace: false })
+    const exec = { signal: new AbortController().signal } as never
+    await toolByName(tools, 'generate_image').execute({ prompt: 'cutout', background: 'transparent' }, exec)
+    await toolByName(tools, 'generate_images').execute({ prompts: ['one', 'two'], background: 'transparent' }, exec)
+    expect(fetchMock.mock.calls.map(([, init]) => JSON.parse(String(init?.body)))).toEqual([
+      { model: 'relay', prompt: 'cutout', size: '1024x1024', watermark: false, background: 'transparent' },
+      { model: 'relay', prompt: 'one', size: '1024x1024', watermark: false, background: 'transparent' },
+      { model: 'relay', prompt: 'two', size: '1024x1024', watermark: false, background: 'transparent' },
+    ])
+    vi.mocked(ctx.attachments.readImage).mockResolvedValue({ data: new Uint8Array([137, 80, 78, 71]), ref: attachment('source') } as never)
+    await toolByName(tools, 'edit_image').execute({ prompt: 'cutout', background: 'transparent' }, execWithUserImages('source'))
+    const editForm = fetchMock.mock.calls.at(-1)?.[1]?.body as FormData
+    expect(editForm.get('background')).toBe('transparent')
+    await expect(toolByName(tools, 'generate_image').execute({ prompt: 'bad', background: 'checker' } as never, exec)).rejects.toThrow('background')
+    vi.unstubAllGlobals()
+  })
+
   it('routes a named compat channel with its own credential and returns its channel id', async () => {
     const { ctx, tools } = harnessContext()
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: [{ b64_json: 'iVBORw0KGgo=' }] }), { headers: { 'content-type': 'application/json' } }))
