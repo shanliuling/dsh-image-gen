@@ -1,5 +1,15 @@
 <div align="center">
 
+<p align="center">
+  <img src="docs/assets/readme/logo-wordmark.webp" alt="dsh-image-gen 鲸鱼娘横版 Logo" width="760" />
+</p>
+
+<p align="center">
+  <img src="docs/assets/readme/logo-icon.webp" alt="dsh-image-gen 鲸鱼娘图标" width="120" />
+</p>
+
+<br />
+
 <img src="docs/assets/readme/hero-zh.webp" alt="dsh-image-gen 中文功能概览" width="100%" />
 
 <br />
