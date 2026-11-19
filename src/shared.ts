@@ -609,24 +609,23 @@ export interface ArkOutputOptions {
   outputFormat?: ArkOutputFormat
   /** `watermark`. Ark defaults to `true`, which bakes an "AI generated" mark into the image. */
   watermark?: boolean
-  /** `background`. Ark defaults to `opaque`. */
+  /** `background`. Ark defaults to `opaque`, or `auto` on Seedream 5.5. */
   background?: ArkBackgroundMode
 }
 
 /**
  * Map the Ark output controls onto request-body fields.
  *
- * `background` is opt-in per call site because Ark restricts `transparent` to
- * image-to-image with a single alpha-bearing reference and rejects the whole
- * request otherwise:
+ * `background` is opt-in per call site because text-to-image transparency
+ * depends on the model. Seedream 5.5 accepts it; 5.0 pro / flash restrict
+ * `transparent` to image-to-image with a single alpha-bearing reference and
+ * reject the whole request otherwise:
  *
  *   text-to-image + transparent → 400 InvalidParameter
  *     "transparent background requires exactly one input image"
  *
- * So the generation endpoint must never carry it, and that caller passes
- * `{ background: false }`. `background: opaque` is never emitted anywhere: it
- * is already Ark's default, so sending it would change nothing while adding a
- * field only the edit path can act on.
+ * The generation caller enables it via `seedreamGeneratesTransparent`.
+ * `opaque` is never sent; each model keeps its own default.
  */
 export function arkOutputBody(
   options: ArkOutputOptions | undefined,
@@ -638,6 +637,11 @@ export function arkOutputBody(
   if (options.watermark !== undefined) body.watermark = options.watermark
   if (background && options.background === 'transparent') body.background = 'transparent'
   return body
+}
+
+/** Whether text-to-image accepts `background: transparent`: Seedream 5.5 only. */
+export function seedreamGeneratesTransparent(model: string): boolean {
+  return /seedream-5-5(?:-\d+)?$/.test(model)
 }
 
 /** Default model names. */

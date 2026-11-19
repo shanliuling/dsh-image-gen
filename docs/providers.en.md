@@ -30,7 +30,7 @@ Default models, endpoints, aspect ratios / quality tiers, and advanced configura
 | Google Gemini | 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 4:5 · 5:4 · 16:9 · 9:16 · 21:9 | 1K / 2K / 4K |
 | OpenAI Images | gpt-image-2 family: 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 | Resolution: 1K / 2K (also 4K for landscape/portrait widescreen); separate quality: auto / low / medium / high |
 | OpenAI Compatible | Driven by `openaiCompatSizes` (default 1:1 · 3:2 · 2:3) | Resolution from the size table; separate configurable quality, omitted by default |
-| ByteDance Seedream | auto · 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 · 21:9 | 5.0 pro / flash: 1K / 1.5K / 2K; earlier models: 2K / 3K / 4K |
+| ByteDance Seedream | auto · 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 · 21:9 | 5.5, 5.0 pro / flash: 1K / 1.5K / 2K; earlier models: 2K / 3K / 4K |
 | Aliyun DashScope | 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 | standard |
 | xAI Grok Imagine | auto · 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 · 21:9 | 1K / 2K |
 | Zhipu GLM-Image | 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 | hd |

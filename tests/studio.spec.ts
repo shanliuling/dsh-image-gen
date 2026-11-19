@@ -113,6 +113,8 @@ describe('image workbench provider capabilities', () => {
     // a guaranteed upstream error.
     expect(seedream.ratioOptions.map(o => o.value)).toEqual(['auto', '1:1', '4:3', '3:4', '16:9', '9:16', '3:2', '2:3', '21:9'])
     expect(seedream.qualityOptions.map(o => o.value)).toEqual(['1K', '1.5K', '2K'])
+    expect(studioProfile({ seedreamModel: 'doubao-seedream-5-5-261028' }, 'seedream', true).qualityOptions.map(o => o.value)).toEqual(['1K', '1.5K', '2K'])
+    expect(studioProfile({ seedreamModel: 'doubao-seedream-5-5-261028-lite' }, 'seedream', true).qualityOptions.map(o => o.value)).toEqual(['2K', '3K', '4K'])
     expect(studioProfile({ seedreamModel: 'doubao-seedream-4-0-250828' }, 'seedream', true).qualityOptions.map(o => o.value)).toEqual(['2K', '3K', '4K'])
     // A saved retired model, the former default among them, runs on its replacement.
     expect(studioProfile({ seedreamModel: 'doubao-seedream-5-0-260128' }, 'seedream', true).model).toBe(DEFAULT_SEEDREAM_MODEL)
