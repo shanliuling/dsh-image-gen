@@ -6,7 +6,7 @@
 
 <p><strong>简体中文</strong> · <a href="README.en.md">English</a></p>
 
-# <img src="docs/assets/readme/logo-icon.webp" alt="鲸鱼娘" width="42" height="42" /> dsh-image-gen
+# <img src="docs/assets/readme/logo-icon.webp" alt="鲸鱼娘" width="58" height="58" align="middle" /> dsh-image-gen
 
 ### 在 DeepSeek Harness 里，用说话的方式画图
 
