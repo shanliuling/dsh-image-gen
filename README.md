@@ -1,22 +1,12 @@
 <div align="center">
 
-<p align="center">
-  <img src="docs/assets/readme/logo-wordmark.webp" alt="dsh-image-gen 鲸鱼娘横版 Logo" width="760" />
-</p>
-
-<p align="center">
-  <img src="docs/assets/readme/logo-icon.webp" alt="dsh-image-gen 鲸鱼娘图标" width="120" />
-</p>
-
-<br />
-
 <img src="docs/assets/readme/hero-zh.webp" alt="dsh-image-gen 中文功能概览" width="100%" />
 
 <br />
 
 <p><strong>简体中文</strong> · <a href="README.en.md">English</a></p>
 
-# 🎨 dsh-image-gen
+# <img src="docs/assets/readme/logo-icon.webp" alt="鲸鱼娘" width="42" height="42" /> dsh-image-gen
 
 ### 在 DeepSeek Harness 里，用说话的方式画图
 
