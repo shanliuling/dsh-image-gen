@@ -93,6 +93,12 @@ async function requestNvidiaImage(
 
   if (!response.ok) {
     const errorText = redactSecrets(await readResponseBody(response, () => response.text()), options.apiKey)
+    // The public build.nvidia.com preview endpoint only accepts the four canned
+    // example_id reference images; real data URLs are rejected with
+    // "Expected: example_id, got: base64" until the production endpoint ships.
+    if (errorText.includes('example_id')) {
+      throw new Error('NVIDIA NIM 编辑被拒：当前公共端点为 Preview API，仅接受 4 张预置参考图（data:image/png;example_id,0-3），不支持自定义参考图；需等待生产端点或自部署 NIM (422)')
+    }
     throw new Error(`NVIDIA NIM image request failed (${String(response.status)}): ${errorText}`)
   }
 

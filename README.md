@@ -157,7 +157,7 @@ mock 方式与 `dashscope.spec.ts` 相同：`vi.stubGlobal('fetch', ...)` + `Res
 - **`quality` 工具参数**：对 nvidia 无效（端点无该字段）；工作台 quality 固定「标准」
 - **不发送** `seed` / `negative_prompt` / `n`：`ImageRequest` 无这些字段且 `additionalProperties: false`，发送即 422
 - **`samples` 固定 1**：上游限制
-- **Preview 环境**：`image` 仅接受 example_id 0–3；插件按正式端点契约实现（真实 data-URL，≤10 张）
+- **公共 Preview 端点（实测 2026-11-21）**：编辑时 `image` 仅接受 4 张预置参考图（`data:image/png;example_id,0-3`），自定义 data-URL 被 422 拒绝（`Expected: example_id, got: base64`）；插件按正式端点契约实现（真实 data-URL，≤10 张），适配器对该拒绝给出明确中文提示，生产端点开放（或自部署 NIM）后编辑即可用
 - **水印控件**：对 nvidia 显示「支持未确认」（复用通用逻辑）
 
 ## 5. 配置与使用方式

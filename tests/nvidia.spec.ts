@@ -68,6 +68,16 @@ describe('generateNvidiaImage', () => {
   })
 })
 
+describe('preview endpoint example_id rejection', () => {
+  it('maps the preview example_id rejection to a user-facing hint', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ detail: [{ type: 'value_error', loc: ['body'], msg: 'Expected: example_id, got: base64' }] }, { status: 422 })))
+    const source = { data: new Uint8Array(jpegBytes), mediaType: 'image/jpeg' as const }
+    await expect(editNvidiaImage({
+      apiKey: 'nvapi-test', endpoint, model, prompt: 'x', sourceImages: [source], maxBytes: 1024 * 1024, signal,
+    })).rejects.toThrow('example_id')
+  })
+})
+
 describe('editNvidiaImage', () => {
   it('sends reference images as data URLs in the image array', async () => {
     const fetchMock = vi.fn(async () => jsonResponse(okArtifact(jpegBytes)))
