@@ -53,6 +53,23 @@
 
 <br />
 
+<details>
+<summary><strong>其他安装方式（全局 / GitHub 直装 / 本地调试）</strong></summary>
+
+```bash
+# 若已将 dsh 安装为系统全局命令：
+dsh plugin --profile web add dsh-image-gen@latest
+
+# 从 GitHub 仓库直接安装最新代码：
+pnpm dsh plugin --profile web add git+https://github.com/shanliuling/dsh-image-gen.git
+
+# 本地克隆源码开发安装：
+git clone https://github.com/shanliuling/dsh-image-gen.git
+pnpm dsh plugin --profile web add ./dsh-image-gen
+```
+
+</details>
+
 `dsh-image-gen` 是 DeepSeek Harness 的原生图像创作插件。它不是在对话框里塞一个生图按钮，而是让 **Agent 本身学会画图**：它能一次规划并生成一整组图，能看懂你在画布上的涂鸦和圈选，能自己去灵感库里找合适的风格模板。需要精细控制时，还有 Studio 工作台、多模型对比和图库。
 
 > **已有 ChatGPT、Grok 或 Google 订阅？直接登录即可生图，无需额外购买 API Key。**
@@ -108,23 +125,6 @@ pnpm dsh plugin --profile web add dsh-image-gen@latest
 
 > 💬 **极客提示**：你也可以直接把这句话发送给 DSH 对话中的 Agent：<br />
 > `帮我安装生图插件，在终端执行：pnpm dsh plugin --profile web add dsh-image-gen@latest`
-
-<details>
-<summary><strong>其他安装方式（全局 / GitHub 直装 / 本地调试）</strong></summary>
-
-```bash
-# 若已将 dsh 安装为系统全局命令：
-dsh plugin --profile web add dsh-image-gen@latest
-
-# 从 GitHub 仓库直接安装最新代码：
-pnpm dsh plugin --profile web add git+https://github.com/shanliuling/dsh-image-gen.git
-
-# 本地克隆源码开发安装：
-git clone https://github.com/shanliuling/dsh-image-gen.git
-pnpm dsh plugin --profile web add ./dsh-image-gen
-```
-
-</details>
 
 ### 2. 配置 Provider
 
@@ -498,37 +498,3 @@ pnpm dsh plugin --profile web add dsh-image-gen@latest
 升级后重启对应的 DSH Profile。
 
 </details>
-
----
-
-## 本地开发
-
-```bash
-git clone https://github.com/shanliuling/dsh-image-gen.git
-cd dsh-image-gen
-
-pnpm install
-pnpm run typecheck
-pnpm test
-pnpm run build
-pnpm run pack:check
-pnpm run test:package
-```
-
-依赖要求与 `test:package` 的测试范围等维护者说明见 [CONTRIBUTING.md](CONTRIBUTING.md)。欢迎通过 [Issues](https://github.com/shanliuling/dsh-image-gen/issues) 反馈问题，或阅读贡献指南后提交 Pull Request。
-
-## 鸣谢
-
-- [AtomGit](https://atomgit.com/shanliuling/dsh-image-gen)：为本项目提供国内代码托管，方便国内用户访问与获取源码。
-
-## License
-
-本项目基于 [Apache License 2.0](LICENSE) 开源。
-
-<div align="center">
-
-如果 `dsh-image-gen` 对你的工作流有所帮助，欢迎在 GitHub 点亮一颗 ⭐ **Star** 支持持续维护。
-
-**[查看 Releases](https://github.com/shanliuling/dsh-image-gen/releases) · [提交 Issue](https://github.com/shanliuling/dsh-image-gen/issues) · [参与贡献](CONTRIBUTING.md)**
-
-</div>
