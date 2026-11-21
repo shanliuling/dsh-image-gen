@@ -1,87 +1,172 @@
-<div align="center">
+# dsh-image-gen · NVIDIA NIM（FLUX.3 Klein）接入改动清单
 
-<img src="docs/assets/readme/hero-zh.webp" alt="dsh-image-gen 中文功能概览" width="100%" />
+> **分支** `feat/nvidia-nim-provider` · **基线** v0.11.4（main @ 11891ab） · **实现提交** `8b658c1`（15 个文件，+355/−12）
+> **验证状态** `pnpm typecheck` 0 错误 · vitest 全套 85 文件 / 1225 测试通过（含新增 6 例）
+> 本 README 仅收录本次接入的改动说明，供上游作者逐条核实；原项目介绍见上游 main 分支。
 
-<br />
+## 目录
 
-<p><strong>简体中文</strong> · <a href="README.en.md">English</a></p>
+1. [为什么要新增 provider（接口契约）](#1-为什么要新增-provider接口契约)
+2. [新增文件逐项说明](#2-新增文件)
+3. [修改文件逐项说明（13 个）](#3-修改文件13-个)
+4. [明确不做 / 已知限制](#4-明确不做--已知限制)
+5. [配置与使用方式](#5-配置与使用方式)
+6. [核实命令与预期结果](#6-核实命令与预期结果)
 
-# <img src="docs/assets/readme/logo-icon.webp" alt="鲸鱼娘" width="58" height="58" align="middle" /> dsh-image-gen
+## 1. 为什么要新增 provider（接口契约）
 
-### 在 DeepSeek Harness 里，用说话的方式画图
+NVIDIA NIM 对该模型暴露的是**自定义 genai 契约，不是 OpenAI Images 协议**，无法复用 `openai-compatible.ts` 共用适配器（它面向 `/images/generations` + `b64_json`/URL 形态），因此仿照 `dashscope.ts` 的原生 provider 模式新增 `src/nvidia.ts`。关键差异：
 
-<p><b>对话批量生图 · GIF 动图 · 看得懂草图的 AI 画布 · Agent 自动套用 500+ Prompt 灵感 · 订阅账号免 Key</b></p>
+- 端点 `POST https://ai.api.nvidia.com/v1/genai/{model}`，**模型 id 在 URL 路径里，不在 body**
+- 请求体 `ImageRequest` 且 `additionalProperties: false` —— 只允许 7 个字段，多发任何字段直接 422
+- 响应是 `{ artifacts: [{ base64 (JPEG), finishReason }] }`，没有 OpenAI 的 `data[0].b64_json` / URL 形态
 
-<p>
-  <a href="https://www.npmjs.com/package/dsh-image-gen"><img src="https://img.shields.io/npm/v/dsh-image-gen?style=flat-square&color=4f6ef7" alt="npm version" /></a>
-  <a href="https://www.npmjs.com/package/dsh-image-gen"><img src="https://img.shields.io/npm/dm/dsh-image-gen?style=flat-square&color=10b981" alt="npm downloads" /></a>
-  <a href="https://trendoday.com/github/repo/shanliuling/dsh-image-gen"><img src="https://trendoday.com/badge/github/repo/shanliuling/dsh-image-gen.svg?style=flat" alt="Trendoday · GitHub Trending TypeScript 日榜第 8 名" /></a>
-  <a href="https://dshmarket.com/categories/workflow/"><img src="https://img.shields.io/badge/DSH%20Market-Workflow%20%E4%B8%8B%E8%BD%BD%E6%A6%9C%20%232-A45023?style=flat-square" alt="DSH Market Workflow 分类下载榜第 2 名" /></a>
-  <a href="https://github.com/shanliuling/dsh-image-gen/stargazers"><img src="https://img.shields.io/github/stars/shanliuling/dsh-image-gen?style=flat-square" alt="GitHub stars" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-f5c542?style=flat-square" alt="License: Apache-2.0" /></a>
-  <a href="https://linux.do/"><img src="https://img.shields.io/badge/LINUX%20DO-社区友链-555?style=flat-square" alt="LINUX DO" /></a>
-</p>
+### 1.1 请求契约（ImageRequest）
 
-<p>
-  <a href="https://trendshift.io/repositories/167406"><img src="https://trendshift.io/api/badge/repositories/167406" alt="GitHub Trending TypeScript 日榜第 8 名 · Trendshift" width="182" height="40" /></a>
-  <a href="https://trendoday.com/github/repo/shanliuling/dsh-image-gen"><img src="https://trendoday.com/badge/github/repo/shanliuling/dsh-image-gen.svg" alt="GitHub Trending TypeScript 日榜第 8 名 · Trendoday" height="40" /></a>
-  <a href="https://atomgit.com/shanliuling/dsh-image-gen"><img src="https://atomgit.com/shanliuling/dsh-image-gen/star/new_badge.svg" alt="AtomGit" height="40" /></a>
-</p>
+| 字段 | 类型 | 范围 | 默认 | 说明 |
+| :--- | :--- | :--- | :--- | :--- |
+| `prompt` | string | 必填，≤2000 字符 | — | 生成/编辑共用的文本提示 |
+| `width` | integer | 512–1568，16 的倍数 | 1024 | 与 height 乘积 ≤ 1,062,400 像素 |
+| `height` | integer | 512–1568，16 的倍数 | 1024 | 同上 |
+| `cfg_scale` | number | >1，≤20 | 3.5 | prompt 遵从度 |
+| `steps` | integer | 1–50 | 50 | 扩散步数 |
+| `image` | string[] | data-URL，≤10 张 | — | 编辑参考图；Preview 环境仅接受 example_id 0–3 |
+| `samples` | integer | 仅 1 | 1 | 上游限制 |
 
-<p>
-  <a href="#一句话就能做到">一句话就能做到</a> ·
-  <a href="#快速开始">快速开始</a> ·
-  <a href="#核心能力">核心能力</a> ·
-  <a href="#provider-支持情况">Provider 支持</a> ·
-  <a href="#常见问题">常见问题</a>
-</p>
+### 1.2 响应契约（ImageResponse）
 
-<br />
+- `artifacts[0].base64`：JPEG 字节流的 base64 字符串（魔数 `/9j/` 开头）
+- `artifacts[0].finishReason`：`SUCCESS`（成功）/ `ERROR`（失败）/ `CONTENT_FILTERED`（命中内容过滤）
+- 422：`HTTPValidationError { detail: [{ loc, msg, type }] }`
 
-<table>
-  <tr>
-    <td width="50%" align="center"><b>🔁 一句话，一整组图</b><br /><sub>一条消息Agent 批量生成几十张图片</sub></td>
-    <td width="50%" align="center"><b>✏️ 画个草图、圈个地方，AI 就懂</b><br /><sub>圈出剑 → 换成斧头 · 火柴人 → 成图</sub></td>
-  </tr>
-  <tr>
-    <td><a href="#chat-batch"><img src="docs/assets/readme/hero-batch.webp" alt="一条消息写 5 个画面，Agent 逐张生成并收进图库" width="100%" /></a></td>
-    <td><a href="#ai-canvas"><img src="docs/assets/readme/hero-canvas.webp" alt="在画布上圈出剑换成战斧，再把火柴人草图变成二次元剑士" width="100%" /></a></td>
-  </tr>
-</table>
+## 2. 新增文件
 
-</div>
+### 2.1 `src/nvidia.ts`（143 行）
 
-<br />
+**导出接口与函数**
 
-<details>
-<summary><b>🔨 NVIDIA NIM 接入改动清单（供 review 核实）</b></summary>
+- `NvidiaImageOptions`：`apiKey` / `endpoint` / `model` / `prompt` / `size?`（WIDTHxHEIGHT）/ `cfgScale?` / `steps?` / `maxBytes` / `strictImageDownloads?` / `signal?`
+- `NvidiaEditOptions extends NvidiaImageOptions`：`sourceImages: Array<{ data: Uint8Array; mediaType }>`
+- `generateNvidiaImage(options)` / `editNvidiaImage(options)` → `Promise<{ data: Uint8Array; mediaType }>`
 
-<br />
+**内部实现与校验顺序**（校验全部在发请求之前完成）
 
-本次新增 <b>NVIDIA NIM</b> provider（build.nvidia.com 的 FLUX.3 klein 原生 API），共 15 个文件（+355/−12）。接口为自定义契约（非 OpenAI 兼容）：`POST https://ai.api.nvidia.com/v1/genai/{model}`，模型 id 在 URL 路径；请求体 `ImageRequest`（`prompt` ≤2000 字；`width`/`height` 512–1568、16 的倍数、面积 ≤1,062,400；`cfg_scale` 默认 3.5；`steps` 默认 50；编辑传 `image` data-URL 数组，≤10 张参考图）；响应 `{artifacts:[{base64 (JPEG), finishReason}]}`，`CONTENT_FILTERED` 会转成用户可读报错。
+1. `prompt` 长度 > 2000 → 抛错（含实际长度）
+2. `parseNvidiaSize()`：解析 `WIDTHxHEIGHT`，三重校验——每边 512–1568、16 的倍数、面积 ≤ 1,062,400；非法直接抛错，不发请求
+3. URL 拼接：`endpoint` 去尾斜杠 + `/genai/` + `model`（模型 id 含 `/`，如 `black-forest-labs/flux-3-image-klein`）
+4. 请求头：`content-type: application/json` + `accept: application/json` + `authorization: Bearer {key}`
+5. 请求体只组 schema 字段：`prompt` / `width` / `height`，可选 `cfg_scale` / `steps`，编辑时追加 `image`（参考图转 data-URL 数组）
+6. 非 2xx：读响应体经 `redactSecrets` 脱敏后抛错（含 HTTP 状态码）
+7. `artifacts[0]` 缺失或 `base64` 为空 → 报错（含脱敏后的 `message`/`title`）
+8. `finishReason !== 'SUCCESS'`：`CONTENT_FILTERED` 转成用户可读的中文提示，其余 reason 原样抛出
+9. `maxBytes` 上限检查；`detectImageMediaType` 按魔数嗅探媒体类型（不信任声明，杜绝 `IMAGE_TYPE_MISMATCH`）
+10. 编辑入口：0 张参考图拒绝；超过 10 张拒绝（报错带实际数量）
 
-<b>新增文件</b>
+**复用的既有基础设施**（与 `dashscope.ts` 同一套）：`guardedFetch` / `readResponseBody`（fetch-diagnostics）、`redactSecrets`（redact）、`detectImageMediaType`（reference-image）
 
-- `src/nvidia.ts`（143 行）— 适配器：`generateNvidiaImage` / `editNvidiaImage`；尺寸/prompt 长度/参考图数校验在发请求前完成；base64 解码后按魔数嗅探媒体类型；错误体经 `redactSecrets` 脱敏
-- `tests/nvidia.spec.ts`（96 行）— 6 个测试：请求 URL/头/体形状、尺寸越界拒绝（不发请求）、`CONTENT_FILTERED`、401、编辑 `image` data-URL 数组、&gt;10 张参考图拒绝
+### 2.2 `tests/nvidia.spec.ts`（96 行，6 用例）
 
-<b>注册点（全部为追加行，不改动既有 provider 行为）</b>
-
-| 文件 | 追加内容 |
+| 用例 | 断言 |
 | :--- | :--- |
-| `src/shared.ts` | `IMAGE_PROVIDERS` / `CLOUD_IMAGE_PROVIDERS` 加 `'nvidia'`；`NVIDIA_API_KEY_ENV`；`CLOUD_CREDENTIAL_REFS`；`DEFAULT_MODELS` / `DEFAULT_BASE_URLS` / `API_KEY_CONSOLE_URLS`；`PROVIDER_DISPLAY_NAMES`；`DEFAULT_NVIDIA_ENDPOINT` / `DEFAULT_NVIDIA_MODEL` |
-| `src/capabilities.ts` | `NVIDIA_SIZE_TABLE`（1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 · 21:9 · 9:21，全部满足 schema 限制）+ `CLOUD_CAPABILITIES.nvidia` |
-| `src/config.ts` | `nvidiaEndpoint` / `nvidiaModel`（接口 + schemastery 默认值 + re-export）；`resolveProvider` 的 `'nvidia'` 分支；`withProviderOverrides` 模型覆盖分支 |
-| `src/index.ts` | `generateSingle` 与 `edit_image` 各加 `provider === 'nvidia'` 分支（`edit_image` 原本 dashscope 是 fallback，不加显式分支会误走通义）；三个工具 schema 的 `provider` 枚举与 `size` 描述追加 |
-| `src/studio.ts` | 工作台 `wired.provider === 'nvidia'` 分支（生成 + 图生图，尺寸来自 capability 表） |
-| `src/test-route.ts` | `probeTarget` 探测 `integrate.api.nvidia.com/v1/models`（生成主机无 /models，目录在共享同一 key 的 integrate 主机）；新增 `fetchNvidiaImageModels` 供设置页"拉取模型" |
-| `src/channel-model-discovery.ts` | `DISCOVERABLE_OFFICIAL` 加 `'nvidia'` + 发现分发分支 |
-| `src/client/index.tsx` | `CLOUD_MODEL_FIELDS` / `CLOUD_URL_FIELDS` / `CLOUD_HINT_KEYS` / `providerLabels` 追加 nvidia；`ImageSettings` 镜像类型加 `nvidiaEndpoint` / `nvidiaModel` |
-| `src/client/provider-pill.tsx` | 中英文悬浮球行名 |
-| `src/client/plugin-i18n.ts` | `providerNvidia` / `endpointHintNvidia`（zh + en 各一处） |
-| `README.md` / `docs/providers.md` / `docs/providers.en.md` | 支持表与配置参考各加一行 |
+| 正常生成 | URL 精确等于 `https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux-3-image-klein`；三个请求头；body 恰为 `{ prompt, width: 1024, height: 1024 }` 无多余字段；JPEG 字节还原、`mediaType` 为 `image/jpeg` |
+| 尺寸越界（1600x1600） | 报错含 `outside 512-1568 or not a multiple of 16`，且 **fetch 未被调用**（请求前拦截） |
+| CONTENT_FILTERED | 转成含 `CONTENT_FILTERED` 的用户可读报错 |
+| HTTP 401 | 报错含 `(401)` 与脱敏后的响应体 |
+| 编辑请求体 | `image` 为 `data:image/jpeg;base64,...` 数组且字节与参考图一致 |
+| 11 张参考图 | 报错含 `at most 10 reference images` |
 
-<b>核实方式</b>
+mock 方式与 `dashscope.spec.ts` 相同：`vi.stubGlobal('fetch', ...)` + `Response` 构造。
+
+## 3. 修改文件（13 个，除特别说明外均为追加行）
+
+> TS 的穷举约束（`Record<ImageProvider, ...>`、`satisfies` 等）使每个映射漏加 `nvidia` 都会编译失败，实现以 `pnpm typecheck` 0 错误兜底。
+
+### 3.1 `src/shared.ts`
+
+| 位置 | 改动 |
+| :--- | :--- |
+| `IMAGE_PROVIDERS` | 追加 `'nvidia'`（zhipu 之后、comfyui 之前） |
+| `CLOUD_IMAGE_PROVIDERS` | 追加 `'nvidia'` |
+| 凭据常量区 | 新增 `NVIDIA_API_KEY_ENV = 'NVIDIA_API_KEY'` |
+| `CLOUD_CREDENTIAL_REFS` | `nvidia: NVIDIA_API_KEY_ENV` |
+| `PROVIDER_DISPLAY_NAMES` | `nvidia: 'NVIDIA NIM'` |
+| `DEFAULT_MODELS` | `nvidia: DEFAULT_NVIDIA_MODEL` |
+| `DEFAULT_BASE_URLS` | `nvidia: DEFAULT_NVIDIA_ENDPOINT` |
+| `API_KEY_CONSOLE_URLS` | `nvidia: 'https://build.nvidia.com'`（key 获取入口） |
+| 默认值常量 | `DEFAULT_NVIDIA_ENDPOINT = 'https://ai.api.nvidia.com/v1'`、`DEFAULT_NVIDIA_MODEL = 'black-forest-labs/flux-3-image-klein'` |
+
+### 3.2 `src/capabilities.ts`
+
+- 顶部 vendor 说明注释补 nvidia 一行
+- 新增 `NVIDIA_SIZE_TABLE` 9 档（每档均满足 schema 三重限制）：`1:1→1024x1024`、`3:2→1248x832`、`2:3→832x1248`、`4:3→1152x864`、`3:4→864x1152`、`16:9→1168x656`、`9:16→656x1168`、`21:9→1232x528`、`9:21→528x1232`
+- `CLOUD_CAPABILITIES.nvidia`：ratioOptions 取自表；quality 仅「标准」（端点无 quality 字段）；`sizeFor` 直查表，兜底 `1024x1024`
+
+### 3.3 `src/config.ts`
+
+- `Config` 接口追加 `nvidiaEndpoint?` / `nvidiaModel?`
+- import 与 re-export 块追加 `DEFAULT_NVIDIA_ENDPOINT` / `DEFAULT_NVIDIA_MODEL` / `NVIDIA_API_KEY_ENV`
+- schemastery schema：`nvidiaEndpoint` / `nvidiaModel` 两项 `volatile` 默认值（设置页表单由此生成）
+- `resolveProvider` 联合类型加 nvidia 变体；`case 'nvidia'` 返回 `{ provider, apiKeyEnv, model, endpoint, imageSize: '1024x1024' }`
+- `withProviderOverrides` 加 `case 'nvidia'`（支持 Agent 单次调用的 `model` 覆盖）
+
+### 3.4 `src/index.ts`（Agent 工具路径）
+
+- import `{ editNvidiaImage, generateNvidiaImage }`
+- `generateSingle`：dashscope 分支后新增 `provider === 'nvidia'` 分支——`size = args.size ?? active.imageSize`，经 `runCloud` 包裹（受 `cloudTimeoutMs` 约束），`saveGenerated` 记录尺寸
+- `edit_image`：seedream 分支后、**dashscope fallback 之前**插入显式分支（关键：不加会误走 `editDashScopeImage`，因为 dashscope 是该函数的最终兜底）
+- `generate_image` / `generate_images` / `edit_image` 三个工具 schema 的 `provider` 枚举追加 `'nvidia'`；三处 `size` 参数描述补充 NVIDIA NIM
+
+### 3.5 `src/studio.ts`（工作台路径）
+
+- import；分发链新增 `else if (wired.provider === 'nvidia')`：尺寸来自 `CLOUD_CAPABILITIES.nvidia.sizeFor?.(ratio, quality)`；图生图传 `sourceImages`、文生图不传
+- `CLOUD_DISPLAY_LABELS` 追加 `nvidia: 'NVIDIA NIM'`
+
+### 3.6 `src/test-route.ts`（连接测试与拉取模型）
+
+- `probeTarget` 加 `case 'nvidia'`：探测 `https://integrate.api.nvidia.com/v1/models` —— 生成主机 `ai.api.nvidia.com` 没有 `/models`；目录在共享同一把 nvapi key 的 integrate 主机上
+- 新增 `fetchNvidiaImageModels(apiKey, signal)`：GET 上述目录 → `parseOpenAIModelIds` → `filterRelayImageModelIds`（flux / sd / image 等片段过滤）
+- `serveTestConnection` 的 `action === 'models'` 分发链加 nvidia 分支（设置页「拉取模型」按钮由此生效）
+
+### 3.7 `src/channel-model-discovery.ts`（工作台模型发现）
+
+- `DISCOVERABLE_OFFICIAL` 追加 `'nvidia'`；import `fetchNvidiaImageModels`；`discoverOfficialModels` 分发链加分支（5 分钟 TTL 缓存逻辑对 nvidia 同样生效）
+
+### 3.8 `src/client/index.tsx`（设置卡）
+
+- `ImageSettings` 镜像接口追加 `nvidiaEndpoint?` / `nvidiaModel?`
+- `CLOUD_MODEL_FIELDS`：`nvidia: 'nvidiaModel'`；`CLOUD_URL_FIELDS`：`nvidia: 'nvidiaEndpoint'`；`CLOUD_HINT_KEYS`：`nvidia: 'endpointHintNvidia'`（三者带 `satisfies Record<CloudImageProvider, ...>` 穷举约束）
+- `providerLabels` 追加 `nvidia: t('providerNvidia')`
+
+### 3.9 `src/client/provider-pill.tsx`（悬浮球）
+
+- `PILL_PROVIDER_LABELS` zh / en 各追加 `nvidia: 'NVIDIA NIM'`
+
+### 3.10 `src/client/plugin-i18n.ts`（中英文案）
+
+- zh：`providerNvidia: 'NVIDIA NIM'`；`endpointHintNvidia: 'NVIDIA NIM 原生地址，默认 https://ai.api.nvidia.com/v1；模型 id 会拼进 URL 路径。'`
+- en：同名 key 的英文文案（Native NVIDIA NIM endpoint…）
+
+### 3.11 文档
+
+- 本 README（分支专用 review 文档；合并前由维护者决定去留）
+- `docs/providers.md` / `docs/providers.en.md`：「默认模型与 Endpoint」「比例与清晰度」两张表各加一行 NVIDIA NIM / FLUX
+
+## 4. 明确不做 / 已知限制
+
+- **GIF / SVG**：端点不支持，现有 `assertGifProvider` 逻辑对 nvidia 自动拒绝 `output_format`，未做特殊适配
+- **`quality` 工具参数**：对 nvidia 无效（端点无该字段）；工作台 quality 固定「标准」
+- **不发送** `seed` / `negative_prompt` / `n`：`ImageRequest` 无这些字段且 `additionalProperties: false`，发送即 422
+- **`samples` 固定 1**：上游限制
+- **Preview 环境**：`image` 仅接受 example_id 0–3；插件按正式端点契约实现（真实 data-URL，≤10 张）
+- **水印控件**：对 nvidia 显示「支持未确认」（复用通用逻辑）
+
+## 5. 配置与使用方式
+
+1. **设置** > 插件 > 图像生成 → NVIDIA NIM 行：粘贴 build.nvidia.com 领取的 nvapi key；endpoint 默认 `https://ai.api.nvidia.com/v1`（自建网关可改，模型 id 拼在 `/genai/` 后）；「测试连接」探测 integrate 目录；「拉取模型」列出图像模型 id
+2. **对话**：`generate_image({ provider: "nvidia", prompt, size?, aspect_ratio? })`；编辑用 `edit_image({ provider: "nvidia", prompt, source_attachment_id? })`
+3. **Studio 工作台**：provider 选 NVIDIA NIM，比例 9 档，图生图最多 10 张参考图
+
+## 6. 核实命令与预期结果
 
 ```bash
 pnpm install
@@ -90,412 +175,4 @@ pnpm exec vitest run tests/nvidia.spec.ts   # 6 个测试通过
 pnpm exec vitest run                        # 全套 85 文件 / 1225 测试通过
 ```
 
-</details>
-
-<details>
-<summary><strong>其他安装方式（全局 / GitHub 直装 / 本地调试）</strong></summary>
-
-```bash
-# 若已将 dsh 安装为系统全局命令：
-dsh plugin --profile web add dsh-image-gen@latest
-
-# 从 GitHub 仓库直接安装最新代码：
-pnpm dsh plugin --profile web add git+https://github.com/shanliuling/dsh-image-gen.git
-
-# 本地克隆源码开发安装：
-git clone https://github.com/shanliuling/dsh-image-gen.git
-pnpm dsh plugin --profile web add ./dsh-image-gen
-```
-
-</details>
-
-`dsh-image-gen` 是 DeepSeek Harness 的原生图像创作插件。它不是在对话框里塞一个生图按钮，而是让 **Agent 本身学会画图**：它能一次规划并生成一整组图，能看懂你在画布上的涂鸦和圈选，能自己去灵感库里找合适的风格模板。需要精细控制时，还有 Studio 工作台、多模型对比和图库。
-
-> **已有 ChatGPT、Grok 或 Google 订阅？直接登录即可生图，无需额外购买 API Key。**
-
-支持：Gemini · OpenAI / Compatible · Seedream · DashScope · Grok Imagine · GLM-Image · NVIDIA NIM · 本地 ComfyUI
-
-```bash
-pnpm dsh plugin --profile web add dsh-image-gen@latest
-```
-
-> 每个版本的更新内容见 [Releases](https://github.com/shanliuling/dsh-image-gen/releases)。
-
----
-
-## 一句话就能做到
-
-不用学参数，也不用切页面，直接在 DSH 对话里说：
-
-| 你在对话里说                                                  | 插件会做什么                                                                   |
-| :------------------------------------------------------------ | :----------------------------------------------------------------------------- |
-| 「给《咖啡店开业》这篇文章配 4 张插图，统一扁平插画风，16:9」 | 🔁 **对话批量生图**：Agent 把需求拆成 4 个 Prompt 逐张生成，一条消息收齐整组图 |
-| 「用手绘风格 #123 画一张咖啡店菜单」                          | ✨ **自动套用灵感**：Agent 先在 500+ 案例库里检索对应风格，再套用模板出图      |
-| 「把我在画布上画的草图变成正式插画」                          | ✏️ **看懂画布**：Agent 读取画布选区，把草稿变成成图                            |
-| 「把我圈出来的剑换成斧头，其他不变」                          | 🎯 **圈哪改哪**：只改你标出的局部                                              |
-| 「保持这个角色不变，换到雪地场景」                            | 🎭 **角色一致性**：图生图时保持同一个人物或物体，不会换成长得相似的另一个      |
-| 「同一个 Prompt，GPT 和 Gemini 各出一张对比」                 | ⚖️ **多模型对比**：并发调用多个模型，放在同一张画布上比较                      |
-| 「把这个角色做成一段挥手的 GIF 动图」                          | 🎞️ **GIF 动图**：直接生成循环动画，卡片里播放、调倍速，还能按帧写评论修改      |
-
-<img src="docs/assets/readme/workflow-overview.webp" alt="dsh-image-gen 完整 AI 图像创作工作流" width="100%" />
-
----
-
-## 快速开始
-
-### 加固下载（可选）
-
-两条可选设置加固离开本机的网络路径，默认全部关闭：
-
-- `strictImageDownloads`：结果 URL 必须是公网 HTTPS 443。DNS 解析结果会校验并固定用于本次请求，不跟随 provider 结果中的重定向，响应遵守图片字节上限。
-- `requireHostAdmission`：宿主 connection admission 服务缺失或异常时，插件 Web 路由一律 503 拒绝，而不是裸奔。
-
-默认关闭是因为 TUN 代理或自定义企业解析器可能故意返回内网地址；开启任一设置即假定你的出口是直连。
-
-### 1. 安装插件
-
-环境要求：DeepSeek Harness 稳定版本，Node.js `^22.19.0` 或 `>= 24.0.0`。
-
-在你的 DeepSeek Harness 项目根目录下运行：
-
-```bash
-pnpm dsh plugin --profile web add dsh-image-gen@latest
-```
-
-> 💬 **极客提示**：你也可以直接把这句话发送给 DSH 对话中的 Agent：<br />
-> `帮我安装生图插件，在终端执行：pnpm dsh plugin --profile web add dsh-image-gen@latest`
-
-### 2. 配置 Provider
-
-重启 DSH 后，点击左侧边栏的 **「插件」** 图标打开插件面板，在 **「已安装」** 分区点击 **dsh-image-gen**，进入插件详情页即可看到「图像生成」配置表单：
-
-**插件面板 → 已安装 → dsh-image-gen**
-
-> DSH 0.1.5 及更早版本没有插件面板，入口仍为「设置 → 插件 → 插件配置 → 图像生成」；插件已同时兼容两种入口。
-
-选择 Provider，填写自己的 API Key，并按需调整模型、Endpoint / Base URL 与工作区保存选项。填好 Key 后可点击**「测试连接」**验证可用性，或点击**「拉取模型」**一键获取该厂商支持的全部生图模型，无需手动查文档。使用 ComfyUI 时，请填写 DSH Host 可访问的服务地址，并导入 **API Format Workflow JSON**；导入多个工作流后，可在对话输入框旁的生图按钮里直接切换。
-
-已有 ChatGPT、Grok 或 Google 订阅？无需填写 API Key：展开对应的订阅 Provider 行，点击**「登录」**并在浏览器完成授权，即可直接开始文生图与图生图。
-
-<div align="center">
-  <img src="docs/assets/readme/config.webp" alt="插件详情页选择默认 Provider、查看各渠道状态，并在对话输入框旁切换渠道" width="100%" />
-  <br />
-  <sub>选默认 Provider → 查看各渠道的 Key / 登录状态 → 在对话输入框旁随手切换。</sub>
-</div>
-
-### 3. 开始创作
-
-在聊天框中直接描述你想要的图片：
-
-```text
-画一张雨夜霓虹街头的赛博朋克猫咪，电影感光线，16:9。
-```
-
-想要一整组图？直接说数量和统一风格：
-
-```text
-给我的小红书笔记《周末露营清单》配 5 张图：帐篷、炉具、睡袋、照明、零食，统一日系手绘风，3:4。
-```
-
-也可以直接上传参考图，让 Agent 进行风格重构或局部编辑：
-
-```text
-保持角色与构图不变，给猫咪戴上一副黑色墨镜。
-```
-
-<br />
-
-<div align="center">
-  <img src="docs/assets/readme/chat-example.webp" alt="对话生图与风格重构效果" width="60%" />
-  <br />
-  <sub>在对话中直接生图、图生图与连续编辑。</sub>
-</div>
-
-<br />
-
-需要更细的参数控制时，点击会话顶部的 **画廊** 入口，进入 **图库 / 工作台 / 灵感 / 收藏**。
-
----
-
-## 核心能力
-
-<a id="chat-batch"></a>
-
-### 🔁 对话批量生图：一句话，一整组图
-
-配图、分镜、系列插画、同一主题的多个变体，不用一张一张地催。
-
-- 用一句话描述数量和统一要求，Agent 会自己规划出一组 Prompt，**单次最多 10 张**，图片按顺序附在同一条回复里。
-- 比例、清晰度、模型、Provider 可以对整组统一指定，保证风格一致。
-- 逐张生成，**某一张失败不会影响其余图片**，最后会汇报「成功 X / 共 Y」并列出失败原因。
-- 本地 ComfyUI 和订阅通道同样支持批量。
-
-<div align="center">
-  <img src="docs/assets/readme/chat-batch.webp" alt="一条消息让 Agent 批量生成 5 张二次元插画，失败的那张自动重跑，最后整组进入图库" width="100%" />
-  <br />
-  <sub>一条消息写 5 个画面 → Agent 规划成两批生成 → 逐张出图，失败的那张自动单独重跑 → 整组进入图库。（等待部分已加速）</sub>
-</div>
-
-> **对话批量和 Studio 批量有什么区别？** 对话批量是 Agent 帮你规划**一组不同的画面**（例如 4 张不同场景的插图）；Studio 批量是**同一个 Prompt 出多张候选**，由你挑选满意的保存。
-
-<br />
-
-<a id="ai-canvas"></a>
-
-### ✏️ 看得懂草图的 AI 画布
-
-在无限画布上画草图、摆参考图、圈出要改的地方，然后直接用对话告诉 AI 你想要什么。**Agent 能看到画布上的内容和你当前的选区**，不需要你截图、上传或者描述位置。
-
-- **草图 → 成图**：随手画个轮廓，选中它说「画成卡通角色」。
-- **圈哪改哪**：在已有图片上用画笔圈出局部，说「把这里换成斧头」，只改圈出的部分。
-- **组合参考**：把「最近生成」或图库里的图拖进画布，或点击缩略图上的「发送到画布」，多张一起选中作为参考。同一张历史图片重复导入会自动去重。
-- 每一步结果都留在画布上，随时可以从任意一版继续往下迭代。
-
-<div align="center">
-  <img src="docs/assets/readme/canvas-edit.webp" alt="在画布上圈出剑，说一句话，Agent 只把剑换成战斧" width="100%" />
-  <br />
-  <sub><b>圈哪改哪</b>：圈出女剑士手里的剑，说「变成一把斧头」，Agent 先确认圈的是什么，再只改那一处。</sub>
-  <br /><br />
-  <img src="docs/assets/readme/canvas-sketch.webp" alt="在画布上画火柴人草图，Agent 按草图姿势生成二次元剑士" width="100%" />
-  <br />
-  <sub><b>草图 → 成图</b>：随手画个持剑的火柴人，框选后说「按照之前风格生成」，姿势和构图都照着草图来。（等待部分已加速）</sub>
-</div>
-
-<br />
-
-### 💬 对话生图、编辑与版本切换
-
-- 用自然语言完成文生图、图生图、多图参考和风格迁移。
-- **角色一致性**：要求「保持这个人物 / 角色 / 物体不变」时，插件会让模型沿用参考图里的同一主体，只改场景、服装、姿势或风格，而不是重新画一个相似的人。
-- 直接修改原图 Prompt 重新生成，并在同一卡片中切换历史版本。
-
-<br />
-
-<div align="center">
-  <img src="docs/assets/readme/regenerating.webp" alt="图片正在重新生成" width="46%" />
-  <img src="docs/assets/readme/revision-switcher.webp" alt="在同一图片卡片中切换生成版本" width="46%" />
-  <br />
-  <sub>修改 Prompt 后原位重新生成，并在同一张图片卡片中切换历史版本。</sub>
-</div>
-
-<br />
-
-### 🎞️ GIF 动图：生成、播放、按帧修改
-
-使用 GPT Image 2.6 等支持动图的模型时，直接在对话里说「做成 GIF / 动图」即可得到循环动画，也可以把参考图里的角色做成动图。帧数与帧时长可用 `frame_count`（2–16）、`frame_duration_ms`（20–2000 ms）指定。
-
-- 生成结果是 GIF 时，对话卡片直接播放动画：左下角调倍速（0.2×–2×），工具栏的下载菜单可按当前倍速或原速下载 GIF、或下载当前帧（PNG）；点开大图有播放键、逐帧缩略图时间轴（悬停预览、点击停在这一帧）和倍速。图库里的 GIF 带角标、悬停即播放，大图同样可播放与下载。GIF 文件可直接拖出，重新生成仍得到 GIF（剪贴板只支持静态图，复制得到的是单帧）。
-- GIF 卡片右下角「编辑」（或大图播放条的「编辑帧」）可按帧写修改意见：在画面上点位置写评论，评论只显示在它所在的那一帧，也可切到「全部帧」一次看全；一次发送即按评论重绘整段，新结果作为新版本保留并会动（仅 OpenAI 与兼容渠道，且中转需支持图生图；不支持时可一键改为描述后重新生成）。
-- 支持渠道：OpenAI 官方与 OpenAI 兼容中转（需模型与中转支持 GIF）。ChatGPT 订阅使用的 Codex 图片接口目前上游未开放 GIF，暂不支持。
-
-#### 🖼️ SVG 矢量输出
-
-生图时也可以要求矢量结果：`generate_image` 传 `output_format: "svg"`（仅 OpenAI 官方与兼容中转的**文生图**；图生图接口不支持 SVG）。
-
-- 结果会进入对话图卡：卡片直接显示矢量图（点开可放大，无损），工具栏可复制 SVG 源码、下载 `.svg`、在侧栏打开保存的文件。DSH 附件层只保存 png/jpeg/webp/gif，所以卡片是用工具结果里的 SVG 源码渲染的，图库与版本历史仍只收录位图。
-- SVG 没有像素尺寸，`size` / `aspect_ratio` / `image_size` 不会发送，结果里会给出一条说明；`frame_count` / `frame_duration_ms` 只属于 GIF，与 SVG 一起传会直接报错。
-
-<br />
-
-### ✨ 500+ Prompt 灵感：Agent 会自己去找
-
-内置手绘风格手册（风格 / 排版 / 单色主题色）和 awesome-gpt-image-2 案例集，共 500+ 个可直接复用的 Prompt。
-
-- **在对话里直接点名**：说「用风格 #123」「做成信息图排版」「莫兰迪色系」，Agent 会先在灵感库里检索，再把模板套到你的主题上出图。风格、排版、主题色还可以组合使用。
-- **在界面里浏览**：筛选、收藏、复制，或一键带入工作台（见下方 Studio 演示）。
-- 图片缓存在本地，浏览和学习不消耗 Token 或生成额度。
-
-<br />
-
-<div align="center">
-  <img src="docs/assets/readme/inspiration-library.webp" alt="Prompt 灵感素材库" width="100%" />
-  <br />
-  <sub>先找灵感，再把 Prompt 带入工作台；全本地缓存，浏览或复制不消耗生成额度。</sub>
-</div>
-
-<br />
-
-### 🎛️ Studio 工作台：不用对话，自己调参数
-
-想精细控制时，打开会话顶部的 **画廊 → 工作台**，所有参数都摆在面前。
-
-- **从灵感直接开工**：在灵感库里点「带入工作台」，Prompt 自动填好。
-- **参数一目了然**：Provider、模型、比例、生成质量、水印都能单独选；一次出 1–4 张候选，满意的才保存。
-- **拿历史结果继续改**：从「最近生成」拖一张图进来，点「继续编辑（垫图）」，它就自动成为图生图的参考图（最多 5 张）。
-- 单模型 / 多模型对比一键切换。
-
-<br />
-
-<div align="center">
-  <img src="docs/assets/readme/studio.webp" alt="从灵感库挑选 Prompt 带入工作台，调整参数后生成海报" width="100%" />
-  <br />
-  <sub>灵感库挑一个 Prompt → 带入工作台 → 选好参数开始生成 → 出图后再决定保存。（等待部分已加速）</sub>
-  <br /><br />
-  <img src="docs/assets/readme/studio-ref.webp" alt="从最近生成拖入一张图，点继续编辑后自动切到图生图并作为参考图" width="100%" />
-  <br />
-  <sub>从「最近生成」拖一张图进来 → 「继续编辑（垫图）」→ 自动切到图生图，写一句要改什么就行。</sub>
-</div>
-
-<br />
-
-### ⚖️ 多模型横向对比
-
-使用同一组 Prompt 和参考图并发调用多个模型，在一张画布中比较并保存结果。
-
-<br />
-
-<div align="center">
-  <img src="docs/assets/readme/multi-model-compare.webp" alt="同一 Prompt 的多模型生成对比" width="100%" />
-  <br />
-  <sub>在同一画布中比较不同模型结果，再批量保存满意的图片。</sub>
-</div>
-
-<br />
-
-### 🖼️ 图库、收藏与批量管理
-
-- 统一管理对话和 Studio 中保存的图片，并按工作区隔离。
-- 支持搜索、筛选、收藏、下载、继续编辑、重新生成和批量管理。
-
-<br />
-
-<div align="center">
-  <img src="docs/assets/readme/gallery-management.webp" alt="图库筛选、收藏与批量管理" width="100%" />
-  <br />
-  <sub>图库支持多维度筛选、收藏、批量管理与工作区数据隔离。</sub>
-</div>
-
-<br />
-
-### 🧩 本地 ComfyUI 多工作流
-
-灵活调用本地 GPU 算力，让私有化绘图无缝融入 Agent 对话。
-
-- 导入并管理多个命名工作流，支持预设 Prompt 和常用占位符。
-- Agent 可按名称选择工作流，在对话中完成文生图、图生图和批量生图。
-- 占位符：`{{prompt}}`、`{{seed}}`；宽高写 `{{width}}`/`{{height}}` 后，Agent 传入的尺寸或比例才会生效（默认 1024×1024）；图生图在 LoadImage 写 `{{image}}`，多张参考图就写多个，按节点编号顺序对应。
-
-> ComfyUI 暂未接入 Studio 和多模型对比。
-
-<br />
-
-<div align="center">
-  <img src="docs/assets/readme/comfyui-workflows.webp" alt="ComfyUI 多工作流配置" width="58%" />
-  <br />
-  <sub>为不同用途维护独立工作流，并通过名称让 Agent 精确选择。</sub>
-</div>
-
-<br />
-
----
-
-## Provider 支持情况
-
-| Provider                          | 对话生图 | 对话批量 | 对话编辑 | Studio | 多模型对比 | GIF |
-| :-------------------------------- | :------: | :------: | :------: | :----: | :--------: | :-: |
-| **Google Gemini**                 |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |  —  |
-| **OpenAI Images**                 |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     | ✅  |
-| **OpenAI Compatible（中转站）**   |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     | ✅  |
-| **ByteDance Seedream / 火山方舟** |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |  —  |
-| **Aliyun DashScope / Qwen Image** |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |  —  |
-| **NVIDIA NIM / FLUX**             |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |  —  |
-| **xAI Grok Imagine**              |    ✅    |    ✅    | ⚠️ 有限  |   ✅   |     ✅     |  —  |
-| **智谱 GLM-Image**                |    ✅    |    ✅    |    —     |   ✅   |     ✅     |  —  |
-| **Local ComfyUI**                 |    ✅    |    ✅    | ✅ 多图  |   —    |     —      |  —  |
-| **ChatGPT 订阅（免 Key）**        |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |  —  |
-| **Grok 订阅（免 Key）**           |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |  —  |
-| **Google 订阅（免 Key）**         |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |  —  |
-
-> Studio 与多模型对比目前只支持云端 Provider（含订阅通道）；多模型对比调用的是各 Provider 在设置中已配置的模型。
-> 智谱 GLM-Image 上游本身不支持图生图；xAI 图生图走 OpenAI 兼容协议（multipart），部分网关可能需等待后续适配。
-> 订阅通道通过账号登录使用（免 API Key），图生图走各订阅渠道的编辑接口（最多 5 张参考图），比例与清晰度可在 Studio 中直接选择。
-> OpenAI 与兼容渠道的对话生图和图生图都可以直接要求输出 GIF 动图，例如把参考图里的角色做成动图（需模型与中转支持；图生图还要求中转支持改图接口），帧数、帧时长等参数见 [Provider 配置参考](docs/providers.md)。ChatGPT 订阅使用的接口暂不支持 GIF 输出。
-
-📖 **默认模型与 Endpoint、各 Provider 的比例 / 清晰度、尺寸表、水印、中转站编辑格式等高级配置，见 [Provider 配置参考](docs/providers.md)。**
-
----
-
-## 数据与隐私
-
-- **BYOK**：API Key 通过 DSH Credentials 服务保存，设置页不会回显 Key 明文。
-- **订阅登录**：订阅账号令牌经你授权登录后保存于 DSH Credentials，与 API Key 完全隔离，浏览器侧不接触令牌。
-- **云端请求**：Prompt 与本次使用的参考图会发送给所选 Provider，请遵守对应服务条款。
-- **上游图片下载**：沿用宿主已有的网络和代理配置，不额外拦截 Fake-IP、内网或回环地址。当前未提供完整的 SSRF 目标限制。
-- **本地 ComfyUI**：请求发送到用户配置的 ComfyUI 地址。
-- **工作区文件**：开启工作区保存后，对话结果会落盘；Studio 仅保存用户选中的候选图。
-- **GIF 原图**：动图结果的原始文件另存于原图保险库（`vaultEnabled` 可关闭），供卡片播放与导出，随图库删除一并清理。
-- **图库与收藏**：图库元数据和收藏状态保存在当前浏览器本地存储中。
-- **删除记录**：普通删除会保留轻量的图片 ID 标记，超过 30 天也不会因重新打开旧会话而自动恢复到图库。
-- **灵感缓存**：案例元数据随插件提供，图片按需加载并缓存在本机，可随时清理。
-
-## 常见问题
-
-<details>
-<summary><strong>安装后找不到“图像生成”设置怎么办？</strong></summary>
-
-设置入口随 DSH 版本不同：0.1.6 及以上位于插件详情页（点击左侧边栏「插件」图标，在「已安装」分区进入 dsh-image-gen），0.1.5 及更早位于「设置 → 插件 → 插件配置 → 图像生成」。
-
-若两处都没有，先完全重启当前 DSH Profile，再检查插件配置：
-
-```bash
-dsh --profile web --dump-config
-```
-
-如果输出中没有 `dsh-image-gen`，请重新执行安装命令。提交 Issue 时请附 DSH 版本、插件版本和错误日志，不要上传 API Key。
-
-</details>
-
-<details>
-<summary><strong>一次最多能批量生成多少张？</strong></summary>
-
-对话批量单次调用最多 10 张，超过时插件会提示 Agent 拆成多次调用。图片是逐张生成的，单张失败不会中断其余图片，失败的会在结果里单独列出原因。
-
-</details>
-
-<details>
-<summary><strong>生成图片保存在哪里？</strong></summary>
-
-开启“保存到工作区”后，对话生成结果默认保存在当前工作区的 `dsh-image-gen/` 子目录，也可以在设置中修改。Studio 候选图先留在临时画布，只有用户选中的结果才会进入图库并保存。
-
-</details>
-
-<details>
-<summary><strong>Gemini 中转只支持 generateContent，如何配置？</strong></summary>
-
-在 Google Gemini 设置中，将“请求协议”改为“原生 generateContent”，接口地址填写中转的 API 基础地址，例如 `https://your-relay.example/v1beta`，保存后即可用于对话生图、图生图和 Studio。已有的 Interactions 完整地址也可以沿用，插件会按所选模型构建原生请求地址。
-
-配置文件对应 `googleNative: true`；默认值为 `false`，现有用户仍使用 Interactions 协议。
-
-</details>
-
-<details>
-<summary><strong>为什么 ComfyUI 没有出现在 Studio 中？</strong></summary>
-
-当前 Studio 与多模型对比仅支持云端 Provider，暂未接入 ComfyUI。ComfyUI 已支持在 Agent 对话中进行文生图、图生图（支持多张参考图）、批量生图以及多个命名工作流。
-
-</details>
-
-<details>
-<summary><strong>从图库删除会删除聊天记录吗？</strong></summary>
-
-不会。删除图库记录不会修改原聊天消息。你可以额外选择是否清理工作区中的本地图片文件；文件删除通常无法恢复，请确认后操作。
-
-</details>
-
-<details>
-<summary><strong>从 GitHub 安装时，pnpm 拦截构建脚本怎么办？</strong></summary>
-
-如果报 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`，打开 DSH 提示的 profile 下的 `pnpm-workspace.yaml`，把 pnpm 输出的完整键加入 `allowBuilds` 并设为 `true`，然后重跑 GitHub 安装命令。如果换了 Git 提交后再次遇到该错误，用新输出的键。日常安装可直接使用预构建的 npm 包。
-
-</details>
-
-<details>
-<summary><strong>如何升级？</strong></summary>
-
-```bash
-pnpm dsh plugin --profile web add dsh-image-gen@latest
-```
-
-升级后重启对应的 DSH Profile。
-
-</details>
+**提交记录**：`8b658c1`（实现，15 文件 +355/−12）→ `d319ea9` / `2ae9cf3` / `105b262`（本文档迭代）
