@@ -57,7 +57,7 @@
 
 > **已有 ChatGPT、Grok 或 Google 订阅？直接登录即可生图，无需额外购买 API Key。**
 
-支持：Gemini · OpenAI / Compatible · Seedream · DashScope · Grok Imagine · GLM-Image · 本地 ComfyUI
+支持：Gemini · OpenAI / Compatible · Seedream · DashScope · Grok Imagine · GLM-Image · NVIDIA NIM · 本地 ComfyUI
 
 ```bash
 pnpm dsh plugin --profile web add dsh-image-gen@latest
@@ -359,6 +359,7 @@ pnpm dsh plugin --profile web add ./dsh-image-gen
 | **OpenAI Compatible（中转站）**   |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     | ✅  |
 | **ByteDance Seedream / 火山方舟** |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |  —  |
 | **Aliyun DashScope / Qwen Image** |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |  —  |
+| **NVIDIA NIM / FLUX**             |    ✅    |    ✅    | ✅ 多图  |   ✅   |     ✅     |  —  |
 | **xAI Grok Imagine**              |    ✅    |    ✅    | ⚠️ 有限  |   ✅   |     ✅     |  —  |
 | **智谱 GLM-Image**                |    ✅    |    ✅    |    —     |   ✅   |     ✅     |  —  |
 | **Local ComfyUI**                 |    ✅    |    ✅    | ✅ 多图  |   —    |     —      |  —  |

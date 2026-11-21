@@ -44,6 +44,7 @@ import {
 import {
   fetchDashScopeImageModels,
   fetchGoogleImageModels,
+  fetchNvidiaImageModels,
   fetchOpenAIImageModels,
   probeTarget,
 } from './test-route.js'
@@ -148,7 +149,7 @@ export function primeChannelModels(
 }
 
 /** Official cloud rows that publish an image model list at their own endpoint. */
-const DISCOVERABLE_OFFICIAL = ['google', 'openai', 'seedream', 'dashscope', 'xai', 'zhipu'] as const
+const DISCOVERABLE_OFFICIAL = ['google', 'openai', 'seedream', 'dashscope', 'xai', 'zhipu', 'nvidia'] as const
 
 type DiscoverableOfficial = typeof DISCOVERABLE_OFFICIAL[number]
 
@@ -204,7 +205,9 @@ export async function discoverOfficialModels(
         ? await fetchGoogleImageModels(config, apiKey, combined)
         : provider === 'dashscope'
           ? await fetchDashScopeImageModels(config, apiKey, combined)
-          : await fetchOpenAIImageModels(provider, config, apiKey, combined)
+          : provider === 'nvidia'
+            ? await fetchNvidiaImageModels(apiKey, combined)
+            : await fetchOpenAIImageModels(provider, config, apiKey, combined)
       // Only a parsed, successful catalog replaces the cache; a transport error
       // or an unparsable body keeps the last good list.
       pulled = result.ok ? result.models : undefined

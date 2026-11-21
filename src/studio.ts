@@ -12,6 +12,7 @@ import {
   type ImageSize,
 } from './config.js'
 import { editDashScopeImage, generateDashScopeImage } from './dashscope.js'
+import { editNvidiaImage, generateNvidiaImage } from './nvidia.js'
 import { requireApiKey, resolveApiKey } from './credentials.js'
 import { editGoogleImage, generateGoogleImage } from './google.js'
 import { editOpenAICompatibleImage, generateOpenAICompatibleImage, rasterOnly } from './openai-compatible.js'
@@ -417,6 +418,12 @@ export async function generateFromStudio(
         ? await editDashScopeImage({ strictImageDownloads: requestConfig.strictImageDownloads === true, apiKey: credential, endpoint: wired.endpoint, model: wired.model, prompt: input.prompt, sourceImages, size, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal, ...(watermark === undefined ? {} : { watermark }) })
         : await generateDashScopeImage({ strictImageDownloads: requestConfig.strictImageDownloads === true, apiKey: credential, endpoint: wired.endpoint, model: wired.model, prompt: input.prompt, size, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal, ...(watermark === undefined ? {} : { watermark }) })
       output = size
+    } else if (wired.provider === 'nvidia') {
+      const size = CLOUD_CAPABILITIES.nvidia.sizeFor?.(input.ratio, input.quality) ?? '1024x1024'
+      generated = input.mode === 'edit'
+        ? await editNvidiaImage({ strictImageDownloads: requestConfig.strictImageDownloads === true, apiKey: credential, endpoint: wired.endpoint, model: wired.model, prompt: input.prompt, sourceImages, size, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal })
+        : await generateNvidiaImage({ strictImageDownloads: requestConfig.strictImageDownloads === true, apiKey: credential, endpoint: wired.endpoint, model: wired.model, prompt: input.prompt, size, maxBytes: ctx.attachments.imageLimits.maxImageBytes, signal })
+      output = size
     } else {
       throw new Error('当前渠道未接入 API 工作台')
     }
@@ -743,6 +750,7 @@ const CLOUD_DISPLAY_LABELS: Record<CloudImageProvider, string> = {
   dashscope: 'DashScope',
   xai: 'xAI Grok',
   zhipu: '智谱 GLM',
+  nvidia: 'NVIDIA NIM',
 }
 
 function option(value: string): StudioOption {

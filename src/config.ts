@@ -9,6 +9,8 @@ import {
   DEFAULT_CLOUD_TIMEOUT_MS,
   DEFAULT_DASHSCOPE_ENDPOINT,
   DEFAULT_DASHSCOPE_MODEL,
+  DEFAULT_NVIDIA_ENDPOINT,
+  DEFAULT_NVIDIA_MODEL,
   DEFAULT_COMFYUI_BASE_URL,
   DEFAULT_COMFYUI_TIMEOUT_MS,
   DEFAULT_COMFYUI_WORKFLOW_LABEL,
@@ -26,6 +28,7 @@ import {
   DEFAULT_ZHIPU_MODEL,
   DASHSCOPE_API_KEY_ENV,
   GOOGLE_API_KEY_ENV,
+  NVIDIA_API_KEY_ENV,
   IMAGE_PROVIDERS,
   OPENAI_API_KEY_ENV,
   OPENAI_COMPAT_API_KEY_ENV,
@@ -49,6 +52,8 @@ export {
   DEFAULT_CLOUD_TIMEOUT_MS,
   DEFAULT_DASHSCOPE_ENDPOINT,
   DEFAULT_DASHSCOPE_MODEL,
+  DEFAULT_NVIDIA_ENDPOINT,
+  DEFAULT_NVIDIA_MODEL,
   DEFAULT_COMFYUI_BASE_URL,
   DEFAULT_COMFYUI_TIMEOUT_MS,
   DEFAULT_COMFYUI_WORKFLOW_LABEL,
@@ -64,6 +69,7 @@ export {
   DEFAULT_ZHIPU_MODEL,
   DASHSCOPE_API_KEY_ENV,
   GOOGLE_API_KEY_ENV,
+  NVIDIA_API_KEY_ENV,
   IMAGE_PROVIDERS,
   OPENAI_API_KEY_ENV,
   OPENAI_COMPAT_API_KEY_ENV,
@@ -171,6 +177,8 @@ export interface Config {
   seedreamBackground?: ArkBackgroundMode
   dashscopeEndpoint?: string
   dashscopeModel?: string
+  nvidiaEndpoint?: string
+  nvidiaModel?: string
   xaiBaseURL?: string
   xaiModel?: string
   zhipuBaseURL?: string
@@ -269,6 +277,8 @@ export const Config = z.object({
   seedreamBackground: volatile(z.union(ARK_BACKGROUND_MODES).default('opaque')),
   dashscopeEndpoint: volatile(z.string().default(DEFAULT_DASHSCOPE_ENDPOINT)),
   dashscopeModel: volatile(z.string().default(DEFAULT_DASHSCOPE_MODEL)),
+  nvidiaEndpoint: volatile(z.string().default(DEFAULT_NVIDIA_ENDPOINT)),
+  nvidiaModel: volatile(z.string().default(DEFAULT_NVIDIA_MODEL)),
   xaiBaseURL: volatile(z.string().default(DEFAULT_XAI_BASE_URL)),
   xaiModel: volatile(z.string().default(DEFAULT_XAI_MODEL)),
   zhipuBaseURL: volatile(z.string().default(DEFAULT_ZHIPU_BASE_URL)),
@@ -297,6 +307,7 @@ export function resolveProvider(config: Config):
   | { provider: 'openai-compat'; apiKeyEnv: string; model: string; baseURL: string; imageSize: string; editFormat: CompatEditFormat; editExtra: Record<string, unknown> }
   | { provider: 'seedream'; apiKeyEnv: string; model: string; baseURL: string; imageSize: string; arkOptions: ArkOutputOptions }
   | { provider: 'dashscope'; apiKeyEnv: string; model: string; endpoint: string; imageSize: string }
+  | { provider: 'nvidia'; apiKeyEnv: string; model: string; endpoint: string; imageSize: string }
   | { provider: 'xai'; apiKeyEnv: string; model: string; baseURL: string; imageSize: string }
   | { provider: 'zhipu'; apiKeyEnv: string; model: string; baseURL: string; imageSize: string }
   | { provider: 'comfyui'; baseURL: string; workflows: ComfyUIWorkflowEntry[]; workflow?: ComfyUIWorkflowEntry; timeoutMs: number }
@@ -336,6 +347,7 @@ export function resolveProvider(config: Config):
       }
     }
     case 'dashscope': return { provider: 'dashscope', apiKeyEnv: DASHSCOPE_API_KEY_ENV, model: config.dashscopeModel ?? DEFAULT_DASHSCOPE_MODEL, endpoint: config.dashscopeEndpoint ?? DEFAULT_DASHSCOPE_ENDPOINT, imageSize: '1024*1024' }
+    case 'nvidia': return { provider: 'nvidia', apiKeyEnv: NVIDIA_API_KEY_ENV, model: config.nvidiaModel ?? DEFAULT_NVIDIA_MODEL, endpoint: config.nvidiaEndpoint ?? DEFAULT_NVIDIA_ENDPOINT, imageSize: '1024x1024' }
     case 'xai': return { provider: 'xai', apiKeyEnv: XAI_API_KEY_ENV, model: config.xaiModel ?? DEFAULT_XAI_MODEL, baseURL: config.xaiBaseURL ?? DEFAULT_XAI_BASE_URL, imageSize: '1024x1024' }
     case 'zhipu': return { provider: 'zhipu', apiKeyEnv: ZHIPU_API_KEY_ENV, model: config.zhipuModel ?? DEFAULT_ZHIPU_MODEL, baseURL: config.zhipuBaseURL ?? DEFAULT_ZHIPU_BASE_URL, imageSize: '1024x1024' }
     case 'comfyui': {
@@ -392,6 +404,7 @@ export function withProviderOverrides(config: Config, provider?: ImageProvider, 
     case 'openai-compat': return { ...base, openaiCompatModel: trimmed, ...(mode === 'edit' ? { openaiCompatEditModel: trimmed } : {}) }
     case 'seedream': return { ...base, seedreamModel: trimmed }
     case 'dashscope': return { ...base, dashscopeModel: trimmed }
+    case 'nvidia': return { ...base, nvidiaModel: trimmed }
     case 'xai': return { ...base, xaiModel: trimmed }
     case 'zhipu': return { ...base, zhipuModel: trimmed }
     // Subscription models are fixed by the bridge protocol; the override is ignored.

@@ -54,6 +54,11 @@ export function probeTarget(
   if (provider === 'dashscope') {
     return { url: joinUrl(config.dashscopeEndpoint ?? DEFAULT_DASHSCOPE_ENDPOINT, 'models'), headers }
   }
+  if (provider === 'nvidia') {
+    // ai.api.nvidia.com only serves generation; the shared-key model catalog
+    // lives on the OpenAI-compatible integrate host.
+    return { url: 'https://integrate.api.nvidia.com/v1/models', headers }
+  }
   if (provider === 'seedream') {
     return { url: joinUrl(config.seedreamBaseURL ?? DEFAULT_SEEDREAM_BASE_URL, 'models'), headers }
   }
@@ -283,6 +288,20 @@ export async function fetchDashScopeImageModels(
   return { ok: true, models: parseDashScopeImageModelIds(result.payload) }
 }
 
+/** Pull and filter image-capable models from the NVIDIA integrate catalog (OpenAI-shaped /v1/models). */
+export async function fetchNvidiaImageModels(
+  apiKey: string | undefined,
+  signal?: AbortSignal | undefined,
+): Promise<ModelsResult> {
+  if (apiKey === undefined) return { ok: false, reason: 'missing-key' }
+  // Generation lives on ai.api.nvidia.com; the shared-key model catalog lives
+  // on the OpenAI-compatible integrate host, so the catalog URL stays constant.
+  const result = await fetchClassifiedJson('https://integrate.api.nvidia.com/v1/models', { authorization: `Bearer ${apiKey}` }, apiKey, signal)
+  if (!result.ok) return result
+  if (result.payload === null) return { ok: false, reason: 'error', message: '响应不是有效的 JSON' }
+  return { ok: true, models: filterRelayImageModelIds(parseOpenAIModelIds(result.payload)) }
+}
+
 /** Run one provider probe and classify the outcome; secrets never leave redacted. */
 export async function probeProviderConnection(
   provider: CloudImageProvider,
@@ -388,7 +407,9 @@ export async function serveTestConnection(req: IncomingMessage, res: ServerRespo
         ? await fetchGoogleImageModels(requestConfig(), apiKey)
         : active === 'dashscope'
           ? await fetchDashScopeImageModels(requestConfig(), apiKey)
-          : await fetchOpenAIImageModels(active as 'openai' | 'openai-compat' | 'seedream' | 'xai' | 'zhipu', requestConfig(), apiKey)
+          : active === 'nvidia'
+            ? await fetchNvidiaImageModels(apiKey)
+            : await fetchOpenAIImageModels(active as 'openai' | 'openai-compat' | 'seedream' | 'xai' | 'zhipu', requestConfig(), apiKey)
     } catch (error) {
       result = { ok: false, reason: 'error', message: error instanceof Error ? error.message : String(error) }
     }

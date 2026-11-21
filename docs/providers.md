@@ -15,6 +15,7 @@
 | Aliyun DashScope   | `qwen-image-3.0`             | `https://dashscope.aliyuncs.com/api/v1`                         |
 | xAI Grok Imagine   | `grok-imagine-image-2.0`     | `https://api.x.ai/v1`                                           |
 | 智谱 GLM-Image     | `glm-image`                  | `https://open.bigmodel.cn/api/paas/v4`                         |
+| NVIDIA NIM / FLUX  | `black-forest-labs/flux-3-image-klein` | `https://ai.api.nvidia.com/v1`（模型 id 拼进 `/genai/` 路径）   |
 | Local ComfyUI      | 用户导入的 API Workflow      | `http://127.0.0.1:8188`                                         |
 | ChatGPT 订阅       | `gpt-image-2.6-flare`（通道固定） | 账号登录，无需配置                                        |
 | Grok 订阅         | `grok-imagine-image-2.0`（通道固定） | 账号登录，无需配置                                    |
@@ -34,6 +35,7 @@
 | Aliyun DashScope   | 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16                         | 标准                                    |
 | xAI Grok Imagine   | 自动 · 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 · 21:9           | 1K / 2K                                 |
 | 智谱 GLM-Image     | 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16                         | 高清                                    |
+| NVIDIA NIM / FLUX  | 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 · 21:9 · 9:21         | 标准（steps 50 / cfg 3.5，端点默认）    |
 | ChatGPT 订阅       | 自动 · 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16                  | 自动 / low / medium / high / xhigh / max |
 | Grok 订阅          | 自动 · 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 · 21:9           | 1K / 2K                                 |
 | Google 订阅        | 自动 · 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 4:5 · 5:4 · 16:9 · 9:16 · 21:9 | 标准 / 高清（4K）                     |
