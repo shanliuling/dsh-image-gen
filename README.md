@@ -54,6 +54,45 @@
 <br />
 
 <details>
+<summary><b>🔨 NVIDIA NIM 接入改动清单（供 review 核实）</b></summary>
+
+<br />
+
+本次新增 <b>NVIDIA NIM</b> provider（build.nvidia.com 的 FLUX.3 klein 原生 API），共 15 个文件（+355/−12）。接口为自定义契约（非 OpenAI 兼容）：`POST https://ai.api.nvidia.com/v1/genai/{model}`，模型 id 在 URL 路径；请求体 `ImageRequest`（`prompt` ≤2000 字；`width`/`height` 512–1568、16 的倍数、面积 ≤1,062,400；`cfg_scale` 默认 3.5；`steps` 默认 50；编辑传 `image` data-URL 数组，≤10 张参考图）；响应 `{artifacts:[{base64 (JPEG), finishReason}]}`，`CONTENT_FILTERED` 会转成用户可读报错。
+
+<b>新增文件</b>
+
+- `src/nvidia.ts`（143 行）— 适配器：`generateNvidiaImage` / `editNvidiaImage`；尺寸/prompt 长度/参考图数校验在发请求前完成；base64 解码后按魔数嗅探媒体类型；错误体经 `redactSecrets` 脱敏
+- `tests/nvidia.spec.ts`（96 行）— 6 个测试：请求 URL/头/体形状、尺寸越界拒绝（不发请求）、`CONTENT_FILTERED`、401、编辑 `image` data-URL 数组、&gt;10 张参考图拒绝
+
+<b>注册点（全部为追加行，不改动既有 provider 行为）</b>
+
+| 文件 | 追加内容 |
+| :--- | :--- |
+| `src/shared.ts` | `IMAGE_PROVIDERS` / `CLOUD_IMAGE_PROVIDERS` 加 `'nvidia'`；`NVIDIA_API_KEY_ENV`；`CLOUD_CREDENTIAL_REFS`；`DEFAULT_MODELS` / `DEFAULT_BASE_URLS` / `API_KEY_CONSOLE_URLS`；`PROVIDER_DISPLAY_NAMES`；`DEFAULT_NVIDIA_ENDPOINT` / `DEFAULT_NVIDIA_MODEL` |
+| `src/capabilities.ts` | `NVIDIA_SIZE_TABLE`（1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 · 21:9 · 9:21，全部满足 schema 限制）+ `CLOUD_CAPABILITIES.nvidia` |
+| `src/config.ts` | `nvidiaEndpoint` / `nvidiaModel`（接口 + schemastery 默认值 + re-export）；`resolveProvider` 的 `'nvidia'` 分支；`withProviderOverrides` 模型覆盖分支 |
+| `src/index.ts` | `generateSingle` 与 `edit_image` 各加 `provider === 'nvidia'` 分支（`edit_image` 原本 dashscope 是 fallback，不加显式分支会误走通义）；三个工具 schema 的 `provider` 枚举与 `size` 描述追加 |
+| `src/studio.ts` | 工作台 `wired.provider === 'nvidia'` 分支（生成 + 图生图，尺寸来自 capability 表） |
+| `src/test-route.ts` | `probeTarget` 探测 `integrate.api.nvidia.com/v1/models`（生成主机无 /models，目录在共享同一 key 的 integrate 主机）；新增 `fetchNvidiaImageModels` 供设置页"拉取模型" |
+| `src/channel-model-discovery.ts` | `DISCOVERABLE_OFFICIAL` 加 `'nvidia'` + 发现分发分支 |
+| `src/client/index.tsx` | `CLOUD_MODEL_FIELDS` / `CLOUD_URL_FIELDS` / `CLOUD_HINT_KEYS` / `providerLabels` 追加 nvidia；`ImageSettings` 镜像类型加 `nvidiaEndpoint` / `nvidiaModel` |
+| `src/client/provider-pill.tsx` | 中英文悬浮球行名 |
+| `src/client/plugin-i18n.ts` | `providerNvidia` / `endpointHintNvidia`（zh + en 各一处） |
+| `README.md` / `docs/providers.md` / `docs/providers.en.md` | 支持表与配置参考各加一行 |
+
+<b>核实方式</b>
+
+```bash
+pnpm install
+pnpm typecheck                              # 0 错误
+pnpm exec vitest run tests/nvidia.spec.ts   # 6 个测试通过
+pnpm exec vitest run                        # 全套 85 文件 / 1225 测试通过
+```
+
+</details>
+
+<details>
 <summary><strong>其他安装方式（全局 / GitHub 直装 / 本地调试）</strong></summary>
 
 ```bash
@@ -373,44 +412,6 @@ pnpm dsh plugin --profile web add dsh-image-gen@latest
 > OpenAI 与兼容渠道的对话生图和图生图都可以直接要求输出 GIF 动图，例如把参考图里的角色做成动图（需模型与中转支持；图生图还要求中转支持改图接口），帧数、帧时长等参数见 [Provider 配置参考](docs/providers.md)。ChatGPT 订阅使用的接口暂不支持 GIF 输出。
 
 📖 **默认模型与 Endpoint、各 Provider 的比例 / 清晰度、尺寸表、水印、中转站编辑格式等高级配置，见 [Provider 配置参考](docs/providers.md)。**
-<details>
-<summary><b>🔨 NVIDIA NIM 接入改动清单（供 review 核实）</b></summary>
-
-<br />
-
-本次新增 <b>NVIDIA NIM</b> provider（build.nvidia.com 的 FLUX.3 klein 原生 API），共 15 个文件（+355/−12）。接口为自定义契约（非 OpenAI 兼容）：`POST https://ai.api.nvidia.com/v1/genai/{model}`，模型 id 在 URL 路径；请求体 `ImageRequest`（`prompt` ≤2000 字；`width`/`height` 512–1568、16 的倍数、面积 ≤1,062,400；`cfg_scale` 默认 3.5；`steps` 默认 50；编辑传 `image` data-URL 数组，≤10 张参考图）；响应 `{artifacts:[{base64 (JPEG), finishReason}]}`，`CONTENT_FILTERED` 会转成用户可读报错。
-
-<b>新增文件</b>
-
-- `src/nvidia.ts`（143 行）— 适配器：`generateNvidiaImage` / `editNvidiaImage`；尺寸/prompt 长度/参考图数校验在发请求前完成；base64 解码后按魔数嗅探媒体类型；错误体经 `redactSecrets` 脱敏
-- `tests/nvidia.spec.ts`（96 行）— 6 个测试：请求 URL/头/体形状、尺寸越界拒绝（不发请求）、`CONTENT_FILTERED`、401、编辑 `image` data-URL 数组、&gt;10 张参考图拒绝
-
-<b>注册点（全部为追加行，不改动既有 provider 行为）</b>
-
-| 文件 | 追加内容 |
-| :--- | :--- |
-| `src/shared.ts` | `IMAGE_PROVIDERS` / `CLOUD_IMAGE_PROVIDERS` 加 `'nvidia'`；`NVIDIA_API_KEY_ENV`；`CLOUD_CREDENTIAL_REFS`；`DEFAULT_MODELS` / `DEFAULT_BASE_URLS` / `API_KEY_CONSOLE_URLS`；`PROVIDER_DISPLAY_NAMES`；`DEFAULT_NVIDIA_ENDPOINT` / `DEFAULT_NVIDIA_MODEL` |
-| `src/capabilities.ts` | `NVIDIA_SIZE_TABLE`（1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 · 21:9 · 9:21，全部满足 schema 限制）+ `CLOUD_CAPABILITIES.nvidia` |
-| `src/config.ts` | `nvidiaEndpoint` / `nvidiaModel`（接口 + schemastery 默认值 + re-export）；`resolveProvider` 的 `'nvidia'` 分支；`withProviderOverrides` 模型覆盖分支 |
-| `src/index.ts` | `generateSingle` 与 `edit_image` 各加 `provider === 'nvidia'` 分支（`edit_image` 原本 dashscope 是 fallback，不加显式分支会误走通义）；三个工具 schema 的 `provider` 枚举与 `size` 描述追加 |
-| `src/studio.ts` | 工作台 `wired.provider === 'nvidia'` 分支（生成 + 图生图，尺寸来自 capability 表） |
-| `src/test-route.ts` | `probeTarget` 探测 `integrate.api.nvidia.com/v1/models`（生成主机无 /models，目录在共享同一 key 的 integrate 主机）；新增 `fetchNvidiaImageModels` 供设置页"拉取模型" |
-| `src/channel-model-discovery.ts` | `DISCOVERABLE_OFFICIAL` 加 `'nvidia'` + 发现分发分支 |
-| `src/client/index.tsx` | `CLOUD_MODEL_FIELDS` / `CLOUD_URL_FIELDS` / `CLOUD_HINT_KEYS` / `providerLabels` 追加 nvidia；`ImageSettings` 镜像类型加 `nvidiaEndpoint` / `nvidiaModel` |
-| `src/client/provider-pill.tsx` | 中英文悬浮球行名 |
-| `src/client/plugin-i18n.ts` | `providerNvidia` / `endpointHintNvidia`（zh + en 各一处） |
-| `README.md` / `docs/providers.md` / `docs/providers.en.md` | 支持表与配置参考各加一行 |
-
-<b>核实方式</b>
-
-```bash
-pnpm install
-pnpm typecheck                              # 0 错误
-pnpm exec vitest run tests/nvidia.spec.ts   # 6 个测试通过
-pnpm exec vitest run                        # 全套 85 文件 / 1225 测试通过
-```
-
-</details>
 
 ---
 
