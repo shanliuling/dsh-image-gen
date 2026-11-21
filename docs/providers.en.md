@@ -15,6 +15,7 @@ Default models, endpoints, aspect ratios / quality tiers, and advanced configura
 | Aliyun DashScope | `qwen-image-3.0` | `https://dashscope.aliyuncs.com/api/v1` |
 | xAI Grok Imagine | `grok-imagine-image-2.0` | `https://api.x.ai/v1` |
 | Zhipu GLM-Image | `glm-image` | `https://open.bigmodel.cn/api/paas/v4` |
+| NVIDIA NIM / FLUX | `black-forest-labs/flux-3-image-klein` | `https://ai.api.nvidia.com/v1` (model id appended to the `/genai/` path) |
 | Local ComfyUI | Imported API Workflow | `http://127.0.0.1:8188` |
 | ChatGPT subscription | `gpt-image-2.6-flare` (channel-fixed) | Account sign-in, no configuration |
 | Grok subscription | `grok-imagine-image-2.0` (channel-fixed) | Account sign-in, no configuration |
@@ -34,6 +35,7 @@ Default models, endpoints, aspect ratios / quality tiers, and advanced configura
 | Aliyun DashScope | 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 | standard |
 | xAI Grok Imagine | auto · 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 · 21:9 | 1K / 2K |
 | Zhipu GLM-Image | 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 | hd |
+| NVIDIA NIM / FLUX | 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 · 21:9 · 9:21 | standard (steps 50 / cfg 3.5, endpoint defaults) |
 | ChatGPT subscription | auto · 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 | auto / low / medium / high / xhigh / max |
 | Grok subscription | auto · 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 · 21:9 | 1K / 2K |
 | Google subscription | auto · 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 4:5 · 5:4 · 16:9 · 9:16 · 21:9 | standard / HD (4K) |

@@ -129,6 +129,8 @@ interface ImageSettings {
   xaiModel?: string
   zhipuBaseURL?: string
   zhipuModel?: string
+  nvidiaEndpoint?: string
+  nvidiaModel?: string
   comfyuiBaseURL?: string
   comfyuiWorkflows?: ComfyUIWorkflowEntry[]
   comfyuiActiveWorkflow?: string
@@ -601,6 +603,7 @@ const CLOUD_MODEL_FIELDS = {
   dashscope: 'dashscopeModel',
   xai: 'xaiModel',
   zhipu: 'zhipuModel',
+  nvidia: 'nvidiaModel',
 } as const satisfies Record<CloudImageProvider, keyof ImageSettings>
 
 /** Settings field each cloud provider persists its endpoint or base URL under. */
@@ -612,6 +615,7 @@ const CLOUD_URL_FIELDS = {
   dashscope: 'dashscopeEndpoint',
   xai: 'xaiBaseURL',
   zhipu: 'zhipuBaseURL',
+  nvidia: 'nvidiaEndpoint',
 } as const satisfies Record<CloudImageProvider, keyof ImageSettings>
 
 /** Dictionary key of each cloud provider's endpoint hint. */
@@ -623,6 +627,7 @@ const CLOUD_HINT_KEYS = {
   dashscope: 'endpointHintDashScope',
   xai: 'endpointHintXAI',
   zhipu: 'endpointHintZhipu',
+  nvidia: 'endpointHintNvidia',
 } as const satisfies Record<CloudImageProvider, DictKey>
 
 /** Config field a cloud provider persists its model under. */
@@ -898,6 +903,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
     dashscope: t('providerDashScope'),
     xai: t('providerXAI'),
     zhipu: t('providerZhipu'),
+    nvidia: t('providerNvidia'),
     comfyui: t('providerComfyUI'),
     'chatgpt-sub': t('providerChatGPTSub'),
     'grok-sub': t('providerGrokSub'),

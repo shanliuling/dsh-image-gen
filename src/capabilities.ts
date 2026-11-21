@@ -14,6 +14,8 @@
  *   2026-11-24 retirement of 5.0/5.0 lite), 2K/3K/4K on the earlier models.
  * - dashscope (qwen-image-3.0): free pixels within 512*512–2048*2048, ratio
  *   1:8–8:1; no quality parameter.
+ * - nvidia (NVIDIA NIM FLUX): 16-divisible pixels 512–1568 per edge, total
+ *   area ≤ 1,062,400 px; no quality parameter (steps/cfg stay at defaults).
  * - xai (grok-imagine-image-2.0): NO size parameter at all — aspect_ratio (15
  *   values incl. auto) + resolution 1k/2k.
  * - zhipu (glm-image): 7 recommended sizes (32-divisible, ≤2^22 px); quality
@@ -96,6 +98,19 @@ const DASHSCOPE_SIZE_TABLE: Record<string, string> = {
   '9:16': '928x1664',
 }
 
+/** NVIDIA NIM FLUX pixel sizes: 512–1568, multiple of 16, area ≤ 1,062,400 (build.nvidia.com, 2026-11). */
+const NVIDIA_SIZE_TABLE: Record<string, string> = {
+  '1:1': '1024x1024',
+  '3:2': '1248x832',
+  '2:3': '832x1248',
+  '4:3': '1152x864',
+  '3:4': '864x1152',
+  '16:9': '1168x656',
+  '9:16': '656x1168',
+  '21:9': '1232x528',
+  '9:21': '528x1232',
+}
+
 /** glm-image recommended sizes (32-divisible, ≤2^22 px). */
 const ZHIPU_SIZE_TABLE: Record<string, string> = {
   '1:1': '1280x1280',
@@ -162,6 +177,13 @@ export const CLOUD_CAPABILITIES: Record<Exclude<CloudImageProvider, 'openai-comp
     '1:1',
     'standard',
     ratio => DASHSCOPE_SIZE_TABLE[ratio] ?? '1024x1024',
+  ),
+  nvidia: capability(
+    Object.keys(NVIDIA_SIZE_TABLE),
+    [STANDARD],
+    '1:1',
+    'standard',
+    ratio => NVIDIA_SIZE_TABLE[ratio] ?? '1024x1024',
   ),
   xai: capability(
     ['auto', '1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16', '21:9'],

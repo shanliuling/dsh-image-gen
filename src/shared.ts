@@ -197,7 +197,7 @@ export const IMAGE_GENERATION_NAMESPACE = 'image-generation'
 export const IMAGE_GENERATION_ENTRY_ID = 'image-gen'
 
 /** Supported providers. */
-export const IMAGE_PROVIDERS = ['google', 'openai', 'openai-compat', 'seedream', 'dashscope', 'xai', 'zhipu', 'comfyui', 'chatgpt-sub', 'grok-sub', 'google-sub'] as const
+export const IMAGE_PROVIDERS = ['google', 'openai', 'openai-compat', 'seedream', 'dashscope', 'xai', 'zhipu', 'nvidia', 'comfyui', 'chatgpt-sub', 'grok-sub', 'google-sub'] as const
 export type ImageProvider = typeof IMAGE_PROVIDERS[number]
 
 /**
@@ -214,7 +214,7 @@ export function isSubscriptionProvider(provider: ImageProvider): provider is Sub
 }
 
 /** Providers supported by the first browser workbench release. */
-export const CLOUD_IMAGE_PROVIDERS = ['google', 'openai', 'openai-compat', 'seedream', 'dashscope', 'xai', 'zhipu'] as const
+export const CLOUD_IMAGE_PROVIDERS = ['google', 'openai', 'openai-compat', 'seedream', 'dashscope', 'xai', 'zhipu', 'nvidia'] as const
 export type CloudImageProvider = typeof CLOUD_IMAGE_PROVIDERS[number]
 
 /** Normalize the relay model list while keeping the legacy default model selectable. */
@@ -388,6 +388,8 @@ export const OPENAI_COMPAT_API_KEY_ENV = 'DSH_IMAGE_GEN_OPENAI_COMPAT_KEY'
 export const SEEDREAM_API_KEY_ENV = 'ARK_API_KEY'
 /** DashScope credential reference. */
 export const DASHSCOPE_API_KEY_ENV = 'DASHSCOPE_API_KEY'
+/** NVIDIA NIM credential reference; matches the nvapi key environment name. */
+export const NVIDIA_API_KEY_ENV = 'NVIDIA_API_KEY'
 /** xAI credential reference; matches the official xAI SDK environment name. */
 export const XAI_API_KEY_ENV = 'XAI_API_KEY'
 /** Zhipu credential reference; matches the official Zhipu SDK environment name. */
@@ -400,6 +402,7 @@ export const CLOUD_CREDENTIAL_REFS: Record<CloudImageProvider, string> = {
   'openai-compat': OPENAI_COMPAT_API_KEY_ENV,
   seedream: SEEDREAM_API_KEY_ENV,
   dashscope: DASHSCOPE_API_KEY_ENV,
+  nvidia: NVIDIA_API_KEY_ENV,
   xai: XAI_API_KEY_ENV,
   zhipu: ZHIPU_API_KEY_ENV,
 }
@@ -418,6 +421,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ImageProvider, string> = {
   'openai-compat': 'OpenAI 兼容',
   seedream: 'Seedream',
   dashscope: 'DashScope',
+  nvidia: 'NVIDIA NIM',
   xai: 'xAI Grok',
   zhipu: '智谱 GLM',
   comfyui: 'ComfyUI',
@@ -583,6 +587,8 @@ export const DEFAULT_GOOGLE_ENDPOINT = 'https://generativelanguage.googleapis.co
 export const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1'
 export const DEFAULT_SEEDREAM_BASE_URL = 'https://ark.cn-beijing.volces.com/api/v3'
 export const DEFAULT_DASHSCOPE_ENDPOINT = 'https://dashscope.aliyuncs.com/api/v1'
+/** NVIDIA NIM native generation endpoint; the model id rides the URL path. */
+export const DEFAULT_NVIDIA_ENDPOINT = 'https://ai.api.nvidia.com/v1'
 export const DEFAULT_XAI_BASE_URL = 'https://api.x.ai/v1'
 export const DEFAULT_ZHIPU_BASE_URL = 'https://open.bigmodel.cn/api/paas/v4'
 export const DEFAULT_COMFYUI_BASE_URL = 'http://127.0.0.1:8188'
@@ -663,6 +669,7 @@ export function currentSeedreamModel(model: string | undefined): string {
   return RETIRED_SEEDREAM_MODELS[trimmed] ?? trimmed
 }
 export const DEFAULT_DASHSCOPE_MODEL = 'qwen-image-3.0'
+export const DEFAULT_NVIDIA_MODEL = 'black-forest-labs/flux-3-image-klein'
 export const DEFAULT_XAI_MODEL = 'grok-imagine-image-2.0'
 export const DEFAULT_ZHIPU_MODEL = 'glm-image'
 
@@ -752,6 +759,7 @@ export const DEFAULT_MODELS: Record<ImageProvider, string> = {
   dashscope: DEFAULT_DASHSCOPE_MODEL,
   xai: DEFAULT_XAI_MODEL,
   zhipu: DEFAULT_ZHIPU_MODEL,
+  nvidia: DEFAULT_NVIDIA_MODEL,
   comfyui: DEFAULT_COMFYUI_WORKFLOW_LABEL,
   'chatgpt-sub': DEFAULT_SUBSCRIPTION_MODELS['chatgpt-sub'],
   'grok-sub': DEFAULT_SUBSCRIPTION_MODELS['grok-sub'],
@@ -770,6 +778,7 @@ export const API_KEY_CONSOLE_URLS: Partial<Record<ImageProvider, string>> = {
   dashscope: 'https://bailian.console.aliyun.com/',
   xai: 'https://console.x.ai/team/default/api-keys',
   zhipu: 'https://bigmodel.cn/usercenter/proj-mgmt/apikeys',
+  nvidia: 'https://build.nvidia.com',
 }
 
 export const DEFAULT_BASE_URLS: Record<ImageProvider, string> = {
@@ -781,6 +790,7 @@ export const DEFAULT_BASE_URLS: Record<ImageProvider, string> = {
   dashscope: DEFAULT_DASHSCOPE_ENDPOINT,
   xai: DEFAULT_XAI_BASE_URL,
   zhipu: DEFAULT_ZHIPU_BASE_URL,
+  nvidia: DEFAULT_NVIDIA_ENDPOINT,
   comfyui: DEFAULT_COMFYUI_BASE_URL,
   // Subscription channels call an in-process service, never a URL.
   'chatgpt-sub': '',

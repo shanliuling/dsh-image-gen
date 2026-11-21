@@ -15,6 +15,7 @@
 | Aliyun DashScope   | `qwen-image-3.0`             | `https://dashscope.aliyuncs.com/api/v1`                         |
 | xAI Grok Imagine   | `grok-imagine-image-2.0`     | `https://api.x.ai/v1`                                           |
 | 智谱 GLM-Image     | `glm-image`                  | `https://open.bigmodel.cn/api/paas/v4`                         |
+| NVIDIA NIM / FLUX  | `black-forest-labs/flux-3-image-klein` | `https://ai.api.nvidia.com/v1`（模型 id 拼进 `/genai/` 路径）   |
 | Local ComfyUI      | 用户导入的 API Workflow      | `http://127.0.0.1:8188`                                         |
 | ChatGPT 订阅       | `gpt-image-2.6-flare`（通道固定） | 账号登录，无需配置                                        |
 | Grok 订阅         | `grok-imagine-image-2.0`（通道固定） | 账号登录，无需配置                                    |
@@ -34,11 +35,13 @@
 | Aliyun DashScope   | 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16                         | 标准                                    |
 | xAI Grok Imagine   | 自动 · 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 · 21:9           | 1K / 2K                                 |
 | 智谱 GLM-Image     | 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16                         | 高清                                    |
+| NVIDIA NIM / FLUX  | 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 · 21:9 · 9:21         | 标准（steps 50 / cfg 3.5，端点默认）    |
 | ChatGPT 订阅       | 自动 · 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16                  | 自动 / low / medium / high / xhigh / max |
 | Grok 订阅          | 自动 · 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 · 21:9           | 1K / 2K                                 |
 | Google 订阅        | 自动 · 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 4:5 · 5:4 · 16:9 · 9:16 · 21:9 | 标准 / 高清（4K）                     |
 
 > 「自动」比例表示由模型按 Prompt 自行决定构图；上游已移除的档位（如 Seedream 5.0 的 1K）插件不会暴露。
+> NVIDIA NIM（build.nvidia.com 公共 Preview 端点）图生图暂仅接受 4 张预置参考图（example_id 0–3），自定义参考图需生产端点或自部署 NIM；适配器对该拒绝给出明确提示。
 > Google 订阅会使用有效的平台枚举发现账号项目，并提供普通 daily 入口作为兼容回退。项目发现未返回项目且提示 `UNSUPPORTED_CLIENT` 时，会再用 Antigravity 客户端身份重试；该过程不自动开户。仍未返回项目时保留旧兼容项目尝试，但不会把它缓存成账号真实项目；若生图仍失败，错误会保留项目发现、账号资格及各生图入口的脱敏响应，避免只显示最后一个 429。设置中的订阅「测试连接」只检查登录记录，实际生图成功才验证该账号的生图链路；`UNSUPPORTED_CLIENT` 的 Code Assist 提示也不单独判定生图不可用。
 > OpenAI 与兼容渠道的 Studio 控件分别显示「比例 / 分辨率 / 生成质量」，分辨率选项会显示实际像素。多模型对比及再次生成也保留这两类参数。
 > OpenAI 官方可通过设置中的 `openaiSizes` 自定义尺寸表，格式为「比例 → 档位 → 像素」，例如 `{ "16:9": { "2K": "2048x1152", "4K": "3840x2160" } }`。gpt-image-2 系列按官方限制校验：边长为 16 的倍数、最大 3840、比例在 1:3 到 3:1、总像素 655360–8294400；超过 3686400 像素的输出属于上游实验支持。[官方说明](https://developers.openai.com/api/reference/resources/images/methods/generate)。旧版 GPT Image 模型仍只使用三种标准尺寸。
