@@ -26,25 +26,10 @@
  *   standard/HD → default/4K).
  */
 import type { CloudImageProvider, StudioOption, SubscriptionProvider } from './shared.js'
-
-/** zh labels shared by the server-side profiles; the client re-localizes. */
-export const RATIO_LABELS: Record<string, string> = {
-  auto: '自动',
-  '1:1': '1:1 方形',
-  '3:2': '3:2 横向',
-  '2:3': '2:3 肖像',
-  '4:3': '4:3 横向',
-  '3:4': '3:4 竖向',
-  '4:5': '4:5 肖像',
-  '5:4': '5:4 横向',
-  '3:1': '3:1 全景',
-  '1:3': '1:3 长条',
-  '21:9': '21:9 超宽',
-  '9:21': '9:21 超高',
-}
+import { ratioLabel } from './ratio-labels.js'
 
 function ratioOption(value: string): StudioOption {
-  return { value, label: RATIO_LABELS[value] ?? value }
+  return { value, label: ratioLabel(value, 'zh') }
 }
 
 /** 16-divisible pixel sizes for the OpenAI-shape free-size contract. */
