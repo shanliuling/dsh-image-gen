@@ -34,6 +34,24 @@ export interface StudioShortcutProps {
   /** Studio tab identity: `kind` is what `openTab` takes, `id` prefixes its tab ids. */
   studioTab: { id: string; kind: string }
   sessionId?: string
+  /** Plugin settings; the shortcut shares the provider pill's `showProviderPill` toggle. */
+  scope?: ShortcutVisibilityScope | undefined
+}
+
+export interface ShortcutVisibilityScope {
+  getSnapshot(): { value?: { showProviderPill?: boolean } | undefined }
+  subscribe(listener: () => void): () => void
+}
+
+/** Shown together with the provider pill: only while its toggle is on. */
+export function shortcutVisible(scope: ShortcutVisibilityScope | undefined): boolean {
+  return scope?.getSnapshot().value?.showProviderPill === true
+}
+
+function useShortcutVisible(scope: ShortcutVisibilityScope | undefined): boolean {
+  const subscribe = useMemo(() => (listener: () => void) => scope?.subscribe(listener) ?? (() => {}), [scope])
+  const getSnapshot = (): boolean => shortcutVisible(scope)
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 }
 
 const SHORTCUT_TEXT = {
@@ -95,6 +113,7 @@ export function toggleStudio(props: StudioShortcutProps): 'opened' | 'closed' {
 export function StudioShortcutButton(props: StudioShortcutProps) {
   const { sidebarRight, sessionId } = props
   const lang = useShortcutLang(props.locale)
+  const visible = useShortcutVisible(props.scope)
   const [pressed, setPressed] = useState(false)
   const [tabsActive, setTabsActive] = useState(false)
   const [hover, setHover] = useState(false)
@@ -114,6 +133,7 @@ export function StudioShortcutButton(props: StudioShortcutProps) {
   }, [tabsActive])
   const active = pressed || tabsActive
   const title = shortcutTitle(lang, active)
+  if (!visible) return null
   return (
     <button
       type="button"

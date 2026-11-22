@@ -6,6 +6,7 @@ import {
   StudioShortcutButton,
   shortcutLangStore,
   shortcutTitle,
+  shortcutVisible,
   toggleStudio,
   type SidebarRightFace,
   type SidebarRightTab,
@@ -65,9 +66,45 @@ describe('composer studio shortcut language', () => {
   })
 })
 
+function pillScope(showProviderPill?: boolean) {
+  const listeners = new Set<() => void>()
+  let value: { showProviderPill?: boolean } | undefined = showProviderPill === undefined ? undefined : { showProviderPill }
+  return {
+    getSnapshot: () => ({ value }),
+    subscribe: (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn) } },
+    toggle(next: boolean) { value = { showProviderPill: next }; for (const fn of listeners) fn() },
+  }
+}
+
+describe('composer studio shortcut visibility', () => {
+  it('shares the provider pill toggle, off by default', () => {
+    expect(shortcutVisible(undefined)).toBe(false)
+    expect(shortcutVisible(pillScope())).toBe(false)
+    expect(shortcutVisible(pillScope(false))).toBe(false)
+    expect(shortcutVisible(pillScope(true))).toBe(true)
+  })
+
+  it('follows the toggle when it flips', () => {
+    const scope = pillScope(false)
+    scope.toggle(true)
+    expect(shortcutVisible(scope)).toBe(true)
+    scope.toggle(false)
+    expect(shortcutVisible(scope)).toBe(false)
+  })
+
+  it('renders nothing while the pill toggle is off', () => {
+    const markup = (scope?: ReturnType<typeof pillScope>) => renderToStaticMarkup(
+      createElement(StudioShortcutButton, { sidebarRight: sidebar(), studioTab, scope }),
+    )
+    expect(markup()).toBe('')
+    expect(markup(pillScope(false))).toBe('')
+    expect(markup(pillScope(true))).toContain('<button')
+  })
+})
+
 describe('composer studio shortcut button', () => {
   const render = (props: Partial<StudioShortcutProps>) => renderToStaticMarkup(
-    createElement(StudioShortcutButton, { sidebarRight: sidebar(), studioTab, ...props }),
+    createElement(StudioShortcutButton, { sidebarRight: sidebar(), studioTab, scope: pillScope(true), ...props }),
   )
 
   it('renders an icon only, with the localized tooltip as its accessible name', () => {

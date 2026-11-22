@@ -359,7 +359,7 @@ export function apply(ctx: Context): void {
       id: 'image-studio',
       // After the provider pill (order 10), so the icon is next to the model select.
       order: 20,
-      inject: () => ({ locale, sidebarRight, studioTab: { id: SIDEBAR_STUDIO_TAB_ID, kind: SIDEBAR_STUDIO_TAB_KIND } }),
+      inject: () => ({ locale, scope, sidebarRight, studioTab: { id: SIDEBAR_STUDIO_TAB_ID, kind: SIDEBAR_STUDIO_TAB_KIND } }),
     }, StudioShortcutButton))
   }
   ctx.inject(['sidebarRight'], injectStudioShortcut)

@@ -404,7 +404,10 @@ describe('DSH client compatibility', () => {
     const pill = harness.slotRegistrations.find(({ options }) => options.id === 'image-provider')
     expect(registration?.options).toMatchObject({ name: 'conversation.input.right', order: 20 })
     expect(Number(registration?.options.order)).toBeGreaterThan(Number(pill?.options.order))
-    expect((registration?.options.inject as () => unknown)()).toMatchObject({ studioTab: { id: 'dsh-image-gen/studio', kind: 'dsh-image-gen-studio' } })
+    const face = (registration?.options.inject as () => { scope?: unknown })()
+    expect(face).toMatchObject({ studioTab: { id: 'dsh-image-gen/studio', kind: 'dsh-image-gen-studio' } })
+    // Same settings scope as the pill, so one toggle shows or hides both.
+    expect(face.scope).toBe((pill?.options.inject as () => { scope?: unknown })().scope)
 
     await fiber.dispose()
   })
