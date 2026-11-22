@@ -1438,7 +1438,7 @@ export const GalleryViewTab: FC<GalleryViewTabProps> = (props) => {
         ) : activeTab === 'inspiration' ? (
           <InspirationView locale={locale} onUsePrompt={useInspirationPrompt} onUseReference={useInspirationReference} />
         ) : (
-          <StudioView locale={locale} credentialEvents={credentialEvents} inSidebar={inSidebar} workspace={activeWorkspace} initialPrompt={studioDraft} initialReference={studioReference} initialCanvasSurface={initialCanvasSurface} showInfiniteCanvasHint={!inSidebar} onInitialPromptApplied={clearStudioDraft} onInitialReferenceApplied={clearStudioReference} onOpenInspiration={() => setActiveTab('inspiration')} />
+          <StudioView locale={locale} credentialEvents={credentialEvents} workspace={activeWorkspace} initialPrompt={studioDraft} initialReference={studioReference} initialCanvasSurface={initialCanvasSurface} showInfiniteCanvasHint={!inSidebar} onInitialPromptApplied={clearStudioDraft} onInitialReferenceApplied={clearStudioReference} onOpenInspiration={() => setActiveTab('inspiration')} />
         )}
       </div>
 

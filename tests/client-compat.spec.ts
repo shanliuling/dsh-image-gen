@@ -389,6 +389,26 @@ describe('DSH client compatibility', () => {
     await fiber.dispose()
   })
 
+  it('puts the studio shortcut beside the model select only when the host has a right sidebar', async () => {
+    const harness = clientHarness({ connection: {}, remote: { credentials: { describe: vi.fn(), set: vi.fn() } } })
+    const fiber = harness.ctx.plugin(plugin)
+    await fiber.await()
+    const shortcut = () => harness.slotInjections.filter(injection => injection.name === 'conversation.input.right')
+      .flatMap(injection => { injection.factory(); return harness.slotRegistrations.filter(({ options }) => options.id === 'image-studio') })
+    expect(shortcut()).toHaveLength(0)
+    expect(harness.slotInjections.some(injection => injection.name === 'conversation.input.left')).toBe(false)
+
+    harness.ctx.provide('sidebarRight', { openTab: vi.fn(), close: vi.fn(), active: vi.fn() })
+    await vi.waitFor(() => expect(shortcut().length).toBeGreaterThan(0))
+    const [registration] = shortcut()
+    const pill = harness.slotRegistrations.find(({ options }) => options.id === 'image-provider')
+    expect(registration?.options).toMatchObject({ name: 'conversation.input.right', order: 20 })
+    expect(Number(registration?.options.order)).toBeGreaterThan(Number(pill?.options.order))
+    expect((registration?.options.inject as () => unknown)()).toMatchObject({ studioTab: { id: 'dsh-image-gen/studio', kind: 'dsh-image-gen-studio' } })
+
+    await fiber.dispose()
+  })
+
   it('mounts the settings card on cores that never expose a credentials service (#32)', async () => {
     const harness = clientHarness({ connection: {}, remote: {} })
 

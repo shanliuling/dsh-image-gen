@@ -76,6 +76,7 @@ import { parseExtraFields, parseSizeTable } from './output-settings.js'
 import { DEFAULT_COMPAT_QUALITIES, validateOfficialSize } from '../openai-output.js'
 import { ImageProviderPill, PROVIDER_PILL_STYLE, type ProviderPillFace } from './provider-pill.js'
 import { writeSetting } from './settings-write.js'
+import { StudioShortcutButton, type SidebarRightFace } from './studio-shortcut.js'
 
 /** Build timestamp injected by tsdown at bundle time. */
 declare const __CANVAS_BUILD_TS__: string
@@ -195,25 +196,6 @@ interface SidebarRightTabsFace {
   }): () => void
 }
 
-/** One open right-sidebar tab as published by DSH's `sidebarRight` inventory. */
-interface SidebarRightTab {
-  sessionId?: string
-  tabId: string
-  kind: string
-}
-/**
- * Runtime face of DSH's `sidebarRight` controller. Duck-typed and optional:
- * older hosts without the service never mount the composer shortcut.
- */
-interface SidebarRightFace {
-  openTab(kind: string, options?: { revealIfOpened?: boolean }): void
-  close(tabId: string): void
-  active(): { id: string; kind: string } | undefined
-  openTabs?: {
-    getSnapshot(): readonly SidebarRightTab[]
-    subscribe(listener: () => void): () => void
-  } | undefined
-}
 
 
 
@@ -364,108 +346,23 @@ export function apply(ctx: Context): void {
       inject: injectSettingsFace,
     }, ImageGenerationSettingsCard))
   }
-  // Composer shortcut (DSH slot 'conversation.input.left'): open or close the
-  // right-sidebar studio without hunting for the sidebar entry. Registered only
-  // when the host exposes `sidebarRight`, so pre-0.1.5 hosts keep the composer
-  // exactly as before.
-  const isStudioTab = (tab: { kind?: string; tabId?: string; id?: string } | undefined): boolean =>
-    tab !== undefined && (tab.kind === SIDEBAR_STUDIO_TAB_KIND || tab.kind === SIDEBAR_STUDIO_TAB_ID || String(tab.tabId ?? tab.id ?? '').startsWith(SIDEBAR_STUDIO_TAB_ID))
-  const ComposerButton = ({ locale: buttonLocale, sidebarRight, sessionId }: { locale?: LocaleService; sidebarRight: SidebarRightFace; sessionId?: string }) => {
-    const [pressed, setPressed] = useState(false)
-    const [tabsActive, setTabsActive] = useState(false)
-    const [hover, setHover] = useState(false)
-    const prevTabsActive = useRef(false)
-    const inSession = (tab: SidebarRightTab): boolean => sessionId === undefined || tab.sessionId === undefined || tab.sessionId === sessionId
-    useEffect(() => {
-      const source = sidebarRight.openTabs
-      if (source === undefined) return undefined
-      const sync = (): void => {
-        let tabs: readonly SidebarRightTab[] = []
-        try { tabs = source.getSnapshot() } catch { tabs = [] }
-        setTabsActive(tabs.some(tab => inSession(tab) && isStudioTab(tab)))
-      }
-      sync()
-      return source.subscribe(sync)
-    }, [sidebarRight, sessionId])
-    useEffect(() => {
-      if (tabsActive) { prevTabsActive.current = true; return }
-      if (!prevTabsActive.current) return
-      prevTabsActive.current = false
-      setPressed(false)
-    }, [tabsActive])
-    const active = pressed || tabsActive
-    const english = Boolean(buttonLocale?.getSnapshot?.().active?.startsWith('en'))
-    const label = english ? 'Image' : '图像'
-    const title = english ? 'Open Image Studio' : '打开图像工作台'
-    const toggle = (): void => {
-      let tabs: readonly SidebarRightTab[] = []
-      try { tabs = sidebarRight.openTabs?.getSnapshot() ?? [] } catch { tabs = [] }
-      const existing = tabs.find(tab => inSession(tab) && isStudioTab(tab))
-      const activeTab = sidebarRight.active()
-      const openStudio = existing ?? (activeTab !== undefined && isStudioTab(activeTab) ? activeTab : undefined)
-      if (openStudio !== undefined) {
-        setPressed(false)
-        sidebarRight.close('tabId' in openStudio ? openStudio.tabId : openStudio.id)
-        return
-      }
-      setPressed(true)
-      sidebarRight.openTab(SIDEBAR_STUDIO_TAB_KIND, { revealIfOpened: true })
-    }
-    return (
-      <button
-        type="button"
-        className="dsh-image-quick-button"
-        aria-label={title}
-        aria-pressed={active}
-        title={title}
-        style={{
-          appearance: 'none',
-          WebkitAppearance: 'none',
-          flex: 'none',
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 4,
-          height: 24,
-          padding: '0 8px',
-          border: 'none',
-          borderRadius: 'var(--dsw-radius-sm)',
-          background: active ? 'rgba(74, 125, 255, 0.10)' : (hover ? 'var(--dsw-alias-interactive-bg-hover)' : 'transparent'),
-          color: active ? '#4A7DFF' : 'var(--dsw-alias-label-secondary)',
-          font: 'inherit',
-          fontSize: 13,
-          fontWeight: 500,
-          lineHeight: '20px',
-          cursor: 'pointer',
-          outline: 'none',
-          boxShadow: active ? '0 0 0 1px #4A7DFF' : 'none',
-        }}
-        onMouseEnter={() => setHover(true)}
-        onMouseLeave={() => setHover(false)}
-        onMouseDown={event => event.preventDefault()}
-        onClick={toggle}
-      >
-        <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <rect x="3" y="3" width="18" height="18" rx="3" />
-          <circle cx="8.5" cy="8.5" r="1.4" />
-          <path d="M21 15l-4.5-4.5L5.5 21" />
-        </svg>
-        <span>{label}</span>
-      </button>
-    )
-  }
-  const injectComposerButton = (owner: Context): void => {
+  // Composer shortcut (DSH slot 'conversation.input.right', rendered right
+  // before the model select): an icon that opens or closes the right-sidebar
+  // studio. Registered only when the host exposes `sidebarRight`, so older
+  // hosts keep the composer exactly as before.
+  const injectStudioShortcut = (owner: Context): void => {
     const sidebarRight = owner.get('sidebarRight') as SidebarRightFace | undefined
     if (sidebarRight === undefined) return
     const ownerRegister = owner.slots.register.bind(owner.slots) as unknown as (options: object, component: unknown) => () => void
-    ;(owner.slots.inject as (key: string, factory: () => () => void) => void)('conversation.input.left', () => ownerRegister({
-      name: 'conversation.input.left',
-      id: 'image-quick',
-      order: 10,
-      inject: () => ({ locale, sidebarRight }),
-    }, ComposerButton))
+    ;(owner.slots.inject as (key: string, factory: () => () => void) => void)('conversation.input.right', () => ownerRegister({
+      name: 'conversation.input.right',
+      id: 'image-studio',
+      // After the provider pill (order 10), so the icon is next to the model select.
+      order: 20,
+      inject: () => ({ locale, sidebarRight, studioTab: { id: SIDEBAR_STUDIO_TAB_ID, kind: SIDEBAR_STUDIO_TAB_KIND } }),
+    }, StudioShortcutButton))
   }
-  ctx.inject(['sidebarRight'], injectComposerButton)
+  ctx.inject(['sidebarRight'], injectStudioShortcut)
 
   // Composer tool-row pill (DSH official slot: 'conversation.input.right', the
   // seat right beside the model select): switch the default image provider

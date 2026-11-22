@@ -208,16 +208,10 @@ export const StudioView: FC<{
    * right-sidebar variant IS the full experience, so the hint would be noise.
    */
   showInfiniteCanvasHint?: boolean
-  /**
-   * Mounted in the right-sidebar seat (DSH `sidebar.right.pane.tab`). The
-   * recent rail starts folded there so the infinite canvas gets the width;
-   * the conversation-tab seat keeps its previous behavior.
-   */
-  inSidebar?: boolean | undefined
   onInitialPromptApplied?(): void
   onInitialReferenceApplied?(): void
   onOpenInspiration?(): void
-}> = ({ locale, credentialEvents, inSidebar, workspace, initialPrompt, initialReference, initialCanvasSurface, showInfiniteCanvasHint, onInitialPromptApplied, onInitialReferenceApplied, onOpenInspiration }) => {
+}> = ({ locale, credentialEvents, workspace, initialPrompt, initialReference, initialCanvasSurface, showInfiniteCanvasHint, onInitialPromptApplied, onInitialReferenceApplied, onOpenInspiration }) => {
   const [lang, setLang] = useState<'zh' | 'en'>(() => locale?.getSnapshot?.().active?.startsWith('en') ? 'en' : 'zh')
   const [config, setConfig] = useState<StudioConfigResponse | null>(null)
   const [configLoading, setConfigLoading] = useState(true)
@@ -234,7 +228,7 @@ export const StudioView: FC<{
   const [editPromptText, setEditPromptText] = useState('')
   const [editPromptFolder, setEditPromptFolder] = useState('')
   const [movingFav, setMovingFav] = useState<{ kind: 'prompt', id: string, folderId: string | undefined } | null>(null)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(inSidebar === true && initialCanvasSurface === 'infinite')
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   /** Manual-only collapse for the right generate form; the form stays put in
    *  narrow seats because it is the primary generation surface. Starts folded
    *  when the studio opens straight into the infinite canvas. */
@@ -355,7 +349,7 @@ export const StudioView: FC<{
       if (railToggledByUserRef.current) return
       for (const entry of entries) {
         const narrow = entry.contentRect.width < WORKBENCH_NARROW_WIDTH
-        if (narrow) setSidebarCollapsed(true)
+        setSidebarCollapsed(prev => (prev === narrow ? prev : narrow))
       }
     })
     observer.observe(root)
