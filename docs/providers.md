@@ -30,7 +30,7 @@
 | Google Gemini      | 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 4:5 · 5:4 · 16:9 · 9:16 · 21:9      | 1K / 2K / 4K                            |
 | OpenAI Images      | gpt-image-2 系列支持 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 | 分辨率 1K / 2K（宽屏、竖屏另有 4K）；生成质量独立选择 auto / low / medium / high |
 | OpenAI Compatible  | 由 `openaiCompatSizes` 配置决定（默认 1:1 · 3:2 · 2:3）           | 分辨率由尺寸表决定；生成质量独立配置，默认不发送 |
-| ByteDance Seedream | 自动 · 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 · 21:9           | 5.0 pro / flash：1K / 1.5K / 2K；更早的模型：2K / 3K / 4K |
+| ByteDance Seedream | 自动 · 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 · 21:9           | 5.5、5.0 pro / flash：1K / 1.5K / 2K；更早的模型：2K / 3K / 4K |
 | Aliyun DashScope   | 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16                         | 标准                                    |
 | xAI Grok Imagine   | 自动 · 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16 · 21:9           | 1K / 2K                                 |
 | 智谱 GLM-Image     | 1:1 · 3:2 · 2:3 · 4:3 · 3:4 · 16:9 · 9:16                         | 高清                                    |
