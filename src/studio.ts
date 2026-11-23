@@ -39,7 +39,8 @@ import {
   type SubscriptionProvider,
 } from './shared.js'
 
-import { CLOUD_CAPABILITIES, cloudCapability, RATIO_LABELS, SUBSCRIPTION_CAPABILITIES } from './capabilities.js'
+import { CLOUD_CAPABILITIES, cloudCapability, SUBSCRIPTION_CAPABILITIES } from './capabilities.js'
+import { ratioLabel } from './ratio-labels.js'
 import { compatGenerationExtraBody, compatQualityOptions, compatRequestQuality, gifRequestFields, officialQualityOptions, officialSizeTable, validateGifFrameSize, validateOfficialSize, PROVIDER_DEFAULT_QUALITY } from './openai-output.js'
 import { keepGifOriginal } from './vault-registry.js'
 import { vaultConfigOf } from './vault-store.js'
@@ -180,7 +181,7 @@ function configuredCompatSize(config: Config, input: Pick<StudioGenerateRequest,
 /** Workbench profile derived from the configured relay table. */
 function openAICompatStudioProfile(config: Config, model: string, configured: boolean): StudioProviderProfile {
   const groups = openAICompatTable(config)
-  const ratioOptions = groups.map(group => ({ value: group.ratio, label: RATIO_LABELS[group.ratio] ?? group.ratio }))
+  const ratioOptions = groups.map(group => ({ value: group.ratio, label: ratioLabel(group.ratio, 'zh') }))
   const tierMap = new Map<string, StudioOption>()
   for (const group of groups) for (const entry of group.tiers) tierMap.set(entry.tier, { value: entry.tier, label: entry.tier })
   const qualityOptions = [...tierMap.values()].sort((a, b) => (tierRank(a.value) || 0) - (tierRank(b.value) || 0))
@@ -746,7 +747,7 @@ const CLOUD_DISPLAY_LABELS: Record<CloudImageProvider, string> = {
 }
 
 function option(value: string): StudioOption {
-  return { value, label: RATIO_LABELS[value] ?? value }
+  return { value, label: ratioLabel(value, 'zh') }
 }
 
 /**

@@ -7,6 +7,7 @@ import { GalleryCanvasButton } from './tl/gallery-canvas-button.js'
 import { fetchAttachmentBlob } from './image-cache.js'
 import { formatRelativeTime } from './browser-image-utils.js'
 import { PROVIDER_DEFAULT_QUALITY } from '../openai-output.js'
+import { ratioLabel } from '../ratio-labels.js'
 import type { FavoriteFolder, GalleryItem } from './gallery-store.js'
 
 export const BatchCanvasItem: FC<{
@@ -52,20 +53,6 @@ export function hasSubscriptionRatioMismatch(item: GalleryItem): boolean {
 
 export const FieldSelect: FC<{ label: string; value: string; options: Array<{ value: string; label: string }>; onChange(value: string): void }> = ({ label, value, options, onChange }) => <label className="dsh-ig-field-select"><span>{label}</span><select value={value} onChange={event => onChange(event.target.value)}>{options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
 
-const LOCALIZED_RATIOS: Record<string, { zh: string; en: string }> = {
-  auto: { zh: '自动', en: 'Auto' },
-  '1:1': { zh: '1:1 方形', en: '1:1 Square' },
-  '3:2': { zh: '3:2 横向', en: '3:2 Landscape' },
-  '2:3': { zh: '2:3 肖像', en: '2:3 Portrait' },
-  '4:3': { zh: '4:3 横向', en: '4:3 Landscape' },
-  '3:4': { zh: '3:4 竖向', en: '3:4 Portrait' },
-  '4:5': { zh: '4:5 肖像', en: '4:5 Portrait' },
-  '5:4': { zh: '5:4 横向', en: '5:4 Landscape' },
-  '16:9': { zh: '16:9 宽屏', en: '16:9 Widescreen' },
-  '9:16': { zh: '9:16 竖屏', en: '9:16 Portrait' },
-  '21:9': { zh: '21:9 超宽', en: '21:9 Ultrawide' },
-}
-
 const LOCALIZED_QUALITIES: Record<string, { zh: string; en: string }> = {
   standard: { zh: '标准（推荐）', en: 'Standard (Recommended)' },
   auto: { zh: '自动', en: 'Auto' },
@@ -80,7 +67,7 @@ const LOCALIZED_QUALITIES: Record<string, { zh: string; en: string }> = {
 export function localizeRatioOptions(options: Array<{ value: string; label: string }>, lang: 'zh' | 'en'): Array<{ value: string; label: string }> {
   return options.map(opt => ({
     value: opt.value,
-    label: LOCALIZED_RATIOS[opt.value]?.[lang] ?? opt.label,
+    label: ratioLabel(opt.value, lang),
   }))
 }
 
