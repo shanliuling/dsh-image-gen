@@ -78,6 +78,15 @@ export function localizeQualityOptions(options: Array<{ value: string; label: st
   }))
 }
 
+/** Re-localize the host's `standard · WxH` tier label; other tier labels are language-neutral. */
+export function localizeResolutionOptions(options: Array<{ value: string; label: string }>, lang: 'zh' | 'en'): Array<{ value: string; label: string }> {
+  return options.map(opt => {
+    const size = opt.value === 'standard' ? /\s·\s(.+)$/.exec(opt.label)?.[1] : undefined
+    if (size !== undefined) return { value: opt.value, label: (lang === 'en' ? 'Standard' : '标准') + ' · ' + size }
+    return { value: opt.value, label: LOCALIZED_QUALITIES[opt.value]?.[lang] ?? opt.label }
+  })
+}
+
 export interface RecentItemActions {
   select(item: GalleryItem): void
   favorite(item: GalleryItem): void

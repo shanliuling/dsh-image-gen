@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ratioLabel } from '../src/ratio-labels.js'
-import { localizeRatioOptions } from '../src/client/studio-helpers.js'
+import { localizeRatioOptions, localizeResolutionOptions } from '../src/client/studio-helpers.js'
 import { CLOUD_CAPABILITIES } from '../src/capabilities.js'
 
 describe('Studio ratio labels', () => {
@@ -39,5 +39,21 @@ describe('Studio ratio labels', () => {
   it('keeps an empty option list empty', () => {
     expect(localizeRatioOptions([], 'en')).toEqual([])
     expect(localizeRatioOptions([], 'zh')).toEqual([])
+  })
+})
+
+describe('localizeResolutionOptions', () => {
+  const options = [{ value: 'standard', label: '标准 · 1536x1024' }]
+
+  it('shows the standard tier in the UI language', () => {
+    expect(localizeResolutionOptions(options, 'en')).toEqual([{ value: 'standard', label: 'Standard · 1536x1024' }])
+    expect(localizeResolutionOptions(options, 'zh')).toEqual(options)
+  })
+
+  it('keeps size-table tiers and localizes the bare standard quality', () => {
+    expect(localizeResolutionOptions([{ value: '2K', label: '2K · 2048x2048' }, { value: 'standard', label: '标准（推荐）' }], 'en')).toEqual([
+      { value: '2K', label: '2K · 2048x2048' },
+      { value: 'standard', label: 'Standard (Recommended)' },
+    ])
   })
 })
