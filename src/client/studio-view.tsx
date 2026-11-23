@@ -55,6 +55,8 @@ import {
   hasSubscriptionRatioMismatch,
   localizeQualityOptions,
   localizeRatioOptions,
+  localizeResolutionOptions,
+  studioProfileLabel,
   messageOf,
   useAttachmentImage,
   useInView,
@@ -991,7 +993,7 @@ export const StudioView: FC<{
           })
           const payload = await readStudioBody(response)
           if (!response.ok || !('attachment' in payload)) {
-            throw new Error('error' in payload && payload.error ? payload.error : `${target.profile.label}: ${t('generationFailed')}`)
+            throw new Error('error' in payload && payload.error ? payload.error : `${studioProfileLabel(target.profile, lang)}: ${t('generationFailed')}`)
           }
           return { payload, target }
         }))
@@ -1546,7 +1548,7 @@ export const StudioView: FC<{
                       {config.providers.map(p => (
                         <li key={p.provider} className={p.configured ? 'is-configured' : 'is-missing'}>
                           <div className="dsh-ig-status-item-name">
-                            <strong>{p.label}</strong>
+                            <strong>{studioProfileLabel(p, lang)}</strong>
                             <small>{studioModelForMode(p, mode)}</small>
                           </div>
                           <span className="dsh-ig-status-item-tag">
@@ -1646,7 +1648,7 @@ export const StudioView: FC<{
               <div className="dsh-ig-generating-state">
                 <div className="dsh-ig-generation-orbit"><Sparkles size={28} /></div>
                 <strong>{comparisonEnabled ? t('comparing', { count: String(comparisonTargets.length) }) : count > 1 ? t('generatingCount', { count: String(count) }) : t('generating')}</strong>
-                <span>{comparisonEnabled ? comparisonTargets.map(target => target.profile.label).join(' · ') : `${activeProfile?.label ?? ''} · ${requestModel}`}</span>
+                <span>{comparisonEnabled ? comparisonTargets.map(target => studioProfileLabel(target.profile, lang)).join(' · ') : `${activeProfile === undefined ? '' : studioProfileLabel(activeProfile, lang)} · ${requestModel}`}</span>
               </div>
             ) : currentBatch && currentBatch.length > 1 ? (
               <div
@@ -1881,7 +1883,7 @@ export const StudioView: FC<{
                       return (
                         <button key={targetKey} type="button" className={target ? 'is-selected' : ''} aria-pressed={Boolean(target)} onClick={() => toggleComparisonProvider(targetKey)}>
                           <span className="dsh-ig-model-checkmark">{target ? <Check size={12} /> : null}</span>
-                          <span className="dsh-ig-model-copy"><strong>{item.label}</strong><small title={studioModelForMode(item, mode)}>{studioModelForMode(item, mode)}</small></span>
+                          <span className="dsh-ig-model-copy"><strong>{studioProfileLabel(item, lang)}</strong><small title={studioModelForMode(item, mode)}>{studioModelForMode(item, mode)}</small></span>
                           {target && <span className="dsh-ig-model-settings">{[target.ratio, target.resolution, target.quality === target.resolution ? undefined : target.quality, target.generationQuality === PROVIDER_DEFAULT_QUALITY ? undefined : target.generationQuality].filter(Boolean).join(' · ')}{target.adjusted ? <em>{t('compareAdjusted')}</em> : null}</span>}
                         </button>
                       )
@@ -1891,18 +1893,18 @@ export const StudioView: FC<{
                 </div>
                 <div className="dsh-ig-field-grid is-output-grid">
                   <FieldSelect label={t('ratio')} value={ratio} onChange={setRatio} options={comparisonRatioOpts} />
-                  {comparisonResolutionOpts.length > 0 ? <FieldSelect label={lang === 'en' ? 'Resolution' : '分辨率'} value={comparisonResolution} onChange={setResolution} options={comparisonResolutionOpts} /> : null}
+                  {comparisonResolutionOpts.length > 0 ? <FieldSelect label={lang === 'en' ? 'Resolution' : '分辨率'} value={comparisonResolution} onChange={setResolution} options={localizeResolutionOptions(comparisonResolutionOpts, lang)} /> : null}
                   {comparisonGenerationQualityOpts.length > 0 ? <FieldSelect label={lang === 'en' ? 'Generation quality' : '生成质量'} value={comparisonGenerationQuality} onChange={setGenerationQuality} options={comparisonGenerationQualityOpts} /> : null}
                   <WatermarkControl capability={comparisonWatermarkCapability} value={watermark} onChange={setWatermark} lang={lang} />
                 </div>
                 {comparisonWatermarkCapability.status === 'supported' ? <div className="dsh-ig-inline-note">{lang === 'en' ? 'Watermark applies only to models with confirmed support for this operation.' : '水印选项仅用于已确认支持当前操作的模型。'}</div> : null}
                 {comparisonTargets.some(target => target.profile.provider === 'chatgpt-sub') && <div className="dsh-ig-inline-note">{t('subscriptionParameterHint')}</div>}
               </> : <>
-                <div className="dsh-ig-field-grid"><FieldSelect label={t('provider')} value={studioTargetKey(provider, channel)} onChange={changeProfile} options={config.providers.map(item => ({ value: studioTargetKey(item.provider, item.channel), label: `${item.label}${item.configured ? '' : ` · ${t('unconfigured')}`}` }))} /><FieldSelect label={t('model')} value={requestModel} onChange={setModel} options={activeProfile === undefined ? [] : studioModelOptionsForMode(activeProfile, mode)} /></div>
+                <div className="dsh-ig-field-grid"><FieldSelect label={t('provider')} value={studioTargetKey(provider, channel)} onChange={changeProfile} options={config.providers.map(item => ({ value: studioTargetKey(item.provider, item.channel), label: `${studioProfileLabel(item, lang)}${item.configured ? '' : ` · ${t('unconfigured')}`}` }))} /><FieldSelect label={t('model')} value={requestModel} onChange={setModel} options={activeProfile === undefined ? [] : studioModelOptionsForMode(activeProfile, mode)} /></div>
                 <div className="dsh-ig-field-grid is-output-grid">
                   <FieldSelect label={t('ratio')} value={ratio} onChange={setRatio} options={localizeRatioOptions(activeProfile?.ratioOptions ?? [], lang)} />
                   {resolutionOpts.length > 0 ? <FieldSelect label={lang === 'en' ? 'Resolution' : '分辨率'} value={selectedResolution ?? ''} onChange={setResolution} options={resolutionOpts} /> : null}
-                  <FieldSelect label={['openai', 'chatgpt-sub', 'zhipu'].includes(provider) ? (lang === 'en' ? 'Generation quality' : '生成质量') : (lang === 'en' ? 'Resolution' : '分辨率')} value={selectedQuality} onChange={value => { setQuality(value); if (provider === 'openai') setGenerationQuality(value); else setResolution(value) }} options={provider === 'openai-compat' ? singleQualityOpts : localizeQualityOptions(singleQualityOpts, lang)} />
+                  <FieldSelect label={['openai', 'chatgpt-sub', 'zhipu'].includes(provider) ? (lang === 'en' ? 'Generation quality' : '生成质量') : (lang === 'en' ? 'Resolution' : '分辨率')} value={selectedQuality} onChange={value => { setQuality(value); if (provider === 'openai') setGenerationQuality(value); else setResolution(value) }} options={provider === 'openai-compat' ? localizeResolutionOptions(singleQualityOpts, lang) : localizeQualityOptions(singleQualityOpts, lang)} />
                   {activeProfile?.generationQualityOptions ? <FieldSelect label={lang === 'en' ? 'Generation quality' : '生成质量'} value={selectedGenerationQuality} onChange={setGenerationQuality} options={localizeQualityOptions(activeProfile.generationQualityOptions, lang)} /> : null}
                   <WatermarkControl capability={watermarkCapability} value={watermark} onChange={setWatermark} lang={lang} />
                 </div>

@@ -450,6 +450,18 @@ dsh --profile web --dump-config
 </details>
 
 <details>
+<summary><strong>上传参考图后提示“当前模型不支持图片，请切换支持图片的模型”怎么办？</strong></summary>
+
+这句提示来自 DSH 宿主，不是插件：消息发出前，DSH 会检查**对话模型**能否接收图片。对话模型如果是 Kilo 这类纯文本模型，带图的消息在到达插件之前就会被拦下。插件里配置的生图模型（例如 Google One 订阅下的 Gemini 3.1 Flash Image）是另一个模型，宿主这一步不会看它。
+
+可以这样处理：
+
+1. 把对话模型换成支持图片输入的模型，生图渠道保持不变。最终出图的始终是插件里配置的生图渠道，与对话模型无关。
+2. 不想换对话模型时，把参考图放进当前工作区，不要直接上传，然后在对话里写明路径，例如「用工作区里的 ref/cat.png 当参考图，给猫戴上墨镜」。`edit_image` 会通过 `source_path` / `source_paths` 读取工作区文件，不经过对话模型的图片检查。
+
+</details>
+
+<details>
 <summary><strong>如何升级？</strong></summary>
 
 ```bash
