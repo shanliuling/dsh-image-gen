@@ -450,6 +450,18 @@ If pnpm reports `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`, open the profile's `pnpm
 </details>
 
 <details>
+<summary><strong>Uploading a reference image shows “the current model does not support images”. What now?</strong></summary>
+
+The message comes from the DSH host, not from the plugin: before sending, DSH checks whether the **chat model** accepts images. If the chat model is text-only (for example Kilo), a message with an image is blocked before it ever reaches the plugin. The image model configured in the plugin (for example Gemini 3.1 Flash Image through a Google One subscription) is a separate model that the host does not look at in this step.
+
+Workarounds:
+
+1. Switch the chat model to one that accepts image input and keep your image provider as it is. Images are always produced by the provider configured in the plugin, whichever chat model you use.
+2. To keep the chat model, put the reference image in the current workspace instead of uploading it, and name its path in chat, for example “Use ref/cat.png in the workspace as the reference and give the cat sunglasses”. `edit_image` reads workspace files through `source_path` / `source_paths`, which skips the chat model's image check.
+
+</details>
+
+<details>
 <summary><strong>How do I upgrade?</strong></summary>
 
 ```bash
