@@ -1,7 +1,7 @@
 /** Shared BYOK credential resolution for the Agent tools and the Studio route. */
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type { Context } from '@deepseek-ai/cordis'
-import { CLOUD_CREDENTIAL_REFS, PROVIDER_DISPLAY_NAMES, type CloudImageProvider } from './shared.js'
+import { CLOUD_CREDENTIAL_REFS, PROVIDER_DISPLAY_NAMES, PROVIDER_ENGLISH_NAMES, type CloudImageProvider } from './shared.js'
 
 /**
  * Resolve one provider's stored API key to a non-blank value. Blank values
@@ -25,5 +25,5 @@ export async function requireApiKey(ctx: Context, provider: CloudImageProvider, 
   if (value !== undefined) return value
   throw new Error(tool === undefined
     ? `${PROVIDER_DISPLAY_NAMES[provider]} 尚未配置 API Key，请先到 设置 > 插件 > 图像生成 配置`
-    : `${tool} requires the ${PROVIDER_DISPLAY_NAMES[provider]} API key; configure it in Settings > Plugins > Image generation.`)
+    : `${tool} requires the ${PROVIDER_ENGLISH_NAMES[provider]} API key; configure it in Settings > Plugins > Image generation.`)
 }

@@ -47,6 +47,7 @@ import {
   resolveOpenAICompatChannels,
   resolveOpenAICompatModels,
   uniqueComfyUIWorkflowName,
+  localizeChannelLabel,
   type CloudImageProvider,
   type ComfyUIWorkflowEntry,
   type OpenAICompatChannel,
@@ -1790,7 +1791,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
       <div key={target} className="dsh-ig-provider-row dsh-ig-compat-channel-row">
         <div className="dsh-ig-provider-head-row">
           <button type="button" className="dsh-ig-provider-head" aria-expanded={row.expanded} onClick={() => { updateRow(target, { expanded: !row.expanded }) }}>
-            <span className="dsh-ig-provider-name">{channel.label}</span>
+            <span className="dsh-ig-provider-name">{localizeChannelLabel(channel.label, lang === 'en' ? 'en' : 'zh')}</span>
             <span className={badge.className} title={badge.text}><span className="dsh-ig-badge-dot" aria-hidden="true" />{badge.text}</span>
             <span className={`dsh-ig-provider-chevron ${row.expanded ? 'dsh-ig-provider-chevron-open' : ''}`} aria-hidden="true">
               <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6l4 4 4-4"/></svg>

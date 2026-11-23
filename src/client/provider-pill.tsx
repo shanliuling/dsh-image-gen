@@ -17,6 +17,7 @@ import {
   resolveComfyUIWorkflows,
   isSubscriptionProvider,
   resolveOpenAICompatChannel,
+  localizeChannelLabel,
   resolveOpenAICompatChannels,
   resolveOpenAICompatModels,
   type CloudImageProvider,
@@ -481,7 +482,7 @@ export function ImageProviderPill(props: ProviderPillFace) {
         <svg className="dsh-ig-pill-icon" width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <rect x="1.5" y="2.5" width="13" height="11" rx="2" /><circle cx="5.5" cy="6.5" r="1.3" /><path d="M14.5 10.5l-3.2-3.2-6.3 6.2" />
         </svg>
-        <span className="dsh-ig-pill-provider">{pillButtonLabel(current, PILL_PROVIDER_LABELS[lang][current], snapshot.value, currentChannel?.label)}</span>
+        <span className="dsh-ig-pill-provider">{pillButtonLabel(current, PILL_PROVIDER_LABELS[lang][current], snapshot.value, currentChannel === undefined ? undefined : localizeChannelLabel(currentChannel.label, lang))}</span>
         <span className={`dsh-ig-pill-caret${open ? ' dsh-ig-pill-caret-open' : ''}`} aria-hidden="true">
           <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 10l4-4 4 4" /></svg>
         </span>
@@ -508,7 +509,7 @@ export function ImageProviderPill(props: ProviderPillFace) {
                 >
                   <span className={`dsh-ig-pill-dot ${dotClassOf(provider, channelId)}`} aria-hidden="true" />
                   <span className="dsh-ig-pill-option-text">
-                    <span className="dsh-ig-pill-option-name">{channel?.label ?? PILL_PROVIDER_LABELS[lang][provider]}</span>
+                    <span className="dsh-ig-pill-option-name">{channel === undefined ? PILL_PROVIDER_LABELS[lang][provider] : localizeChannelLabel(channel.label, lang)}</span>
                     <span className="dsh-ig-pill-option-sub">{subtitleOf(provider, modelOptions.length === 0, channelId)}</span>
                   </span>
                   {active && modelOptions.length === 0 ? <span className="dsh-ig-pill-check" aria-hidden="true">

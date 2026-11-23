@@ -52,7 +52,7 @@ import {
   antigravityResolveProjectContext,
   type AntigravityProjectContext,
 } from './vendors/antigravity.js'
-import { SUBSCRIPTION_PROVIDER_DISPLAY_NAMES, type SubscriptionProvider } from '../shared.js'
+import { PROVIDER_ENGLISH_NAMES, SUBSCRIPTION_PROVIDER_DISPLAY_NAMES, type SubscriptionProvider } from '../shared.js'
 import { xaiToolParameters } from '../xai-params.js'
 import { redactSecrets } from '../redact.js'
 
@@ -109,8 +109,9 @@ export interface LoginOutcome {
  * locks; nothing here is persisted except the blobs themselves.
  */
 /** Provider names by vendor for login-result pages and errors. */
-function providerNameOf(vendor: SubscriptionVendor): string {
-  return SUBSCRIPTION_PROVIDER_DISPLAY_NAMES[vendor === 'codex' ? 'chatgpt-sub' : vendor === 'antigravity' ? 'google-sub' : 'grok-sub']
+function providerNameOf(vendor: SubscriptionVendor, lang: 'zh' | 'en' = 'zh'): string {
+  const provider: SubscriptionProvider = vendor === 'codex' ? 'chatgpt-sub' : vendor === 'antigravity' ? 'google-sub' : 'grok-sub'
+  return lang === 'en' ? PROVIDER_ENGLISH_NAMES[provider] : SUBSCRIPTION_PROVIDER_DISPLAY_NAMES[provider]
 }
 
 export class SubscriptionManager {
@@ -177,7 +178,7 @@ export class SubscriptionManager {
         ? await antigravityExchangeCode(antigravityConfig(), row.pkce, code)
         : await grokExchangeCode(grokConfig(), row.pkce, code)
     await this.saveBlob(vendor, blob)
-    return `<!doctype html><meta charset="utf-8"><title>dsh-image-gen</title><p lang="zh-CN">${providerNameOf(vendor)} 登录成功（${escapeHtml(blob.email)}），可以关闭此页返回设置。</p><p lang="en">${providerNameOf(vendor)} sign-in successful (${escapeHtml(blob.email)}). You can close this page and return to settings.</p>`
+    return `<!doctype html><meta charset="utf-8"><title>dsh-image-gen</title><p lang="zh-CN">${providerNameOf(vendor)} 登录成功（${escapeHtml(blob.email)}），可以关闭此页返回设置。</p><p lang="en">${providerNameOf(vendor, 'en')} sign-in successful (${escapeHtml(blob.email)}). You can close this page and return to settings.</p>`
   }
 
   /** Sign out: clear the blob and the caches. No other setting changes. */

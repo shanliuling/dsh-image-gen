@@ -431,6 +431,27 @@ export const PROVIDER_DISPLAY_NAMES: Record<ImageProvider, string> = {
   'google-sub': 'Google 订阅',
 }
 
+/** English provider names for English UI and English messages. */
+export const PROVIDER_ENGLISH_NAMES: Record<ImageProvider, string> = {
+  google: 'Google Gemini',
+  openai: 'OpenAI',
+  'openai-compat': 'OpenAI Compatible',
+  seedream: 'Seedream',
+  dashscope: 'DashScope',
+  xai: 'xAI Grok',
+  zhipu: 'Zhipu GLM',
+  comfyui: 'ComfyUI',
+  'chatgpt-sub': 'ChatGPT Subscription',
+  'grok-sub': 'Grok Subscription',
+  'google-sub': 'Google Subscription',
+}
+
+/** Default channel names are generated in Chinese; show them in the UI language. Names the user typed pass through. */
+export function localizeChannelLabel(label: string, lang: 'zh' | 'en'): string {
+  const match = lang === 'en' ? /^OpenAI 兼容(?: (\d+))?$/.exec(label) : null
+  return match === null ? label : PROVIDER_ENGLISH_NAMES['openai-compat'] + (match[1] === undefined ? '' : ' ' + match[1])
+}
+
 /** Display names for the subscription providers, separate from the BYOK table. */
 export const SUBSCRIPTION_PROVIDER_DISPLAY_NAMES: Record<SubscriptionProvider, string> = {
   'chatgpt-sub': 'ChatGPT 订阅',

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { ratioLabel } from '../src/ratio-labels.js'
-import { localizeRatioOptions, localizeResolutionOptions } from '../src/client/studio-helpers.js'
+import { localizeRatioOptions, localizeResolutionOptions, studioProfileLabel } from '../src/client/studio-helpers.js'
+import { localizeChannelLabel } from '../src/shared.js'
 import { CLOUD_CAPABILITIES } from '../src/capabilities.js'
 
 describe('Studio ratio labels', () => {
@@ -55,5 +56,20 @@ describe('localizeResolutionOptions', () => {
       { value: '2K', label: '2K · 2048x2048' },
       { value: 'standard', label: 'Standard (Recommended)' },
     ])
+  })
+})
+
+describe('studioProfileLabel', () => {
+  it('shows host provider labels in English', () => {
+    expect(studioProfileLabel({ provider: 'zhipu', label: '智谱 GLM' }, 'en')).toBe('Zhipu GLM')
+    expect(studioProfileLabel({ provider: 'chatgpt-sub', label: 'ChatGPT 订阅' }, 'en')).toBe('ChatGPT Subscription')
+    expect(studioProfileLabel({ provider: 'zhipu', label: '智谱 GLM' }, 'zh')).toBe('智谱 GLM')
+  })
+
+  it('localizes default channel names and keeps names the user typed', () => {
+    expect(studioProfileLabel({ provider: 'openai-compat', channel: 'default', label: 'OpenAI 兼容' }, 'en')).toBe('OpenAI Compatible')
+    expect(studioProfileLabel({ provider: 'openai-compat', channel: 'b', label: 'OpenAI 兼容 2' }, 'en')).toBe('OpenAI Compatible 2')
+    expect(studioProfileLabel({ provider: 'openai-compat', channel: 'b', label: '我的中转' }, 'en')).toBe('我的中转')
+    expect(localizeChannelLabel('OpenAI 兼容 2', 'zh')).toBe('OpenAI 兼容 2')
   })
 })

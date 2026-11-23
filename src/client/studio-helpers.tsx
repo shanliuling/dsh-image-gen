@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useRef, useState, type FC } from 'react'
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import { Check, ImagePlus, LoaderCircle, X } from 'lucide-react'
-import { thumbUrlFor } from '../shared.js'
+import { localizeChannelLabel, PROVIDER_ENGLISH_NAMES, thumbUrlFor, type StudioProviderProfile } from '../shared.js'
 import { startGalleryImageDrag } from './tl/gallery-image-transfer.js'
 import { GalleryCanvasButton } from './tl/gallery-canvas-button.js'
 import { fetchAttachmentBlob } from './image-cache.js'
@@ -76,6 +76,12 @@ export function localizeQualityOptions(options: Array<{ value: string; label: st
     value: opt.value,
     label: opt.value === PROVIDER_DEFAULT_QUALITY ? (lang === 'en' ? 'Provider default (omit)' : '渠道默认（不发送）') : LOCALIZED_QUALITIES[opt.value]?.[lang] ?? opt.label,
   }))
+}
+
+/** The host labels Studio providers in Chinese; channel names the user typed pass through. */
+export function studioProfileLabel(profile: Pick<StudioProviderProfile, 'provider' | 'channel' | 'label'>, lang: 'zh' | 'en'): string {
+  if (profile.channel !== undefined) return localizeChannelLabel(profile.label, lang)
+  return lang === 'en' ? PROVIDER_ENGLISH_NAMES[profile.provider] : profile.label
 }
 
 /** Re-localize the host's `standard · WxH` tier label; other tier labels are language-neutral. */
