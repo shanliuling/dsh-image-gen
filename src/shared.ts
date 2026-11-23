@@ -1,8 +1,13 @@
 /** Values shared by the Host and browser Bundle faces. */
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 
+function pluginRoute(route: string): string {
+  const path = 'plugins/dsh-image-gen/' + route
+  return typeof document === 'undefined' ? '/' + path : new URL(path, document.baseURI).pathname
+}
+
 /** Browser route used by the generated-image card. */
-export const IMAGE_ROUTE = '/plugins/dsh-image-gen/image'
+export const IMAGE_ROUTE = pluginRoute('image')
 
 /** Encode a durable image reference for the cacheable GET form of IMAGE_ROUTE. */
 export function encodeImageRef(ref: ImageAttachmentRef): string {
@@ -49,41 +54,41 @@ export function vaultUrlFor(key: string, mediaType?: string): string {
   return mediaType === undefined ? base : base + '&mediaType=' + encodeURIComponent(mediaType)
 }
 /** Browser route that uploads user-picked images as DSH attachments. */
-export const IMPORT_ROUTE = '/plugins/dsh-image-gen/import'
+export const IMPORT_ROUTE = pluginRoute('import')
 /** Browser route used for deleting generated images and workspace files. */
-export const DELETE_ROUTE = '/plugins/dsh-image-gen/delete'
+export const DELETE_ROUTE = pluginRoute('delete')
 /** Same-origin route used by the browser image workbench. */
-export const STUDIO_ROUTE = '/plugins/dsh-image-gen/studio'
+export const STUDIO_ROUTE = pluginRoute('studio')
 /** Same-origin route for built-in prompt inspiration metadata and images. */
-export const INSPIRATION_ROUTE = '/plugins/dsh-image-gen/inspiration'
+export const INSPIRATION_ROUTE = pluginRoute('inspiration')
 /** Browser route used for saving generated images to workspace on demand. */
-export const SAVE_WORKSPACE_ROUTE = '/plugins/dsh-image-gen/save-workspace'
+export const SAVE_WORKSPACE_ROUTE = pluginRoute('save-workspace')
 /** Browser route that streams a ZIP export of the selected gallery images. */
-export const ZIP_ROUTE = '/plugins/dsh-image-gen/zip'
+export const ZIP_ROUTE = pluginRoute('zip')
 /** Browser route that serves host-rendered gallery thumbnails. */
-export const THUMB_ROUTE = '/plugins/dsh-image-gen/thumb'
-export const PREVIEW_ROUTE = '/plugins/dsh-image-gen/preview'
-export const VAULT_ROUTE = '/plugins/dsh-image-gen/vault'
-export const VAULT_REFS_ROUTE = '/plugins/dsh-image-gen/vault-refs'
-export const VAULT_DELETE_ROUTE = '/plugins/dsh-image-gen/vault-delete'
-export const ZIP_PROGRESS_ROUTE = '/plugins/dsh-image-gen/zip/progress'
-export const ZIP_CANCEL_ROUTE = '/plugins/dsh-image-gen/zip/cancel'
-export const STORAGE_STATS_ROUTE = '/plugins/dsh-image-gen/storage-stats'
+export const THUMB_ROUTE = pluginRoute('thumb')
+export const PREVIEW_ROUTE = pluginRoute('preview')
+export const VAULT_ROUTE = pluginRoute('vault')
+export const VAULT_REFS_ROUTE = pluginRoute('vault-refs')
+export const VAULT_DELETE_ROUTE = pluginRoute('vault-delete')
+export const ZIP_PROGRESS_ROUTE = pluginRoute('zip/progress')
+export const ZIP_CANCEL_ROUTE = pluginRoute('zip/cancel')
+export const STORAGE_STATS_ROUTE = pluginRoute('storage-stats')
 /** Browser route the settings card probes provider connectivity through. */
-export const TEST_CONNECTION_ROUTE = '/plugins/dsh-image-gen/test'
+export const TEST_CONNECTION_ROUTE = pluginRoute('test')
 /** Non-secret settings capability probe, available even when the host cannot serve a form. */
-export const SETTINGS_HEALTH_ROUTE = '/plugins/dsh-image-gen/settings-health'
+export const SETTINGS_HEALTH_ROUTE = pluginRoute('settings-health')
 
 export interface SettingsHealth {
   settings: 'unavailable' | 'legacy' | 'live'
   liveSchema: boolean
 }
 /** Browser route the workbench infinite canvas pushes live state through. */
-export const CANVAS_STATE_ROUTE = '/plugins/dsh-image-gen/canvas-state'
+export const CANVAS_STATE_ROUTE = pluginRoute('canvas-state')
 /** Upload a selected canvas original to the host attachment store. */
-export const CANVAS_ASSET_ROUTE = '/plugins/dsh-image-gen/canvas-asset'
-export const SUBSCRIPTION_LOGIN_ROUTE = '/plugins/dsh-image-gen/subscription-login'
-export const SUBSCRIPTION_STATUS_ROUTE = '/plugins/dsh-image-gen/subscription-status'
+export const CANVAS_ASSET_ROUTE = pluginRoute('canvas-asset')
+export const SUBSCRIPTION_LOGIN_ROUTE = pluginRoute('subscription-login')
+export const SUBSCRIPTION_STATUS_ROUTE = pluginRoute('subscription-status')
 
 /** Coarse model-facing kind of one shape on the workbench infinite canvas. */
 export type CanvasNodeKind = 'image' | 'draw' | 'text' | 'note' | 'geo' | 'arrow' | 'frame' | 'other'
