@@ -76,6 +76,7 @@ import { parseExtraFields, parseSizeTable } from './output-settings.js'
 import { DEFAULT_COMPAT_QUALITIES, validateOfficialSize } from '../openai-output.js'
 import { ImageProviderPill, PROVIDER_PILL_STYLE, type ProviderPillFace } from './provider-pill.js'
 import { writeSetting } from './settings-write.js'
+import { StudioShortcutButton, type SidebarRightFace } from './studio-shortcut.js'
 
 /** Build timestamp injected by tsdown at bundle time. */
 declare const __CANVAS_BUILD_TS__: string
@@ -194,6 +195,7 @@ interface SidebarRightTabsFace {
     guide?: ReadonlyArray<{ order: number; title: () => string; description?: () => string }>
   }): () => void
 }
+
 
 
 
@@ -344,6 +346,24 @@ export function apply(ctx: Context): void {
       inject: injectSettingsFace,
     }, ImageGenerationSettingsCard))
   }
+  // Composer shortcut (DSH slot 'conversation.input.right', rendered right
+  // before the model select): an icon that opens or closes the right-sidebar
+  // studio. Registered only when the host exposes `sidebarRight`, so older
+  // hosts keep the composer exactly as before.
+  const injectStudioShortcut = (owner: Context): void => {
+    const sidebarRight = owner.get('sidebarRight') as SidebarRightFace | undefined
+    if (sidebarRight === undefined) return
+    const ownerRegister = owner.slots.register.bind(owner.slots) as unknown as (options: object, component: unknown) => () => void
+    ;(owner.slots.inject as (key: string, factory: () => () => void) => void)('conversation.input.right', () => ownerRegister({
+      name: 'conversation.input.right',
+      id: 'image-studio',
+      // After the provider pill (order 10), so the icon is next to the model select.
+      order: 20,
+      inject: () => ({ locale, scope, sidebarRight, studioTab: { id: SIDEBAR_STUDIO_TAB_ID, kind: SIDEBAR_STUDIO_TAB_KIND } }),
+    }, StudioShortcutButton))
+  }
+  ctx.inject(['sidebarRight'], injectStudioShortcut)
+
   // Composer tool-row pill (DSH official slot: 'conversation.input.right', the
   // seat right beside the model select): switch the default image provider
   // without leaving the chat. Writes the same 'provider' field as the card.
