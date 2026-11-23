@@ -104,7 +104,7 @@ export async function generateOpenAICompatibleImage(input: {
       ...(input.size === undefined ? {} : { size: input.size }),
       ...(input.quality === undefined ? {} : { quality: input.quality }),
       // Only Seedream 5.5 accepts `transparent` on text-to-image.
-      ...(input.provider === 'seedream' ? { response_format: 'url', ...arkOutputBody(input.arkOptions, { background: seedreamGeneratesTransparent(input.model) }) } : {}),
+      ...(input.provider === 'seedream' ? { response_format: 'url', ...arkOutputBody(input.arkOptions, { background: seedreamGeneratesTransparent(input.model), explicitOpaque: true }) } : {}),
       ...(input.extraBody ?? {}),
     }),
   }), input.apiKey)

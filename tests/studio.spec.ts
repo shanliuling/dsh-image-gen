@@ -1671,6 +1671,23 @@ describe('workbench GIF output and originals', () => {
   }
   const bodyOf = (fetch: ReturnType<typeof vi.fn>, index = 0) => JSON.parse(String((fetch.mock.calls[index] as [unknown, RequestInit] | undefined)?.[1]?.body))
 
+  it('advertises GIF controls only for the relevant relay and operation', () => {
+    const config = { ...relay, openaiCompatSupportsGif: true }
+    expect(studioProfile(config, 'openai-compat', true)).toMatchObject({ supportsGif: true, supportsGifEditing: true })
+    expect(studioProfile({ ...relay, openaiCompatExtraBody: { output_format: 'gif' } }, 'openai-compat', true)).toMatchObject({ supportsGif: true, supportsGifEditing: false })
+    expect(studioProfile(relay, 'openai-compat', true).supportsGif).toBeFalsy()
+    expect(studioProfile({ ...config, openaiCompatBaseURL: 'https://api.openai.com/v1' }, 'openai-compat', true).supportsGif).toBeFalsy()
+    expect(studioProfile(config, 'openai', true).supportsGif).toBeFalsy()
+    expect(studioProfile({ ...config, openaiCompatEditFormat: 'modelscopeAsync' }, 'openai-compat', true).supportsGif).toBeFalsy()
+  })
+
+  it('keeps a still image returned by a GIF relay and flags it for the workbench', async () => {
+    const { ctx } = setup()
+    const result = await generateFromStudio(ctx, relay, { ...request, output: gif }, signal)
+    expect(result.gifReturnedStill).toBe(true)
+    expect(result.attachment).toBeDefined()
+  })
+
   it('parses the GIF output shape and rejects other formats or non-numeric frame parameters', () => {
     expect(parseStudioGenerateRequest({ ...request, output: gif })).toMatchObject({ output: gif })
     expect(parseStudioGenerateRequest({ ...request, output: { format: 'gif' } })).toMatchObject({ output: { format: 'gif' } })

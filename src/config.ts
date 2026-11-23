@@ -114,6 +114,7 @@ export interface Config {
   openaiCompatChannels?: OpenAICompatChannel[]
   openaiCompatActiveChannel?: string
   /** Editing model; empty reuses the generation model. */
+  openaiCompatSupportsGif?: boolean
   openaiCompatEditModel?: string
   /** Default quality; empty preserves the upstream default by omitting the field. */
   openaiCompatQuality?: string
@@ -245,6 +246,7 @@ export const Config = z.object({
     baseURL: z.string().default(''),
     model: z.string().default(''),
     models: z.array(z.string()).default([]),
+    supportsGif: z.boolean().default(false),
     editModel: z.string().default(''),
     quality: z.string().default(''),
     qualityOptions: z.array(z.string()).default([]),
@@ -255,6 +257,7 @@ export const Config = z.object({
     sizes: z.dict(z.dict(z.string())).default({}),
   })).default([])),
   openaiCompatActiveChannel: volatile(z.string().default('')),
+  openaiCompatSupportsGif: volatile(z.boolean().default(false)),
   openaiCompatEditModel: volatile(z.string().default('')),
   openaiCompatQuality: volatile(z.string().default('')),
   openaiCompatQualityOptions: volatile(z.array(z.string()).default(['auto', 'low', 'medium', 'high'])),
@@ -367,6 +370,7 @@ export function withOpenAICompatChannel(config: Config, channelId?: string): Con
     openaiCompatBaseURL: channel.baseURL,
     openaiCompatModel: channel.model,
     openaiCompatModels: channel.models ?? [],
+    openaiCompatSupportsGif: channel.supportsGif === true,
     openaiCompatEditModel: channel.editModel ?? '',
     openaiCompatQuality: channel.quality ?? '',
     openaiCompatQualityOptions: channel.qualityOptions ?? [],
@@ -426,7 +430,7 @@ export function migrateOpenAICompatConfig(config: Config): Config {
 }
 
 /** Host part of a URL, or null when it cannot be parsed. */
-function hostOf(raw: string): string | null {
+export function hostOf(raw: string): string | null {
   try {
     return new URL(raw).host
   } catch {

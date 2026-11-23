@@ -23,6 +23,14 @@ Default models, endpoints, aspect ratios / quality tiers, and advanced configura
 > Volcano Ark retires `doubao-seedream-5-0-260128` (the former plugin default), `doubao-seedream-5-0-lite-260128` and `doubao-seedream-4-5-251128` on 2026-11-24; a saved setting naming one of them now runs on `doubao-seedream-5-0-pro-260628`, whose tiers are 1K / 1.5K / 2K.
 
 
+## Seedream layer decomposition
+
+In an open workspace, attach one PNG or JPEG or specify its workspace path, then ask Seedream to split it into layers. The tool returns a directory with `base.png`, the individual PNG layers and a `manifest.json` with stacking order and positions. The source needs at least 262,144 pixels. Seedream 5.0 pro, 5.0 flash and 5.5 support layers. With 5.5 you can also specify the maximum number of output images including the background.
+
+## Animated GIFs in the workbench
+
+Enable “This channel supports animated GIF output” in the settings for a compatible relay and save. Select that channel in the workbench and check “Customize animated GIF” to enter a frame count and frame duration. Blank fields use the channel defaults. Each request generates one animation. Channels with multipart editing support can use one reference image.
+
 ## Aspect ratios and quality tiers per Provider
 
 | Provider | Aspect ratios | Quality tiers |

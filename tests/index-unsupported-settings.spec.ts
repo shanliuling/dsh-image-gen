@@ -50,7 +50,7 @@ describe('settings degradation without an installSection service', () => {
     // Tools still work off the composition entry; the settings form comes from
     // the loader's projection of this entry's Config schema, so nothing here
     // registers and nothing warns.
-    expect(tools.map(tool => tool.name)).toEqual(['canvas_state', 'view_canvas', 'generate_image', 'generate_images', 'edit_image', 'find_inspiration'])
+    expect(tools.map(tool => tool.name)).toEqual(['canvas_state', 'view_canvas', 'generate_image', 'generate_images', 'edit_image', 'decompose_image_layers', 'find_inspiration'])
     expect(ctx.inject).toHaveBeenCalledWith(['settings'], expect.any(Function))
     expect(ctx.logger.warn).not.toHaveBeenCalled()
   })
@@ -60,7 +60,7 @@ describe('settings degradation without an installSection service', () => {
 
     expect(() => apply(ctx, { provider: 'google', saveToWorkspace: false })).not.toThrow()
 
-    expect(tools.map(tool => tool.name)).toEqual(['canvas_state', 'view_canvas', 'generate_image', 'generate_images', 'edit_image', 'find_inspiration'])
+    expect(tools.map(tool => tool.name)).toEqual(['canvas_state', 'view_canvas', 'generate_image', 'generate_images', 'edit_image', 'decompose_image_layers', 'find_inspiration'])
     expect(ctx.logger.warn).not.toHaveBeenCalled()
     // Optional service injection for the canvas system-prompt context:
     // declaring a dependency that this bare host never provides is safe (the

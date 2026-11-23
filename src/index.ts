@@ -30,6 +30,7 @@ import { servePreview, serveThumb } from './thumb-route.js'
 import { durableAttachmentsRoot, pruneRequestImageCache, resolveRequestImageCacheDir } from './request-cache.js'
 import { editOpenAICompatibleImage, generateOpenAICompatibleImage } from './openai-compatible.js'
 import { type ResolvedReferenceImage, resolveReferenceImages } from './reference-image.js'
+import { decomposeSeedreamLayers, type LayerResult } from './seedream-layers.js'
 import { editSeedreamImage } from './seedream.js'
 import { generateSubscriptionImage, registerSubscriptionRoutes, subscriptionToolParameters, SubscriptionManager } from './subscription.js'
 import { CANVAS_STATE_ROUTE, DEFAULT_CLOUD_TIMEOUT_MS, IMAGE_GENERATION_NAMESPACE, cloudTimeoutFor, IMAGE_PROVIDERS, IMPORT_ROUTE, INSPIRATION_ROUTE, PREVIEW_ROUTE, STORAGE_STATS_ROUTE, STUDIO_ROUTE, TEST_CONNECTION_ROUTE, THUMB_ROUTE, VAULT_DELETE_ROUTE, VAULT_REFS_ROUTE, VAULT_ROUTE, ZIP_CANCEL_ROUTE, ZIP_PROGRESS_ROUTE, ZIP_ROUTE, mergeComfyUIPrompt, resolveOpenAICompatChannel, type ImageProvider } from './shared.js'
@@ -881,6 +882,50 @@ export function apply(ctx: Context, config: Config = {}): void {
       return saveGenerated(ctx, generated, active.provider, active.model, size, current(), exec, knownWorkspaceRoots)
     },
     presentResult: (_args, result) => imagePresentation(result),
+  }))
+
+  ctx.tools.register(defineTool({
+    name: 'decompose_image_layers',
+    description: 'Split a single PNG or JPEG into a background and individually editable transparent PNG layers with Seedream. Saves every layer plus a JSON manifest of names, stacking order and positions in the current workspace. Use when the user asks for separate layers. Without an explicit source, use the image in the conversation.',
+    parameters: {
+      source_attachment_id: { type: 'string', description: 'Conversation image to split. Use one source selector.' },
+      source_path: { type: 'string', description: 'Path to an image inside the current workspace.' },
+      prompt: { type: 'string', description: 'Optional instructions describing which parts to separate.' },
+      model: { type: 'string', description: 'Optional Seedream 5.0 pro, 5.0 flash or 5.5 model ID. Defaults to the configured Seedream model.' },
+      size: { type: 'string', enum: ['auto', '1K', '1.5K', '2K'], description: 'Output size. Defaults to auto.' },
+      max_images: { type: 'integer', description: 'Seedream 5.5 only. Maximum number of images including the background (2–100).' },
+    },
+    output: {
+      schema: { type: 'object', additionalProperties: false, properties: {
+        directory: { type: 'string', required: true },
+        manifest: { type: 'string', required: true },
+        imageCount: { type: 'integer', required: true },
+      } },
+      render: (_args: unknown, value: LayerResult) => [{ type: 'text' as const,
+        text: `已保存 ${value.imageCount} 张 PNG（含底图）到 ${value.directory}。图层顺序和坐标见 ${value.manifest}。` }],
+    },
+    async execute(args, exec): Promise<LayerResult> {
+      const workspaceRoot = exec.agent?.session.header.cwd
+      if (!workspaceRoot) throw new Error('请先打开工作区以保存拆分后的图层。')
+      const config = current()
+      const active = resolveProvider(withProviderOverrides(config, 'seedream', args.model))
+      if (active.provider !== 'seedream') throw new Error('Seedream configuration unavailable')
+      const apiKey = await requireApiKey(ctx, 'seedream', 'decompose_image_layers')
+      const maxBytes = ctx.attachments.imageLimits.maxImageBytes
+      return withGenerationTimeout(cloudTimeoutFor(config.cloudTimeoutMs, false), exec.signal, async signal => {
+        const references = await resolveReferenceImages({
+          ...(exec.agent ? { agent: exec.agent } : {}), attachments: ctx.attachments, maxBytes, signal,
+          ...(args.source_attachment_id ? { sourceAttachmentId: args.source_attachment_id } : {}),
+          ...(args.source_path ? { sourcePath: args.source_path } : {}),
+        })
+        if (references.length !== 1 || !references[0]) throw new Error('图层拆分每次只接受一张图片，请指定要拆分的参考图。')
+        return decomposeSeedreamLayers({
+          source: references[0], model: active.model, baseURL: active.baseURL, apiKey,
+          prompt: args.prompt, size: args.size, maxImages: args.max_images,
+          workspaceRoot, folder: config.workspaceFolder, maxBytes, signal,
+        })
+      })
+    },
   }))
 
   ctx.tools.register(defineTool({

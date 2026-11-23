@@ -121,6 +121,19 @@ describe('Ark transparent background on text-to-image', () => {
     }
   })
 
+  it('requests opaque PNG from Seedream 5.5 for both generation and editing', async () => {
+    const input = {
+      ...SEEDREAM, model: 'doubao-seedream-5-5-261028', apiKey: 'ark-key', prompt: 'a sword',
+      maxBytes: 1024, signal, arkOptions: { outputFormat: 'png', background: 'opaque' } as const,
+    }
+    let fetchMock = stubImageFetch()
+    await generateOpenAICompatibleImage({ ...input, provider: 'seedream' })
+    expect(bodyOf(fetchMock)).toMatchObject({ background: 'opaque', output_format: 'png' })
+    fetchMock = stubImageFetch()
+    await editSeedreamImage({ ...input, sourceImages: [{ data: new Uint8Array([1]), mediaType: 'image/png' }] })
+    expect(bodyOf(fetchMock)).toMatchObject({ background: 'opaque', output_format: 'png' })
+  })
+
   it('recognises only the released Seedream 5.5 model for text-to-image transparency', () => {
     expect(seedreamGeneratesTransparent('doubao-seedream-5-5-261028')).toBe(true)
     expect(seedreamGeneratesTransparent('doubao-seedream-5-5')).toBe(true)

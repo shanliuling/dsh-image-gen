@@ -243,6 +243,7 @@ export interface OpenAICompatChannel {
   model: string
   models?: string[]
   editModel?: string
+  supportsGif?: boolean
   quality?: string
   qualityOptions?: string[]
   extraBody?: Record<string, unknown>
@@ -258,6 +259,7 @@ export interface OpenAICompatChannelSource {
   openaiCompatBaseURL?: string
   openaiCompatModel?: string
   openaiCompatModels?: readonly string[]
+  openaiCompatSupportsGif?: boolean
   openaiCompatEditModel?: string
   openaiCompatQuality?: string
   openaiCompatQualityOptions?: readonly string[]
@@ -285,6 +287,7 @@ export function resolveOpenAICompatChannels(source: OpenAICompatChannelSource): 
     baseURL: source.openaiCompatBaseURL ?? '',
     model: source.openaiCompatModel ?? '',
     models: [...source.openaiCompatModels ?? []],
+    ...(source.openaiCompatSupportsGif ? { supportsGif: true } : {}),
     editModel: source.openaiCompatEditModel ?? '',
     quality: source.openaiCompatQuality ?? '',
     qualityOptions: [...source.openaiCompatQualityOptions ?? []],
@@ -308,6 +311,7 @@ export function resolveOpenAICompatChannels(source: OpenAICompatChannelSource): 
       baseURL: typeof entry.baseURL === 'string' ? entry.baseURL : '',
       model: typeof entry.model === 'string' ? entry.model : '',
       models: Array.isArray(entry.models) ? entry.models.filter((model): model is string => typeof model === 'string') : [],
+      ...(entry.supportsGif === true ? { supportsGif: true } : {}),
       editModel: typeof entry.editModel === 'string' ? entry.editModel : '',
       quality: typeof entry.quality === 'string' ? entry.quality : '',
       qualityOptions: Array.isArray(entry.qualityOptions) ? entry.qualityOptions.filter((quality): quality is string => typeof quality === 'string') : [],
@@ -482,6 +486,8 @@ export interface StudioProviderProfile {
   model: string
   /** Separate configured edit model; absent preserves the generation model. */
   editModel?: string
+  supportsGif?: boolean
+  supportsGifEditing?: boolean
   /** Selectable generation models; absent means the single default model. */
   modelOptions?: StudioOption[]
   configured: boolean
@@ -583,6 +589,7 @@ export interface StudioGenerateRequest {
 
 /** One individual generated image item in a workbench batch. */
 export interface StudioGeneratedItem {
+  gifReturnedStill?: boolean
   attachment: ImageAttachmentRef
   output: string
   savedTo?: string | undefined
@@ -651,17 +658,17 @@ export interface ArkOutputOptions {
  *     "transparent background requires exactly one input image"
  *
  * The generation caller enables it via `seedreamGeneratesTransparent`.
- * `opaque` is never sent; each model keeps its own default.
+ * Seedream 5.5 needs an explicit opaque selection because Ark defaults to auto.
  */
 export function arkOutputBody(
   options: ArkOutputOptions | undefined,
-  { background = true }: { background?: boolean } = {},
+  { background = true, explicitOpaque = false }: { background?: boolean; explicitOpaque?: boolean } = {},
 ): Record<string, unknown> {
   if (options === undefined) return {}
   const body: Record<string, unknown> = {}
   if (options.outputFormat !== undefined) body.output_format = options.outputFormat
   if (options.watermark !== undefined) body.watermark = options.watermark
-  if (background && options.background === 'transparent') body.background = 'transparent'
+  if (background && (options.background === 'transparent' || (explicitOpaque && options.background === 'opaque'))) body.background = options.background
   return body
 }
 

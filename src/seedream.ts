@@ -5,7 +5,7 @@ import type { GeneratedCompatibleImage } from './openai-compatible.js'
 import { guardedFetch, readResponseBody } from './fetch-diagnostics.js'
 import { redactSecrets } from './redact.js'
 import { detectImageMediaType } from './reference-image.js'
-import { arkOutputBody, type ArkOutputOptions } from './shared.js'
+import { arkOutputBody, seedreamGeneratesTransparent, type ArkOutputOptions } from './shared.js'
 
 const ERROR_LIMIT = 4096
 
@@ -35,7 +35,7 @@ export async function editSeedreamImage(input: {
       prompt: input.prompt,
       image: input.sourceImages.map(toDataUrl),
       ...(input.size === undefined || input.size.length === 0 ? {} : { size: input.size }),
-      ...arkOutputBody(input.arkOptions),
+      ...arkOutputBody(input.arkOptions, { explicitOpaque: seedreamGeneratesTransparent(input.model) }),
       response_format: 'b64_json',
     }),
   }), input.apiKey)
@@ -56,11 +56,11 @@ export async function editSeedreamImage(input: {
   return downloadImage(image.url, input)
 }
 
-function imageEndpoint(baseURL: string): string {
+export function imageEndpoint(baseURL: string): string {
   try { return new URL('images/generations', baseURL.endsWith('/') ? baseURL : `${baseURL}/`).toString() } catch { throw new Error('Seedream image endpoint must be an absolute URL') }
 }
 
-function toDataUrl(image: { data: Uint8Array; mediaType: ImageMediaType }): string {
+export function toDataUrl(image: { data: Uint8Array; mediaType: ImageMediaType }): string {
   return `data:${image.mediaType};base64,${Buffer.from(image.data).toString('base64')}`
 }
 
@@ -117,7 +117,7 @@ function imageMediaType(value: string | null | undefined): ImageMediaType | unde
   return mediaType === 'image/png' || mediaType === 'image/jpeg' || mediaType === 'image/webp' || mediaType === 'image/gif' ? mediaType : undefined
 }
 
-async function readBoundedText(response: Response, maxBytes: number): Promise<string> { return new TextDecoder().decode(await readBoundedBytes(response, maxBytes)) }
+export async function readBoundedText(response: Response, maxBytes: number): Promise<string> { return new TextDecoder().decode(await readBoundedBytes(response, maxBytes)) }
 
 async function readBoundedBytes(response: Response, maxBytes: number): Promise<Uint8Array> {
   if (response.body === null) return new Uint8Array()

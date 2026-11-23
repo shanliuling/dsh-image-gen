@@ -3,6 +3,7 @@ import type { ImageAttachmentRef, ImageMediaType, StoredImageAttachment } from '
 import type { Context } from '@deepseek-ai/cordis'
 import {
   ASPECT_RATIOS,
+  hostOf,
   IMAGE_SIZES,
   resolveProvider,
   withOpenAICompatChannel,
@@ -41,6 +42,7 @@ import {
 
 import { CLOUD_CAPABILITIES, cloudCapability, SUBSCRIPTION_CAPABILITIES } from './capabilities.js'
 import { ratioLabel } from './ratio-labels.js'
+import { readGifInfo } from './gif-info.js'
 import { compatGenerationExtraBody, compatQualityOptions, compatRequestQuality, gifRequestFields, officialQualityOptions, officialSizeTable, validateGifFrameSize, validateOfficialSize, PROVIDER_DEFAULT_QUALITY } from './openai-output.js'
 import { keepGifOriginal } from './vault-registry.js'
 import { vaultConfigOf } from './vault-store.js'
@@ -437,6 +439,7 @@ export async function generateFromStudio(
     return {
       attachment,
       output,
+      ...((input.output?.format === 'gif' || channelGif) && (readGifInfo(generated.data)?.frames ?? 0) < 2 ? { gifReturnedStill: true } : {}),
       ...(original === undefined ? {} : { original }),
     }
   }
@@ -446,6 +449,7 @@ export async function generateFromStudio(
     return {
       attachment: single.attachment,
       output: single.output,
+      ...(single.gifReturnedStill ? { gifReturnedStill: true } : {}),
       provider: input.provider,
       ...(channel === undefined ? {} : { channel: channel.id }),
       model,
@@ -650,11 +654,17 @@ export function studioProfile(config: Config, provider: CloudImageProvider, conf
   const channel = provider === 'openai-compat' && channelId !== undefined ? resolveOpenAICompatChannel(config, channelId) : undefined
   const scoped = channel === undefined ? config : withOpenAICompatChannel(config, channel.id)
   const result = cloudStudioProfile(scoped, provider, configured)
+  const gifEditFormat = provider === 'openai-compat' && hostOf(scoped.openaiCompatBaseURL ?? '') !== 'api.openai.com'
+    ? compatEditFormat(scoped) : undefined
   const editModel = provider === 'openai-compat' ? scoped.openaiCompatEditModel?.trim() : undefined
   return {
     ...result,
     ...(channel === undefined ? {} : { channel: channel.id, label: channel.label }),
     ...(editModel ? { editModel } : {}),
+    ...(gifEditFormat !== undefined && gifEditFormat !== 'modelscopeAsync' ? {
+      supportsGif: scoped.openaiCompatSupportsGif === true || scoped.openaiCompatExtraBody?.output_format === 'gif',
+      supportsGifEditing: scoped.openaiCompatSupportsGif === true && gifEditFormat === 'multipart',
+    } : {}),
     ...watermarkProfile(scoped, provider, result.model),
   }
 }
