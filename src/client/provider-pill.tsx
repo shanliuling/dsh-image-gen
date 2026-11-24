@@ -87,6 +87,7 @@ const PILL_DICT = {
     readOnly: '图像设置为只读，无法在此切换',
     switchFailed: '切换失败',
     writeRejected: '设置未保存，请重试',
+    noneReady: '还没有可用的生图渠道。在插件设置里填好 Key 或登录订阅后，会显示在这里。',
   },
   en: {
     pillLabel: 'Image',
@@ -102,6 +103,7 @@ const PILL_DICT = {
     readOnly: 'Image settings are read-only; switch them in the config source',
     switchFailed: 'Switch failed',
     writeRejected: 'Setting was not saved. Please try again',
+    noneReady: 'No image provider is ready yet. Add a key or sign in to a subscription in the plugin settings to see it here.',
   },
 } as const
 
@@ -213,6 +215,16 @@ export function pillModelOf(provider: ImageProvider, value: PillSettings | undef
   // A retired Seedream model runs on its replacement, which the row names.
   if (provider === 'seedream') return currentSeedreamModel(typeof stored === 'string' ? stored : undefined)
   return typeof stored === 'string' && stored.length > 0 ? stored : DEFAULT_MODELS[provider]
+}
+
+/**
+ * Whether a provider row belongs in the switcher (#158). A row that cannot
+ * generate yet (no key, signed out, no ComfyUI workflow) is hidden; the active
+ * row always stays so the current choice is never invisible, and a row whose
+ * state is still loading or unknown stays rather than flickering away.
+ */
+export function pillEntryVisible(state: 'ready' | 'missing' | 'unknown', active: boolean): boolean {
+  return active || state !== 'missing'
 }
 
 /** Optional model choices exposed by a provider; single-model providers return an empty list. */
@@ -479,16 +491,25 @@ export function ImageProviderPill(props: ProviderPillFace) {
     return includeModel ? model : ''
   }
 
-  const configured = (provider: ImageProvider, channelId?: string): boolean => {
-    if (provider === 'comfyui') return resolveComfyUIWorkflows(snapshot.value ?? {}).length > 0
-    if (isSubscriptionProvider(provider)) return subDots[provider] === 'logged-in'
-    return dots[pillTargetKey(provider, channelId)] === 'configured'
+  const readiness = (provider: ImageProvider, channelId?: string): 'ready' | 'missing' | 'unknown' => {
+    if (provider === 'comfyui') return resolveComfyUIWorkflows(snapshot.value ?? {}).length > 0 ? 'ready' : 'missing'
+    if (isSubscriptionProvider(provider)) {
+      const state = subDots[provider]
+      return state === 'logged-in' ? 'ready' : state === 'logged-out' ? 'missing' : 'unknown'
+    }
+    const dot = dots[pillTargetKey(provider, channelId)]
+    return dot === 'configured' ? 'ready' : dot === 'missing' ? 'missing' : 'unknown'
   }
+  const isActive = (provider: ImageProvider, channelId?: string): boolean =>
+    provider === current && (provider !== 'openai-compat' || currentChannel?.id === channelId)
   const menuEntries = IMAGE_PROVIDERS.flatMap<{ provider: ImageProvider; channel?: OpenAICompatChannel }>(provider =>
     provider === 'openai-compat'
       ? resolveOpenAICompatChannels(snapshot.value ?? {}).map(channel => ({ provider, channel }))
       : [{ provider }],
-  ).sort((a, b) => Number(configured(b.provider, b.channel?.id)) - Number(configured(a.provider, a.channel?.id)))
+  )
+    .filter(entry => pillEntryVisible(readiness(entry.provider, entry.channel?.id), isActive(entry.provider, entry.channel?.id)))
+    .sort((a, b) => Number(readiness(b.provider, b.channel?.id) === 'ready') - Number(readiness(a.provider, a.channel?.id) === 'ready'))
+  const anyReady = menuEntries.some(entry => readiness(entry.provider, entry.channel?.id) === 'ready')
 
   return (
     <div className="dsh-ig-pill-root">
@@ -569,6 +590,7 @@ export function ImageProviderPill(props: ProviderPillFace) {
               </Fragment>
             )
           })}
+          {!anyReady ? <div className="dsh-ig-pill-option-sub dsh-ig-pill-empty">{t('noneReady')}</div> : null}
           {error.length > 0 ? <div className="dsh-ig-pill-error" role="alert">{t('switchFailed')}：{error}</div> : null}
         </div>
       ) : null}
@@ -606,6 +628,7 @@ export const PROVIDER_PILL_STYLE = `
 .dsh-ig-pill-option-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
 .dsh-ig-pill-option-name{font-size:12.5px;font-weight:500;color:var(--dsw-alias-label-primary,#111827);line-height:1.2}
 .dsh-ig-pill-option-sub{font-size:11px;color:var(--dsw-alias-label-tertiary,#6b7280);line-height:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsh-ig-pill-empty{display:block;white-space:normal;padding:6px 10px 8px;line-height:1.4}
 .dsh-ig-pill-option-row{display:flex;align-items:stretch}
 .dsh-ig-pill-option-row>.dsh-ig-pill-option{flex:1;min-width:0}
 .dsh-ig-pill-expand{flex:none;width:32px;border:0;border-radius:8px;background:transparent;color:inherit;cursor:pointer}
