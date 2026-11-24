@@ -1,9 +1,20 @@
 import { describe, expect, it } from 'vitest'
-import { compatQualityOptions, compatRequestQuality, compatWatermarkField, gifRequestFields, officialQualityOptions, officialSizeTable, outputRequestFields, PROVIDER_DEFAULT_QUALITY, validateGifFrameSize, validateOfficialSize } from '../src/openai-output.js'
+import { workbenchGifOutput, compatQualityOptions, compatRequestQuality, compatWatermarkField, gifRequestFields, officialQualityOptions, officialSizeTable, outputRequestFields, PROVIDER_DEFAULT_QUALITY, validateGifFrameSize, validateOfficialSize } from '../src/openai-output.js'
 import { parseExtraFields, parseSizeTable } from '../src/client/output-settings.js'
 import { buildComparisonTargets, comparisonOutputOptions } from '../src/client/multi-model-compare.js'
 import { studioProfile } from '../src/studio.js'
 import { conversationRegenerateRequest } from '../src/client/conversation-regenerate.js'
+
+describe('manual workbench GIF controls', () => {
+  it('keeps blank controls at the channel default and converts explicit values', () => {
+    expect(workbenchGifOutput('', '')).toEqual({ format: 'gif' })
+    expect(workbenchGifOutput('8', '')).toEqual({ format: 'gif', frameCount: 8 })
+    expect(workbenchGifOutput('16', '2000')).toEqual({ format: 'gif', frameCount: 16, frameDurationMs: 2000 })
+  })
+  it.each([['1', ''], ['17', ''], ['2.5', ''], ['2', '10'], ['', '125'], ['', '2010']])('rejects frame settings %s / %s', (frames, duration) => {
+    expect(workbenchGifOutput(frames, duration)).toBeUndefined()
+  })
+})
 
 describe('independent OpenAI output parameters', () => {
   it.each(['2048x2048', '2048x1152', '3840x2160', '2160x3840'])('accepts the official flexible size %s', size => {

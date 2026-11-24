@@ -107,6 +107,7 @@ interface ImageSettings {
   openaiCompatModels?: string[]
   openaiCompatChannels?: OpenAICompatChannel[]
   openaiCompatActiveChannel?: string
+  openaiCompatSupportsGif?: boolean
   openaiCompatEditModel?: string
   openaiCompatSizes?: Record<string, Record<string, string>>
   openaiCompatQuality?: string
@@ -543,6 +544,7 @@ interface ProviderRowState {
   label: string
   model: string
   models: string[]
+  supportsGif: boolean
   editModel: string
   baseURL: string
   googleNative: boolean
@@ -582,6 +584,7 @@ function emptyProviderRow(): ProviderRowState {
     label: '',
     model: '',
     models: [],
+    supportsGif: false,
     editModel: '',
     baseURL: '',
     googleNative: false,
@@ -682,6 +685,7 @@ function compatRowFields(channel: OpenAICompatChannel): Partial<ProviderRowState
     label: channel.label,
     model: channel.model,
     models: resolveOpenAICompatModels({ openaiCompatModel: channel.model, openaiCompatModels: channel.models ?? [] }),
+    supportsGif: channel.supportsGif === true,
     editModel: channel.editModel ?? '',
     baseURL: channel.baseURL,
     editFormat: parseEditFormat(channel.editFormat),
@@ -1022,6 +1026,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
           baseURL: row.baseURL.trim(),
           model: row.model.trim(),
           models: resolveOpenAICompatModels({ openaiCompatModel: row.model, openaiCompatModels: row.models }),
+          supportsGif: row.supportsGif,
           editModel: row.editModel.trim(),
           quality: row.generationQuality.trim(),
           qualityOptions: [...new Set(row.qualityOptionsText.split(',').map(value => value.trim()).filter(Boolean))],
@@ -1070,6 +1075,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
         if (provider === 'openai-compat') {
           await saveSetting('openaiCompatLabel', row.label.trim())
           await saveSetting('openaiCompatModels', resolveOpenAICompatModels({ openaiCompatModel: row.model, openaiCompatModels: row.models }))
+          await saveSetting('openaiCompatSupportsGif', row.supportsGif)
           await saveSetting('openaiCompatEditModel', row.editModel.trim())
           await saveSetting('openaiCompatEditFormat', row.editFormat)
           await saveSetting('openaiCompatEditExtra', editExtra)
@@ -1505,6 +1511,11 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
               </div>
               <span className="dsh-ig-hint">{t('availableModelsHint')}</span>
             </div>
+          ) : null}
+          {provider === 'openai-compat' ? (
+            <label className="dsh-ig-field">
+              <span className="dsh-ig-label"><input type="checkbox" checked={row.supportsGif} disabled={!settingsWritable} onChange={event => update({ supportsGif: event.target.checked })} /> {t('supportsGif')}</span>
+            </label>
           ) : null}
           {provider === 'openai-compat' ? (
             <label className="dsh-ig-field">

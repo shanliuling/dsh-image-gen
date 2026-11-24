@@ -1,6 +1,6 @@
 /** Independent size and quality controls for official and compatible image APIs. */
 import type { Config } from './config.js'
-import { GIF_FRAME_COUNT_MAX, GIF_FRAME_COUNT_MIN, GIF_FRAME_DURATION_MS_MAX, GIF_FRAME_DURATION_MS_MIN, GIF_SHEET_MAX_EDGE, type StudioOption } from './shared.js'
+import { GIF_FRAME_COUNT_MAX, GIF_FRAME_COUNT_MIN, GIF_FRAME_DURATION_MS_MAX, GIF_FRAME_DURATION_MS_MIN, GIF_SHEET_MAX_EDGE, type GifOutputRequest, type StudioOption } from './shared.js'
 export { compatGenerationExtraBody, compatWatermarkField, compatWatermarkOptions } from './watermark.js'
 
 export const PROVIDER_DEFAULT_QUALITY = '__default__'
@@ -103,6 +103,19 @@ export function gifRequestFields(options: GifRequestOptions): GifRequestFields {
     output_format: 'gif',
     ...(fields.frame_count === undefined ? {} : { frame_count: fields.frame_count }),
     ...(fields.frame_duration_ms === undefined ? {} : { frame_duration_ms: fields.frame_duration_ms }),
+  }
+}
+
+/** Parse the optional workbench controls. Empty fields keep the relay defaults. */
+export function workbenchGifOutput(frames: string, duration: string): GifOutputRequest | undefined {
+  const frameCount = frames.trim() === '' ? undefined : Number(frames)
+  const frameDurationMs = duration.trim() === '' ? undefined : Number(duration)
+  if (frameCount !== undefined && !inRange(frameCount, GIF_FRAME_COUNT_MIN, GIF_FRAME_COUNT_MAX)) return undefined
+  if (frameDurationMs !== undefined && (!inRange(frameDurationMs, GIF_FRAME_DURATION_MS_MIN, GIF_FRAME_DURATION_MS_MAX) || frameDurationMs % 10 !== 0)) return undefined
+  return {
+    format: 'gif',
+    ...(frameCount === undefined ? {} : { frameCount }),
+    ...(frameDurationMs === undefined ? {} : { frameDurationMs }),
   }
 }
 

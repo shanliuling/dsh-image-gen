@@ -132,7 +132,7 @@ async function card(ctx, provider = 'openai-compat') {
   assert.ok(targetRow, `Missing ${provider}; rendered rows: ${JSON.stringify(rows().map(node => text(node.findByProps({ className: 'dsh-ig-provider-name' }))))}`)
   await act(async () => { targetRow.findByProps({ className: 'dsh-ig-provider-head' }).props.onClick() })
   const input = type => row().findAllByType('input').find(element => element.props.type === type)
-  const field = label => row().findAllByType('label').find(element => text(element).startsWith(label)).findByType('input')
+  const field = label => row().findAllByType('label').find(element => text(element).trimStart().startsWith(label)).findByType('input')
   const save = async () => { await act(async () => { row().findByType('form').props.onSubmit({ preventDefault() {} }) }) }
   const type = async (kind, value) => { await act(async () => { input(kind).props.onChange({ target: { value } }) }) }
   const close = async () => { await act(async () => { renderer.unmount() }); renderers.delete(renderer) }
@@ -157,6 +157,7 @@ try {
     await form.type('url', 'https://saved.example/v1')
     await act(async () => { form.field('Default model').props.onChange({ target: { value: 'test-image-model' } }) })
     await act(async () => { form.field('Editing model').props.onChange({ target: { value: 'Qwen/Qwen-Image-Edit-2509' } }) })
+    await act(async () => { form.field('This channel supports animated GIF output').props.onChange({ target: { checked: true } }) })
     const editFormat = form.row().findAllByType('select').find(element => element.findAllByType('option').some(option => option.props.value === 'siliconflowJson'))
     await act(async () => { editFormat.props.onChange({ target: { value: 'siliconflowJson' } }) })
     await form.save()
@@ -182,6 +183,7 @@ try {
     ctx = await start()
     const restarted = await card(ctx)
     assert.equal(restarted.input('url').props.value, 'https://saved.example/v1')
+    assert.equal(restarted.field('This channel supports animated GIF output').props.checked, true)
     assert.equal(restarted.field('Default model').props.value, 'test-image-model')
     assert.equal(restarted.field('Editing model').props.value, 'Qwen/Qwen-Image-Edit-2509')
     assert.equal(ctx.settings.describe().find(row => row.ns === 'image-gen').value.openaiCompatEditFormat, 'siliconflowJson')

@@ -32,7 +32,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react'
-import { DELETE_ROUTE, SAVE_WORKSPACE_ROUTE, STUDIO_ROUTE, thumbUrlFor, isSubscriptionProvider, studioWatermarkCapability, studioModelForMode, studioModelOptionsForMode, studioTargetKey, type CloudImageProvider, type StudioConfigResponse, type StudioGenerateResponse, type StudioGeneratedItem, type StudioProvider, type StudioProviderProfile, type StudioReference, type StudioWatermark } from '../shared.js'
+import { GIF_FRAME_COUNT_MIN, GIF_FRAME_COUNT_MAX, GIF_FRAME_DURATION_MS_MIN, GIF_FRAME_DURATION_MS_MAX, DELETE_ROUTE, SAVE_WORKSPACE_ROUTE, STUDIO_ROUTE, thumbUrlFor, isSubscriptionProvider, studioWatermarkCapability, studioModelForMode, studioModelOptionsForMode, studioTargetKey, type CloudImageProvider, type StudioConfigResponse, type StudioGenerateResponse, type StudioGeneratedItem, type StudioProvider, type StudioProviderProfile, type StudioReference, type StudioWatermark } from '../shared.js'
 import { deleteGalleryItem, getGalleryItems, subscribeGallery, toggleFavoriteGalleryItem, type GalleryItem, saveFavoritePrompt, getFavoritePrompts, deleteFavoritePrompt, subscribeFavorites, addFavoriteFolder, getFavoriteFolders, deleteFavoriteFolder, moveFavoritePrompt, updateFavoritePrompt, type FavoritePrompt, type FavoriteFolder } from './gallery-store.js'
 import { persistGalleryRecord } from './gallery-media.js'
 import { imageVersionKey } from './image-result-node.js'
@@ -63,7 +63,7 @@ import {
   type RecentItemActions,
 } from './studio-helpers.js'
 import { evictAttachmentCache, fetchAttachmentBlob } from './image-cache.js'
-import { PROVIDER_DEFAULT_QUALITY } from '../openai-output.js'
+import { workbenchGifOutput, PROVIDER_DEFAULT_QUALITY } from '../openai-output.js'
 
 
 const PAGE_SIZE = 12
@@ -101,6 +101,8 @@ const COPY = {
     generate: '文生图', edit: '图生图', reference: '参考图', optional: '选填', upload: '点击或拖拽图片到此处',
     uploadHint: '支持 JPG / PNG / WebP / GIF，最大 10MB（最多 5 张）', prompt: '提示词 Prompt', clear: '清空', promptPlaceholder: '描述主体、构图、风格、光线与需要出现的文字…（支持 Ctrl+Enter 快捷生成）',
     provider: 'Provider', model: 'Model', ratio: '比例', quality: '清晰度', subscriptionParameterHint: '所选比例会自动补充到生成提示词中；实际尺寸和清晰度仍由 ChatGPT 决定，请以生成结果为准。', subscriptionRatioMismatch: 'ChatGPT 订阅未按所选比例出图，请查看实际尺寸。', start: '开始生成', generating: '正在生成…', cancelGenerate: '取消生成',
+    gif: '自定义 GIF 动图', frames: '帧数（2–16）', duration: '每帧时长（20–2000 毫秒）', channelDefault: '渠道默认',
+    invalidGif: '请输入 2–16 的整数帧数和 20–2000 毫秒的帧时长（10 毫秒一档），也可以留空。', gifReference: '生成动图只能使用一张参考图，请移除多余图片。', gifStill: '渠道返回了一张静态图，已保留结果。',
     count: '生成数量', countUnit: '{n} 张', partialSuccess: '已生成 {success} 张图片，{failed} 张失败', generatingCount: '正在生成（共 {count} 张）…',
     batchResult: '本次生成（共 {count} 张）',
     singleModel: '单模型', compareModels: '多模型对比', compareHint: '相同提示词，同时交给多个模型', compareSelect: '选择模型', compareSelected: '已选 {count} 个模型',
@@ -139,6 +141,8 @@ const COPY = {
     generate: 'Text to image', edit: 'Image to image', reference: 'Reference image', optional: 'optional', upload: 'Click or drop images here',
     uploadHint: 'JPG / PNG / WebP / GIF, up to 10MB (max 5)', prompt: 'Prompt', clear: 'Clear', promptPlaceholder: 'Describe the subject, composition, style, lighting, and exact text… (Ctrl+Enter to generate)',
     provider: 'Provider', model: 'Model', ratio: 'Aspect ratio', quality: 'Quality', subscriptionParameterHint: 'The selected aspect ratio is automatically added to the generation prompt. ChatGPT still determines the final dimensions and quality; check the generated result.', subscriptionRatioMismatch: 'ChatGPT subscription returned a different aspect ratio. Check the actual dimensions.', start: 'Generate', generating: 'Generating…', cancelGenerate: 'Cancel',
+    gif: 'Customize animated GIF', frames: 'Frames (2–16)', duration: 'Frame duration (20–2000 ms)', channelDefault: 'Channel default',
+    invalidGif: 'Enter 2–16 whole frames and 20–2000 ms in 10 ms steps, or leave the fields blank.', gifReference: 'Remove extra references to use a single image for GIF editing.', gifStill: 'The channel returned a still image. The result has been kept.',
     count: 'Number of images', countUnit: '{n}', partialSuccess: 'Generated {success} images, {failed} failed', generatingCount: 'Generating ({count} images)…',
     batchResult: 'Generated {count} images',
     singleModel: 'Single model', compareModels: 'Compare models', compareHint: 'Send the same prompt to multiple models', compareSelect: 'Choose models', compareSelected: '{count} models selected',
@@ -270,7 +274,10 @@ export const StudioView: FC<{
   const [watermark, setWatermark] = useState<StudioWatermark>('default')
   const [prompt, setPrompt] = useState('')
   const [references, setReferences] = useState<StudioReferenceItem[]>([])
-  const [count, setCount] = useState(1)
+  const [requestedCount, setCount] = useState(1)
+  const [gifTarget, setGifTarget] = useState('')
+  const [frameCount, setFrameCount] = useState('')
+  const [frameDuration, setFrameDuration] = useState('')
   const [currentBatch, setCurrentBatch] = useState<GalleryItem[] | null>(() => restoredView?.currentBatch ?? null)
   const [selectedBatchIds, setSelectedBatchIds] = useState<string[]>(() => restoredView?.selectedBatchIds ?? [])
   const [batchKind, setBatchKind] = useState<BatchKind | null>(() => restoredView?.batchKind ?? null)
@@ -372,7 +379,12 @@ export const StudioView: FC<{
     return () => { observer.disconnect() }
   }, [])
 
-  const maxReferences = comparisonEnabled
+  const activeProfile = useMemo(() => config?.providers.find(item => item.provider === provider && item.channel === channel), [config, provider, channel])
+  const gifAvailable = !comparisonEnabled && (mode === 'edit' ? activeProfile?.supportsGifEditing : activeProfile?.supportsGif)
+  const target = studioTargetKey(provider, channel)
+  const useGif = gifAvailable === true && gifTarget === target
+  const count = useGif ? 1 : requestedCount
+  const maxReferences = useGif ? 1 : comparisonEnabled
     ? (comparisonProviderKeys.includes('dashscope') ? 3 : 5)
     : (provider === 'dashscope' ? 3 : 5)
   const referencesRef = useRef(references)
@@ -587,7 +599,6 @@ export const StudioView: FC<{
     }
   }, [])
 
-  const activeProfile = useMemo(() => config?.providers.find(item => item.provider === provider && item.channel === channel), [config, provider, channel])
   const requestModel = mode === 'edit' && activeProfile?.editModel ? studioModelForMode(activeProfile, mode) : model
   const configuredCount = config?.providers.filter(item => item.configured).length ?? 0
   // Split badge counts: BYOK keys and subscription sign-ins stay separately
@@ -940,6 +951,9 @@ export const StudioView: FC<{
   const submit = async () => {
     if (isGenerating || activeProfile === undefined) return
     if (prompt.trim().length === 0) return setError(t('needPrompt'))
+    if (useGif && mode === 'edit' && references.length > 1) return setError(t('gifReference'))
+    const gifOutput = useGif ? workbenchGifOutput(frameCount, frameDuration) : undefined
+    if (useGif && !gifOutput) return setError(t('invalidGif'))
     if (comparisonEnabled && comparisonTargets.length < 2) return setError(t('compareNeedTwo'))
     if (!comparisonEnabled && !activeProfile.configured) return setError(t('selectConfigured'))
     if (mode === 'edit' && references.length === 0) return setError(t('needReference'))
@@ -1061,6 +1075,7 @@ export const StudioView: FC<{
           ...(selectedResolution === undefined ? {} : { resolution: selectedResolution }),
           ...(provider === 'openai-compat' ? { generationQuality: selectedGenerationQuality } : {}),
           ...(watermarkCapability.status === 'supported' ? { watermark } : {}),
+          ...(gifOutput ? { output: gifOutput } : {}),
           ...(count > 1 ? { count } : {}),
           ...(workspace?.path ? { workspaceRoot: workspace.path } : {}),
           ...(referencesPayload === undefined ? {} : {
@@ -1123,6 +1138,7 @@ export const StudioView: FC<{
         view,
         notice: payload.failedCount && payload.failedCount > 0
           ? t('partialSuccess', { success: String(generatedList.length), failed: String(payload.failedCount) })
+          : payload.gifReturnedStill || payload.items?.some(item => item.gifReturnedStill) ? t('gifStill')
           : galleryEntries.some(hasSubscriptionRatioMismatch) ? t('subscriptionRatioMismatch') : undefined,
       }
     } catch (submitError) {
@@ -1909,7 +1925,14 @@ export const StudioView: FC<{
                   <WatermarkControl capability={watermarkCapability} value={watermark} onChange={setWatermark} lang={lang} />
                 </div>
                 {provider === 'chatgpt-sub' && <div className="dsh-ig-inline-note">{t('subscriptionParameterHint')}</div>}
-                <div className="dsh-ig-field"><label>{t('count')}</label><div className="dsh-ig-count-row">{[1, 2, 3, 4].map(option => <button key={option} type="button" className={`dsh-ig-count-pill ${count === option ? 'is-active' : ''}`} onClick={() => setCount(option)}>{t('countUnit', { n: String(option) })}</button>)}</div></div>
+                {gifAvailable && <div className="dsh-ig-field">
+                  <label><input type="checkbox" checked={useGif} onChange={event => setGifTarget(event.target.checked ? target : '')} /> {t('gif')}</label>
+                  {useGif && <div className="dsh-ig-field-grid">
+                    <label>{t('frames')}<input className="dsh-ig-input" type="number" min={GIF_FRAME_COUNT_MIN} max={GIF_FRAME_COUNT_MAX} step={1} placeholder={t('channelDefault')} value={frameCount} onChange={event => setFrameCount(event.target.value)} /></label>
+                    <label>{t('duration')}<input className="dsh-ig-input" type="number" min={GIF_FRAME_DURATION_MS_MIN} max={GIF_FRAME_DURATION_MS_MAX} step={10} placeholder={t('channelDefault')} value={frameDuration} onChange={event => setFrameDuration(event.target.value)} /></label>
+                  </div>}
+                </div>}
+                <div className="dsh-ig-field"><label>{t('count')}</label><div className="dsh-ig-count-row">{[1, 2, 3, 4].map(option => <button key={option} type="button" className={`dsh-ig-count-pill ${count === option ? 'is-active' : ''}`} disabled={useGif && option !== 1} onClick={() => setCount(option)}>{t('countUnit', { n: String(option) })}</button>)}</div></div>
               </>}
             </>}
             {configuredCount === 0 && config !== null && <div className="dsh-ig-inline-note">{t('noProvider')}</div>}

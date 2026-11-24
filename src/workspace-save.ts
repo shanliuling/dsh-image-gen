@@ -95,6 +95,17 @@ function assertInsideWorkspace(realRoot: string, candidate: string, folder: stri
   throw new Error(`image workspace folder '${folder ?? ''}' must stay inside the session workspace (${candidate} resolves outside ${realRoot})`)
 }
 
+/** Create an output directory after validating both its existing ancestor and final real path. */
+export async function prepareWorkspaceImageDir(workspaceRoot: string, folder?: string): Promise<string> {
+  const dir = workspaceImageDir(workspaceRoot, folder)
+  const root = await realpath(resolve(workspaceRoot))
+  assertInsideWorkspace(root, await nearestExistingRealPath(dir), folder)
+  await mkdir(dir, { recursive: true })
+  const actual = await realpath(dir)
+  assertInsideWorkspace(root, actual, folder)
+  return actual
+}
+
 /**
  * Write one generated image durably under the session workspace.
  *
@@ -121,17 +132,11 @@ export async function saveImageToWorkspace(options: {
   data: Uint8Array
   signal?: AbortSignal
 }): Promise<string> {
-  const dir = workspaceImageDir(options.workspaceRoot, options.folder)
   options.signal?.throwIfAborted()
-  const realRoot = await realpath(resolve(options.workspaceRoot))
-  assertInsideWorkspace(realRoot, await nearestExistingRealPath(dir), options.folder)
+  const dir = await prepareWorkspaceImageDir(options.workspaceRoot, options.folder)
   const name = workspaceImageName(options.attachmentId, options.mediaType)
   const target = join(dir, name)
   const staging = join(dir, `.${name}.${process.pid}-${randomUUID()}.tmp`)
-  await mkdir(dir, { recursive: true })
-  // Re-validate the finished directory: creating it may have traversed a
-  // symlink, and links can be swapped in between the checks above.
-  assertInsideWorkspace(realRoot, await realpath(dir), options.folder)
   try {
     await writeFile(staging, options.data, { flag: 'wx', signal: options.signal })
     options.signal?.throwIfAborted()
@@ -149,7 +154,7 @@ export async function saveImageToWorkspace(options: {
     await unlink(target).catch(() => {})
     throw error
   }
-  return target
+  return join(workspaceImageDir(options.workspaceRoot, options.folder), name)
 }
 
 /** Regex pattern strictly matching generated image file names (e.g. image-01234567.png). */

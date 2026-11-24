@@ -350,7 +350,7 @@ describe('image tool registration', () => {
   it('installs the settings section through the modern service API', () => {
     const { ctx, tools, installSection } = harnessContext()
     apply(ctx, { provider: 'google', saveToWorkspace: false })
-    expect(tools.map(tool => tool.name)).toEqual(['canvas_state', 'view_canvas', 'generate_image', 'generate_images', 'edit_image', 'find_inspiration'])
+    expect(tools.map(tool => tool.name)).toEqual(['canvas_state', 'view_canvas', 'generate_image', 'generate_images', 'edit_image', 'decompose_image_layers', 'find_inspiration'])
     expect(installSection).toHaveBeenCalledTimes(1)
     const [owner, ns, schema, entry, hooks] = installSection.mock.calls[0] as unknown as [Context, string, unknown, unknown, { setSource(): void; onChange(): void }]
     expect(owner).toBe(ctx)
@@ -367,7 +367,7 @@ describe('image tool registration', () => {
   it('registers canvas tools, generate_image, and edit_image', () => {
     const { ctx, tools } = harnessContext()
     apply(ctx, { provider: 'google', saveToWorkspace: false })
-    expect(tools.map(tool => tool.name)).toEqual(['canvas_state', 'view_canvas', 'generate_image', 'generate_images', 'edit_image', 'find_inspiration'])
+    expect(tools.map(tool => tool.name)).toEqual(['canvas_state', 'view_canvas', 'generate_image', 'generate_images', 'edit_image', 'decompose_image_layers', 'find_inspiration'])
   })
 
   it('does not require webServer, so headless, acp and sdk profiles can activate it', async () => {
@@ -378,7 +378,7 @@ describe('image tool registration', () => {
   it('registers every tool without a webServer and mounts no routes', async () => {
     const { ctx, tools } = harnessContext({ webServer: false })
     apply(ctx, { provider: 'google', googleNative: true, googleEndpoint: 'https://relay.example/v1beta', googleModel: 'gemini-3-pro-image', saveToWorkspace: false })
-    expect(tools.map(tool => tool.name)).toEqual(['canvas_state', 'view_canvas', 'generate_image', 'generate_images', 'edit_image', 'find_inspiration'])
+    expect(tools.map(tool => tool.name)).toEqual(['canvas_state', 'view_canvas', 'generate_image', 'generate_images', 'edit_image', 'decompose_image_layers', 'find_inspiration'])
     const fetchMock = vi.fn(async () => Response.json({ candidates: [{ content: { parts: [{ inlineData: { data: 'iVBORw0KGgo=', mimeType: 'image/png' } }] } }] }))
     vi.stubGlobal('fetch', fetchMock)
     await toolByName(tools, 'generate_image').execute({ prompt: 'one' }, { signal: new AbortController().signal } as never)
