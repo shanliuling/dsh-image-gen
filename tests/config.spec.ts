@@ -433,6 +433,13 @@ describe('Config Schema validation', () => {
     expect(unwrap(enabled).showProviderPill).toBe(true)
   })
 
+  it('exposes the optional tldraw license key as a live settings field', () => {
+    expect(unwrap(Config({})).tldrawLicenseKey).toBe('')
+    const configured = Config({ tldrawLicenseKey: 'tldraw-abc123' })
+    expect(configured.tldrawLicenseKey).toHaveProperty('get')
+    expect(unwrap(configured).tldrawLicenseKey).toBe('tldraw-abc123')
+  })
+
   it('validates provider: dashscope without rejection', () => {
     const validated = unwrap(Config({ provider: 'dashscope' }))
     expect(validated.provider).toBe('dashscope')

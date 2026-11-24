@@ -141,6 +141,7 @@ interface ImageSettings {
   saveToWorkspace?: boolean
   workspaceFolder?: string
   showProviderPill?: boolean
+  tldrawLicenseKey?: string
 }
 interface CredentialInfo { configured?: boolean; source?: string; writable?: boolean }
 interface CredentialResult { ok: boolean; value?: Readonly<Record<string, CredentialInfo>> }
@@ -747,8 +748,16 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
   const [saveToWorkspace, setSaveToWorkspace] = useState(() => props.scope.getSnapshot().value?.saveToWorkspace ?? true)
   const [workspaceFolder, setWorkspaceFolder] = useState(() => props.scope.getSnapshot().value?.workspaceFolder ?? 'dsh-image-gen')
   const [showPill, setShowPill] = useState(() => props.scope.getSnapshot().value?.showProviderPill === true)
+  const initialTldrawLicenseKey = props.scope.getSnapshot().value?.tldrawLicenseKey ?? ''
+  const [tldrawLicenseKey, setTldrawLicenseKey] = useState(initialTldrawLicenseKey)
+  /** Last value the host accepted (or reported); used to tell drafts from persisted values. */
+  const persistedTldrawLicenseKey = useRef(initialTldrawLicenseKey)
+  /** Save currently in flight; blocks Enter+Blur from writing the same value twice. */
+  const pendingTldrawLicenseSave = useRef<string | null>(null)
   const [uiMessage, setUiMessage] = useState('')
   const [uiMessageIsError, setUiMessageIsError] = useState(false)
+  const [tldrawMessage, setTldrawMessage] = useState('')
+  const [tldrawMessageIsError, setTldrawMessageIsError] = useState(false)
   const [workspaceMessage, setWorkspaceMessage] = useState('')
   const [workspaceMessageIsError, setWorkspaceMessageIsError] = useState(false)
   const [rows, setRows] = useState<ProviderRows>(() => rowsFromSettings(props.scope.getSnapshot().value))
@@ -936,6 +945,12 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
     setSaveToWorkspace(value?.saveToWorkspace ?? true)
     setWorkspaceFolder(value?.workspaceFolder ?? 'dsh-image-gen')
     setShowPill(value?.showProviderPill === true)
+    const hostTldrawLicenseKey = value?.tldrawLicenseKey ?? ''
+    const previousTldrawLicenseKey = persistedTldrawLicenseKey.current
+    persistedTldrawLicenseKey.current = hostTldrawLicenseKey
+    // Adopt host changes only while the draft still mirrors the last persisted
+    // value; an in-progress edit (or a newer save) must survive the snapshot.
+    setTldrawLicenseKey(current => current === previousTldrawLicenseKey ? hostTldrawLicenseKey : current)
     setRows(current => {
       const next = { ...current }
       for (const provider of IMAGE_PROVIDERS) {
@@ -1379,6 +1394,36 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
       setShowPill(snapshot.value?.showProviderPill === true)
       setUiMessage(cause instanceof Error ? cause.message : String(cause))
       setUiMessageIsError(true)
+    })
+  }
+
+  /** tldraw license key persists on Enter or blur; empty removes the override. */
+  const commitTldrawLicenseKey = (): void => {
+    const submitted = tldrawLicenseKey
+    const next = submitted.trim()
+    if (next === persistedTldrawLicenseKey.current && pendingTldrawLicenseSave.current === null) {
+      setTldrawLicenseKey(current => current === submitted ? next : current)
+      return
+    }
+    // Enter fires before blur for the same edit; one write per value at a time.
+    if (pendingTldrawLicenseSave.current === next) return
+    pendingTldrawLicenseSave.current = next
+    setTldrawMessage(''); setTldrawMessageIsError(false)
+    void saveSetting('tldrawLicenseKey', next).then(() => {
+      // A newer edit or save superseded this request; leave its draft alone.
+      if (pendingTldrawLicenseSave.current !== next) return
+      pendingTldrawLicenseSave.current = null
+      persistedTldrawLicenseKey.current = next
+      // Only normalize the draft this request was sent for; newer input wins.
+      setTldrawLicenseKey(current => current === submitted ? next : current)
+      setTldrawMessage(t('saved'))
+    }).catch((cause: unknown) => {
+      if (pendingTldrawLicenseSave.current !== next) return
+      pendingTldrawLicenseSave.current = null
+      // Roll back only an untouched draft; edits made after the request survive.
+      setTldrawLicenseKey(current => current === submitted ? persistedTldrawLicenseKey.current : current)
+      setTldrawMessage(cause instanceof Error ? cause.message : String(cause))
+      setTldrawMessageIsError(true)
     })
   }
 
@@ -1905,6 +1950,29 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
               <span className="dsh-ig-hint">{t('showPillHint')}</span>
               {uiMessage.length > 0 ? <p className={`dsh-ig-status${uiMessageIsError ? ' dsh-ig-status-error' : ''}`} role="status">{uiMessage}</p> : null}
             </div>
+          </div>
+          <div className="dsh-ig-section">
+            <span className="dsh-ig-section-title">{t('tldrawSection')}</span>
+            <label className="dsh-ig-field">
+              <span className="dsh-ig-label">{t('tldrawLicenseKey')}</span>
+              <input
+                className="dsh-ig-input"
+                type="text"
+                autoComplete="off"
+                spellCheck={false}
+                value={tldrawLicenseKey}
+                onChange={event => { setTldrawLicenseKey(event.target.value) }}
+                onBlur={() => { commitTldrawLicenseKey() }}
+                onKeyDown={event => { if (event.key === 'Enter') commitTldrawLicenseKey() }}
+                placeholder="tldraw-..."
+                disabled={!settingsWritable}
+              />
+              <span className="dsh-ig-hint">
+                {t('tldrawLicenseHint')}{' '}
+                <a className="dsh-ig-link" href="https://tldraw.dev/get-a-license/trial" target="_blank" rel="noopener noreferrer">{t('getTldrawLicense')}</a>
+              </span>
+              {tldrawMessage.length > 0 ? <p className={`dsh-ig-status${tldrawMessageIsError ? ' dsh-ig-status-error' : ''}`} role="status">{tldrawMessage}</p> : null}
+            </label>
           </div>
         </div>
     </li>

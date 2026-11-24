@@ -169,3 +169,19 @@ describe('history canvas action wiring', () => {
     expect(onToast).toHaveBeenCalledWith('请先打开无限画布')
   })
 })
+
+describe('tldraw license wiring', () => {
+  it('passes the configured license key to the editor', () => {
+    const component: any = (StudioTlCanvas as any)({ lang: 'zh', licenseKey: 'tldraw-abc123' })
+    const editor = component.props.children[0]
+    expect(editor.props.licenseKey).toBe('tldraw-abc123')
+    expect(editor.key).toBe('tldraw-abc123')
+  })
+
+  it('leaves the license prop absent when no key is configured', () => {
+    const component: any = (StudioTlCanvas as any)({ lang: 'zh' })
+    const editor = component.props.children[0]
+    expect(editor.props).not.toHaveProperty('licenseKey')
+    expect(editor.key).toBe('')
+  })
+})

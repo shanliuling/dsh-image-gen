@@ -541,6 +541,8 @@ export interface StudioConfigResponse {
   modelDiscoveryPending?: boolean
   workspaceRoot?: string | undefined
   workspaces?: StudioWorkspaceInfo[] | undefined
+  /** Public tldraw SDK license key for the infinite canvas; absent when unset. */
+  tldrawLicenseKey?: string | undefined
 }
 
 /** A browser-uploaded reference image used for one editing request. */

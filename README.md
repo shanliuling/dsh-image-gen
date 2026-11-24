@@ -212,6 +212,8 @@ pnpm dsh plugin --profile web add ./dsh-image-gen
 - **组合参考**：把「最近生成」或图库里的图拖进画布，或点击缩略图上的「发送到画布」，多张一起选中作为参考。同一张历史图片重复导入会自动去重。
 - 每一步结果都留在画布上，随时可以从任意一版继续往下迭代。
 
+> **HTTPS 部署提示**：tldraw 5 在 HTTPS 域名（非 localhost）下按生产环境处理，必须配置有效的 tldraw License Key 才能渲染无限画布。请在插件设置页的「无限画布」区域填写自己的密钥（配置文件字段为 `tldrawLicenseKey`）；未配置时无限画布会在约 5 秒后停止渲染，控制台提示 `No tldraw license key provided!`，其他生图功能不受影响。许可证可在 [tldraw.dev](https://tldraw.dev/get-a-license/trial) 申请（提供 100 天试用）。
+
 <div align="center">
   <img src="docs/assets/readme/canvas-edit.webp" alt="在画布上圈出剑，说一句话，Agent 只把剑换成战斧" width="100%" />
   <br />
@@ -432,6 +434,15 @@ dsh --profile web --dump-config
 <summary><strong>为什么 ComfyUI 没有出现在 Studio 中？</strong></summary>
 
 当前 Studio 与多模型对比仅支持云端 Provider，暂未接入 ComfyUI。ComfyUI 已支持在 Agent 对话中进行文生图、图生图（支持多张参考图）、批量生图以及多个命名工作流。
+
+</details>
+
+<details>
+<summary><strong>通过 HTTPS 域名访问时无限画布打不开，控制台提示 No tldraw license key provided 怎么办？</strong></summary>
+
+tldraw 5 的 SDK 在 HTTPS 非 localhost 的生产环境强制校验许可证。请在插件设置页的「无限画布」区域填写你自己的 tldraw License Key（配置文件字段为 `tldrawLicenseKey`），保存后重新打开无限画布即可。该 Key 是公开字符串，会随前端下发，并按部署域名校验；请使用与当前访问域名匹配的许可证。
+
+未配置时，无限画布在 `localhost` 或开发环境中仍可用；通过 HTTPS 域名部署时会在约 5 秒后停止渲染，其他生图功能不受影响。可在 [tldraw.dev](https://tldraw.dev/get-a-license/trial) 申请 100 天试用，商业与爱好许可证见 [tldraw 定价页](https://tldraw.dev/pricing)。
 
 </details>
 

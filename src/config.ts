@@ -193,6 +193,12 @@ export interface Config {
   workspaceFolder?: string
   /** Show the provider switcher beside the chat input. */
   showProviderPill?: boolean
+  /**
+   * tldraw SDK license key for the infinite canvas. tldraw 5 requires a valid
+   * key in production (HTTPS on a non-loopback host); empty keeps the canvas
+   * in development mode only.
+   */
+  tldrawLicenseKey?: string
   /** Prune the host request-image cache once at startup and then daily. */
   requestCachePrune?: boolean
   /** Retain request-image variants for this many days. */
@@ -286,6 +292,7 @@ export const Config = z.object({
   saveToWorkspace: volatile(z.boolean().default(true)),
   workspaceFolder: volatile(z.string().default(DEFAULT_WORKSPACE_FOLDER)),
   showProviderPill: volatile(z.boolean().default(false)),
+  tldrawLicenseKey: volatile(z.string().default('')),
   requestCachePrune: volatile(z.boolean().default(true)),
   requestCacheTtlDays: volatile(z.number().min(1).max(365).default(14)),
   requestCacheMaxBytes: volatile(z.number().min(0).default(256 * 1024 * 1024)),

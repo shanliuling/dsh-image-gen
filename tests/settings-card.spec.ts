@@ -4,7 +4,11 @@ import { ImageGenerationSettingsCard } from '../src/client/index.js'
 
 // Exercise the actual rendered form handlers without a DOM dependency. Effects
 // (host subscriptions and status polling) are outside this form-action harness.
-const hooks = vi.hoisted(() => ({ values: [] as unknown[], cursor: 0, scopeEffects: [] as Array<() => unknown> }))
+const hooks = vi.hoisted(() => ({
+  values: [] as unknown[], cursor: 0, scopeEffects: [] as Array<() => unknown>,
+  snapshotEffects: [] as Array<() => unknown>,
+  refs: [] as Array<{ current: unknown }>, refCursor: 0,
+}))
 vi.mock('react', async importOriginal => {
   const react = await importOriginal<typeof import('react')>()
   return {
@@ -12,7 +16,12 @@ vi.mock('react', async importOriginal => {
     useEffect(setup: () => unknown, dependencies?: unknown[]) {
       const dependency = dependencies?.[0] as { getSnapshot?: unknown; set?: unknown; subscribe?: unknown } | undefined
       if (typeof dependency?.getSnapshot === 'function' && typeof dependency.set === 'function'
-        && typeof dependency.subscribe === 'function') hooks.scopeEffects.push(setup)
+        && typeof dependency.subscribe === 'function') {
+        hooks.scopeEffects.push(setup)
+        return
+      }
+      const snapshot = dependency as { writable?: unknown; value?: unknown } | undefined
+      if (snapshot !== null && typeof snapshot === 'object' && 'writable' in snapshot && 'value' in snapshot) hooks.snapshotEffects.push(setup)
     },
     useState(initial: unknown) {
       const index = hooks.cursor++
@@ -20,6 +29,11 @@ vi.mock('react', async importOriginal => {
       return [hooks.values[index], (next: unknown) => {
         hooks.values[index] = typeof next === 'function' ? next(hooks.values[index]) : next
       }]
+    },
+    useRef(initial: unknown) {
+      const index = hooks.refCursor++
+      if (!(index in hooks.refs)) hooks.refs[index] = { current: typeof initial === 'function' ? initial() : initial }
+      return hooks.refs[index]
     },
   }
 })
@@ -44,6 +58,8 @@ function formHarness(lang = 'zh', initialValue: Record<string, unknown> = { open
   const setSetting = vi.fn(async (field: string, value: unknown): Promise<boolean | void> => {
     stored = { ...stored, [field]: value }
   })
+  /** Simulate an unsolicited host snapshot push (independent of a write resolving). */
+  const hostSet = (field: string, value: unknown): void => { stored = { ...stored, [field]: value } }
   const props = {
     scope: {
       getSnapshot: () => ({ writable: true, value: stored, ...state }),
@@ -55,6 +71,7 @@ function formHarness(lang = 'zh', initialValue: Record<string, unknown> = { open
   } as unknown as Parameters<typeof ImageGenerationSettingsCard>[0]
   const render = () => {
     hooks.cursor = 0
+    hooks.refCursor = 0
     return ImageGenerationSettingsCard(props)
   }
   const row = () => elements(render()).find(element => element.key === provider
@@ -66,14 +83,20 @@ function formHarness(lang = 'zh', initialValue: Record<string, unknown> = { open
   // row still needs a click to expand.
   find(element => element.props.className === 'dsh-ig-provider-head').props.onClick()
   return {
-    setKey, setSetting,
+    setKey, setSetting, hostSet,
     expand: () => find(element => element.props.className === 'dsh-ig-provider-head').props.onClick(),
     cardText: () => text(render()),
     settingInput: (label: string) => {
       const field = elements(render()).find(element => element.type === 'label' && text(element).startsWith(label))!
       return elements(field).find(element => element.type === 'input')!
     },
-    syncScope: () => { for (const setup of hooks.scopeEffects.splice(0)) setup() },
+    syncScope: () => {
+      for (const setup of hooks.scopeEffects.splice(0)) setup()
+      // React reruns the field-sync effect when the snapshot state changes.
+      hooks.snapshotEffects.splice(0)
+      render()
+      for (const setup of hooks.snapshotEffects.splice(0)) setup()
+    },
     rowText: () => text(row()),
     providerHeadChildren: () => elements(row()).find(element => element.props.className === 'dsh-ig-provider-head-row')!.props.children as Element[],
     addChannel: () => elements(render()).find(element => element.props['aria-label'] === (lang === 'zh' ? '新增 OpenAI 兼容渠道' : 'Add OpenAI-compatible channel'))!.props.onClick(),
@@ -98,7 +121,10 @@ function formHarness(lang = 'zh', initialValue: Record<string, unknown> = { open
   }
 }
 
-beforeEach(() => { hooks.values = []; hooks.cursor = 0; hooks.scopeEffects = [] })
+beforeEach(() => {
+  hooks.values = []; hooks.cursor = 0; hooks.scopeEffects = []
+  hooks.refs = []; hooks.refCursor = 0
+})
 afterEach(() => { vi.unstubAllGlobals() })
 
 describe('settings card credential actions', () => {
@@ -134,6 +160,97 @@ describe('settings card credential actions', () => {
     form.settingInput(label).props.onBlur()
     expect(form.settingInput(label).props.value).toBe((cloudTimeoutMs ?? 150_000) / 1000)
     expect(form.setSetting).not.toHaveBeenCalled()
+  })
+
+  it.each(['zh', 'en'])('saves and reopens the tldraw license key in %s', async lang => {
+    const form = formHarness(lang)
+    const label = lang === 'zh' ? 'tldraw License Key' : 'tldraw license key'
+    expect(form.settingInput(label).props.value).toBe('')
+    form.settingInput(label).props.onChange({ target: { value: '  tldraw-abc123  ' } })
+    form.settingInput(label).props.onBlur()
+    await vi.waitFor(() => expect(form.setSetting).toHaveBeenCalledWith('tldrawLicenseKey', 'tldraw-abc123'))
+    hooks.values = []
+    expect(form.settingInput(label).props.value).toBe('tldraw-abc123')
+    expect(form.cardText()).toContain(lang === 'zh' ? '约 5 秒后停止渲染' : 'stops rendering after about five seconds')
+  })
+
+  it('restores the saved tldraw license key when the host rejects the write', async () => {
+    const form = formHarness('zh', { tldrawLicenseKey: 'tldraw-saved' })
+    form.setSetting.mockRejectedValueOnce(new Error('license-write-rejected'))
+    form.settingInput('tldraw License Key').props.onChange({ target: { value: 'tldraw-other' } })
+    form.settingInput('tldraw License Key').props.onBlur()
+    await vi.waitFor(() => expect(form.cardText()).toContain('license-write-rejected'))
+    expect(form.settingInput('tldraw License Key').props.value).toBe('tldraw-saved')
+  })
+
+  it('keeps a newer tldraw license draft when a stale snapshot and save land later', async () => {
+    const form = formHarness('zh', { tldrawLicenseKey: 'tldraw-old' })
+    let resolveSave!: (value: boolean | void) => void
+    form.setSetting.mockImplementationOnce(() => new Promise(resolve => { resolveSave = resolve }))
+    const label = 'tldraw License Key'
+    form.settingInput(label).props.onChange({ target: { value: 'tldraw-a' } })
+    form.settingInput(label).props.onBlur()
+    expect(form.setSetting).toHaveBeenCalledWith('tldrawLicenseKey', 'tldraw-a')
+    // The user keeps typing while the first write is still in flight.
+    form.settingInput(label).props.onChange({ target: { value: 'tldraw-b' } })
+    // A host snapshot carrying the older submitted value must not win.
+    form.hostSet('tldrawLicenseKey', 'tldraw-a')
+    form.syncScope()
+    expect(form.settingInput(label).props.value).toBe('tldraw-b')
+    resolveSave(true)
+    await vi.waitFor(() => expect(form.cardText()).toContain('已保存'))
+    expect(form.settingInput(label).props.value).toBe('tldraw-b')
+  })
+
+  it('keeps a newer tldraw license draft when the earlier save fails', async () => {
+    const form = formHarness('zh', { tldrawLicenseKey: 'tldraw-old' })
+    let rejectSave!: (error: Error) => void
+    form.setSetting.mockImplementationOnce(() => new Promise((_, reject) => { rejectSave = reject }))
+    const label = 'tldraw License Key'
+    form.settingInput(label).props.onChange({ target: { value: 'tldraw-a' } })
+    form.settingInput(label).props.onBlur()
+    form.settingInput(label).props.onChange({ target: { value: 'tldraw-b' } })
+    rejectSave(new Error('license-write-rejected'))
+    await vi.waitFor(() => expect(form.cardText()).toContain('license-write-rejected'))
+    expect(form.settingInput(label).props.value).toBe('tldraw-b')
+  })
+
+  it('lets the newest of two in-flight tldraw license saves win', async () => {
+    const form = formHarness('zh', { tldrawLicenseKey: 'tldraw-old' })
+    const resolvers: Array<(value: boolean | void) => void> = []
+    form.setSetting.mockImplementation((_field: string, _value: unknown) => new Promise(resolve => { resolvers.push(resolve) }))
+    const label = 'tldraw License Key'
+    form.settingInput(label).props.onChange({ target: { value: 'tldraw-a' } })
+    form.settingInput(label).props.onBlur()
+    form.settingInput(label).props.onChange({ target: { value: 'tldraw-b' } })
+    form.settingInput(label).props.onBlur()
+    expect(form.setSetting).toHaveBeenNthCalledWith(1, 'tldrawLicenseKey', 'tldraw-a')
+    expect(form.setSetting).toHaveBeenNthCalledWith(2, 'tldrawLicenseKey', 'tldraw-b')
+    resolvers[0]!(true)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(form.settingInput(label).props.value).toBe('tldraw-b')
+    resolvers[1]!(true)
+    await vi.waitFor(() => expect(form.cardText()).toContain('已保存'))
+    expect(form.settingInput(label).props.value).toBe('tldraw-b')
+  })
+
+  it('adopts an external tldraw license change while the draft is untouched', () => {
+    const form = formHarness('zh', { tldrawLicenseKey: 'tldraw-a' })
+    const label = 'tldraw License Key'
+    expect(form.settingInput(label).props.value).toBe('tldraw-a')
+    form.hostSet('tldrawLicenseKey', 'tldraw-b')
+    form.syncScope()
+    expect(form.settingInput(label).props.value).toBe('tldraw-b')
+  })
+
+  it('writes a tldraw license key once when Enter is followed by blur', async () => {
+    const form = formHarness('zh')
+    const label = 'tldraw License Key'
+    form.settingInput(label).props.onChange({ target: { value: 'tldraw-abc123' } })
+    form.settingInput(label).props.onKeyDown({ key: 'Enter' })
+    form.settingInput(label).props.onBlur()
+    await vi.waitFor(() => expect(form.setSetting).toHaveBeenCalledTimes(1))
+    expect(form.setSetting).toHaveBeenCalledWith('tldrawLicenseKey', 'tldraw-abc123')
   })
 
   it.each(['zh', 'en'])('saves, reopens and clears the separate edit model with the SiliconFlow format in %s', async lang => {

@@ -235,7 +235,12 @@ export async function landTlItems(editor: Editor, items: readonly TlLandingItem[
 
 const TL_COMPONENTS = { Toolbar: StudioToolbar }
 
-export const StudioTlCanvas: FC<{ lang?: 'zh' | 'en' }> = memo(function StudioTlCanvas({ lang = 'zh' }) {
+export const StudioTlCanvas: FC<{ lang?: 'zh' | 'en'; licenseKey?: string | undefined }> = memo(function StudioTlCanvas({ lang = 'zh', licenseKey }) {
+  // tldraw 5.3.0 reads licenseKey once when LicenseProvider mounts; it has no
+  // runtime update path. StudioView gates mounting until the config read
+  // settles, so capture that one value here: a later config refresh must not
+  // remount the editor and race its ~350ms IndexedDB persistence throttle.
+  const [initialLicenseKey] = useState(licenseKey)
   // Separate camera/selection state for editors sharing the document.
   const sessionId = useId()
   const [syncStatus, setSyncStatus] = useState<CanvasSyncStatus>({ phase: 'idle', count: 0 })
@@ -332,10 +337,12 @@ export const StudioTlCanvas: FC<{ lang?: 'zh' | 'en' }> = memo(function StudioTl
         })
     }}>
       <Tldraw
+        key={initialLicenseKey ?? ''}
         persistenceKey="dsh-image-gen-workbench-v1"
         sessionId={sessionId}
         components={TL_COMPONENTS}
         onMount={onMount}
+        {...(initialLicenseKey === undefined || initialLicenseKey.length === 0 ? {} : { licenseKey: initialLicenseKey })}
       />
       {(landingError || syncStatus.phase !== 'idle') && (
         <div className="dsh-ig-canvas-sync-status" data-phase={landingError ? 'error' : syncStatus.phase} role="status" aria-live="polite">
