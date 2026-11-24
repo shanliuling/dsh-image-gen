@@ -440,7 +440,7 @@ Studio and multi-model comparison currently support cloud Providers only; ComfyU
 <details>
 <summary><strong>Why does the infinite canvas stay blank on an HTTPS domain, with "No tldraw license key provided" in the console?</strong></summary>
 
-The tldraw 5 SDK enforces licensing in production, which includes HTTPS on a non-localhost host. Enter your own tldraw license key in the **Infinite canvas** section of the plugin settings (configuration field `tldrawLicenseKey`) and reopen the canvas. The key is a public string: it ships to the browser and is validated against the deployment domain, so it must match the domain you use to access DSH.
+The tldraw 5 SDK enforces licensing in production, which includes HTTPS on a non-localhost host. Enter your own tldraw license key in the **Infinite canvas** section of the plugin settings (configuration field `tldrawLicenseKey`), then reopen the workbench or reload the page. The key is a public string: it ships to the browser and is validated against the deployment domain, so it must match the domain you use to access DSH.
 
 Without a key, the infinite canvas still works on `localhost` or in development; on an HTTPS deployment it stops rendering after about five seconds, while every other image feature keeps working. You can request a 100-day trial at [tldraw.dev](https://tldraw.dev/get-a-license/trial); commercial and hobby licenses are listed on the [tldraw pricing page](https://tldraw.dev/pricing).
 

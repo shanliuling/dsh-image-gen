@@ -223,7 +223,9 @@ export const StudioView: FC<{
   const [config, setConfig] = useState<StudioConfigResponse | null>(null)
   const [configLoading, setConfigLoading] = useState(true)
   const [configError, setConfigError] = useState<string | null>(null)
-  const canvasLicenseState = studioCanvasLicenseState(config, configLoading)
+  const [initialConfigSettled, setInitialConfigSettled] = useState(false)
+  // Retrying config must not unmount an open editor before its last edit is persisted.
+  const canvasLicenseState = studioCanvasLicenseState(config, !initialConfigSettled)
   const [items, setItems] = useState<GalleryItem[]>([])
   /** Which rail tab is showing: generation history or the favorites rail. */
   const [railTab, setRailTab] = useState<'recent' | 'favorites'>('recent')
@@ -456,7 +458,10 @@ export const StudioView: FC<{
     } catch (fetchError) {
       if (!silent && !signal?.aborted) setConfigError(messageOf(fetchError))
     } finally {
-      if (!silent && !signal?.aborted) setConfigLoading(false)
+      if (!silent && !signal?.aborted) {
+        setInitialConfigSettled(true)
+        setConfigLoading(false)
+      }
     }
   }, [])
 

@@ -440,7 +440,7 @@ dsh --profile web --dump-config
 <details>
 <summary><strong>通过 HTTPS 域名访问时无限画布打不开，控制台提示 No tldraw license key provided 怎么办？</strong></summary>
 
-tldraw 5 的 SDK 在 HTTPS 非 localhost 的生产环境强制校验许可证。请在插件设置页的「无限画布」区域填写你自己的 tldraw License Key（配置文件字段为 `tldrawLicenseKey`），保存后重新打开无限画布即可。该 Key 是公开字符串，会随前端下发，并按部署域名校验；请使用与当前访问域名匹配的许可证。
+tldraw 5 的 SDK 在 HTTPS 非 localhost 的生产环境强制校验许可证。请在插件设置页的「无限画布」区域填写你自己的 tldraw License Key（配置文件字段为 `tldrawLicenseKey`），保存后重新打开工作台或刷新页面。该 Key 是公开字符串，会随前端下发，并按部署域名校验；请使用与当前访问域名匹配的许可证。
 
 未配置时，无限画布在 `localhost` 或开发环境中仍可用；通过 HTTPS 域名部署时会在约 5 秒后停止渲染，其他生图功能不受影响。可在 [tldraw.dev](https://tldraw.dev/get-a-license/trial) 申请 100 天试用，商业与爱好许可证见 [tldraw 定价页](https://tldraw.dev/pricing)。
 
