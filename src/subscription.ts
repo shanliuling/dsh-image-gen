@@ -23,14 +23,36 @@ export { SubscriptionManager, vendorOf } from './subscription/manager.js'
 export { registerSubscriptionRoutes } from './subscription/subscription-route.js'
 export { SUBSCRIPTION_TIMEOUT_MS } from './shared.js'
 
+/** Reduced W:H of a `WIDTHxHEIGHT` size, or the size itself when it is already a ratio. */
+function ratioOfSize(size: string): string | undefined {
+  if (/^\d+:\d+$/.test(size)) return size
+  const match = /^(\d+)x(\d+)$/i.exec(size)
+  if (match === null) return undefined
+  const width = Number(match[1])
+  const height = Number(match[2])
+  // An overlong digit run parses to Infinity, which would never let the loop below end.
+  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0) return undefined
+  let a = width
+  let b = height
+  while (b !== 0) [a, b] = [b, a % b]
+  return `${String(width / a)}:${String(height / a)}`
+}
+
 /** Translate image tool options into each subscription channel's wire inputs. */
 export function subscriptionToolParameters(provider: SubscriptionProvider, options: { size?: string; aspectRatio?: string; imageSize?: string }): { size?: string; quality?: string } {
   const requestedSize = options.size?.trim() || undefined
-  const ratio = options.aspectRatio?.trim() || undefined
-  const imageSize = options.imageSize?.trim() || undefined
-  if (requestedSize !== undefined && ratio !== undefined) throw new Error('size 与 aspect_ratio 请只选一个；无关可选字段请省略，不要填写空字符串')
+  const requestedRatio = options.aspectRatio?.trim() || undefined
+  // Models that fill every optional field send both (#160). A matching pair is
+  // one request and travels as its ratio, which every channel maps reliably
+  // (Google lists only a few pixel sizes); only a real conflict still fails.
+  const pair = requestedSize !== undefined && requestedRatio !== undefined
+  if (pair && ratioOfSize(requestedSize) !== requestedRatio) throw new Error('size 与 aspect_ratio 请只选一个；无关可选字段请省略，不要填写空字符串')
+  const exactSize = pair ? undefined : requestedSize
+  const ratio = exactSize === undefined ? requestedRatio : undefined
+  // ChatGPT has no resolution tier; a filled-in image_size is ignored rather than failing the call.
+  const imageSize = provider === 'chatgpt-sub' ? undefined : options.imageSize?.trim() || undefined
   if (ratio !== undefined && !SUBSCRIPTION_CAPABILITIES[provider].ratioOptions.some(option => option.value === ratio)) throw new Error(`${provider} 不支持比例 ${ratio}`)
-  const size = requestedSize ?? (ratio === undefined ? undefined : provider === 'chatgpt-sub' ? SUBSCRIPTION_CAPABILITIES[provider].sizeFor?.(ratio, 'auto') : ratio)
+  const size = exactSize ?? (ratio === undefined ? undefined : provider === 'chatgpt-sub' ? SUBSCRIPTION_CAPABILITIES[provider].sizeFor?.(ratio, 'auto') : ratio)
   let quality: string | undefined
   if (imageSize !== undefined) {
     if (provider === 'grok-sub' && (imageSize === '1K' || imageSize === '2K')) quality = imageSize.toLowerCase()

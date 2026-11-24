@@ -126,16 +126,52 @@ interface SingleGenerationArgs {
   frame_duration_ms?: number
 }
 
-/** Optional strings from tool callers may contain empty placeholders (#86). */
-function cleanImageToolArgs<T extends SingleGenerationArgs>(args: T): T {
+/** Numeric options whose valid range excludes 0, so a 0 can only be a filled-in placeholder. */
+const ZERO_PLACEHOLDER_FIELDS: ReadonlySet<string> = new Set(['frame_count', 'frame_duration_ms', 'max_images', 'limit'])
+/** output_format values that ask for nothing beyond an ordinary still image. */
+const STILL_OUTPUT_FORMATS: ReadonlySet<string> = new Set(['png', 'jpeg', 'jpg', 'webp'])
+
+/**
+ * Some chat models (the GPT family under strict tool schemas) fill every
+ * optional field: empty strings, empty lists, 0, and the only value of a
+ * one-choice enum (#86, #160). Those placeholders are dropped here so each
+ * provider sees only what the user actually asked for.
+ */
+function cleanImageToolArgs<T extends object>(args: T): T {
   const clean = { ...args }
   const fields = clean as Record<string, unknown>
-  for (const key of ['model', 'channel', 'size', 'aspect_ratio', 'image_size', 'quality', 'background', 'workflow', 'output_format']) {
-    const value = fields[key]
-    if (typeof value !== 'string') continue
-    if (value.trim().length === 0) delete fields[key]
-    else fields[key] = value.trim()
+  for (const [key, value] of Object.entries(fields)) {
+    if (key === 'prompt' || key === 'prompts') continue
+    if (value === null) delete fields[key]
+    else if (typeof value === 'string') {
+      if (value.trim().length === 0) delete fields[key]
+      else fields[key] = value.trim()
+    } else if (Array.isArray(value)) {
+      const items = value.filter(item => typeof item !== 'string' || item.trim().length > 0)
+      if (items.length === 0) delete fields[key]
+      else fields[key] = items
+    } else if (value === 0 && ZERO_PLACEHOLDER_FIELDS.has(key)) delete fields[key]
   }
+  if (typeof fields.output_format === 'string' && STILL_OUTPUT_FORMATS.has(fields.output_format.toLowerCase())) {
+    // A still image carries no frames; frame values beside it are placeholders too.
+    delete fields.output_format
+    delete fields.frame_count
+    delete fields.frame_duration_ms
+  }
+  if (fields.source === 'conversation') delete fields.source
+  return clean
+}
+
+/**
+ * Drop OpenAI-only output fields a filled-in call sent to another provider.
+ * A request that really needs them (GIF, SVG, transparency) still fails loudly.
+ */
+function dropForeignOutputFields<T extends SingleGenerationArgs>(args: T, provider: ImageProvider): T {
+  if (provider === 'openai' || provider === 'openai-compat') return args
+  const clean = { ...args }
+  delete clean.frame_count
+  delete clean.frame_duration_ms
+  if (clean.background === 'auto' || clean.background === 'opaque') delete clean.background
   return clean
 }
 
@@ -147,7 +183,7 @@ const SVG_INCOMPATIBLE_EXTRAS: ReadonlySet<string> = new Set([
 
 /** Image output parameters shared by generate_image and generate_images. */
 const gifToolParameters = {
-  output_format: { type: 'string', enum: ['gif', 'svg'], description: 'Optional. Omit for an ordinary still image (the default PNG/JPEG); set it only when the user explicitly asks for an animation/GIF or a vector/SVG file. Only for provider=openai or openai-compat. gif produces a looping animation. svg produces one vector document that the conversation card can preview and save as a .svg file. For GIF, omit size unless the user asks for exact dimensions: all frames are tiled into one sheet whose longest edge must stay at or below 3840 px. To animate a subject from reference images, use edit_image with output_format=gif instead.' },
+  output_format: { type: 'string', enum: ['png', 'gif', 'svg'], description: 'Optional. Omit (or use png) for an ordinary still image in the provider\'s default format; set gif or svg only when the user explicitly asks for an animation/GIF or a vector/SVG file. Only for provider=openai or openai-compat. gif produces a looping animation. svg produces one vector document that the conversation card can preview and save as a .svg file. For GIF, omit size unless the user asks for exact dimensions: all frames are tiled into one sheet whose longest edge must stay at or below 3840 px. To animate a subject from reference images, use edit_image with output_format=gif instead.' },
   frame_count: { type: 'integer', description: 'Optional, GIF only: number of frames, 2-16. Omit unless output_format=gif; omit it then too to use the provider default.' },
   frame_duration_ms: { type: 'integer', description: 'Optional, GIF only: milliseconds per frame, 20-2000; the provider rounds to 10 ms. Omit unless output_format=gif; omit it then too to use the provider default.' },
 } as const
@@ -155,7 +191,7 @@ const gifToolParameters = {
 /** The same GIF parameters on edit_image, which animates the reference images. */
 const editGifToolParameters = {
   ...gifToolParameters,
-  output_format: { type: 'string', enum: ['gif'], description: 'Optional. Only for provider=openai or openai-compat; gif animates the reference images into a looping animation, for example a sticker of the same character in motion. Omit size unless the user asks for exact dimensions: all frames are tiled into one sheet whose longest edge must stay at or below 3840 px. Many OpenAI-compatible relays do not implement image edits; if the relay rejects the edit or returns a still image, tell the user instead of retrying or assembling frames yourself.' },
+  output_format: { type: 'string', enum: ['png', 'gif'], description: 'Optional. Omit (or use png) for an ordinary still edit. gif is only for provider=openai or openai-compat and only when the user asks for an animation; gif animates the reference images into a looping animation, for example a sticker of the same character in motion. Omit size unless the user asks for exact dimensions: all frames are tiled into one sheet whose longest edge must stay at or below 3840 px. Many OpenAI-compatible relays do not implement image edits; if the relay rejects the edit or returns a still image, tell the user instead of retrying or assembling frames yourself.' },
 } as const
 
 /** Output schema node for GeneratedValue.animation; every object node must state additionalProperties. */
@@ -479,9 +515,10 @@ export function apply(ctx: Context, config: Config = {}): void {
 
   /** Per-item generation request shared by generate_image and generate_images. */
   const generateSingle = async (rawArgs: SingleGenerationArgs, exec: { agent?: { session: { header: { cwd?: string } } }; signal: AbortSignal }): Promise<GeneratedValue> => {
-    const args = cleanImageToolArgs(rawArgs)
-    const requestConfig = configForToolCall(current(), providerOverrideOf(args.provider), args.channel)
-    const active = resolveProvider(withProviderOverrides(requestConfig, providerOverrideOf(args.provider), args.model))
+    const cleaned = cleanImageToolArgs(rawArgs)
+    const requestConfig = configForToolCall(current(), providerOverrideOf(cleaned.provider), cleaned.channel)
+    const active = resolveProvider(withProviderOverrides(requestConfig, providerOverrideOf(cleaned.provider), cleaned.model))
+    const args = dropForeignOutputFields(cleaned, active.provider)
     assertGifProvider(args, active.provider)
     if (args.background !== undefined) {
       if (args.background !== 'auto' && args.background !== 'opaque' && args.background !== 'transparent') throw new Error('background must be "auto", "opaque" or "transparent"')
@@ -749,7 +786,7 @@ export function apply(ctx: Context, config: Config = {}): void {
       provider: { type: 'string', enum: ['google', 'openai', 'openai-compat', 'seedream', 'dashscope', 'xai', 'zhipu', 'comfyui', 'chatgpt-sub', 'grok-sub', 'google-sub'], description: 'OMIT unless the user explicitly requests a specific image provider. Omission uses the saved default; never guess a channel or fill this with an empty string. Subscription providers edit through their logged-in accounts.' },
       model: { type: 'string', description: 'OMIT unless the user explicitly requests a specific model; omission uses the configured model. Optional override for this call only. Not used by ComfyUI (use workflow instead) nor by the subscription providers (model fixed by the subscription).' },
       channel: { type: 'string', description: 'Optional configured OpenAI-compatible channel id for this call only. Only meaningful with provider=openai-compat; omit to use the active channel.' },
-      source: { type: 'string', enum: ['canvas_selection'], description: 'Use the current selection on the image-gen workbench infinite canvas as the reference image(s): full-resolution originals when the selection is conversation-generated images, plus a screenshot of the whole selection when it also contains other content (hand-drawn strokes, pasted images). Choose this when the user refers to what they selected or drew on the canvas; combine with no other selector field.' },
+      source: { type: 'string', enum: ['conversation', 'canvas_selection'], description: 'Optional. Omit (or use conversation) to edit images from the conversation or the other selector fields. canvas_selection uses the current selection on the image-gen workbench infinite canvas as the reference image(s): full-resolution originals when the selection is conversation-generated images, plus a screenshot of the whole selection when it also contains other content (hand-drawn strokes, pasted images). Choose this when the user refers to what they selected or drew on the canvas; combine with no other selector field.' },
       source_attachment_id: { type: 'string', description: 'Optional attachment id of a specific image already present in the current conversation.' },
       source_attachment_ids: { type: 'array', items: { type: 'string' }, description: 'Optional ordered attachment ids of multiple images already present in the current conversation. Prompt references such as image 1 and image 2 follow this order.' },
       source_path: { type: 'string', description: 'Optional absolute or workspace-relative path of a specific image file inside the active session workspace. Prefer this when the user names a saved file.' },
@@ -764,9 +801,10 @@ export function apply(ctx: Context, config: Config = {}): void {
     },
     output: imageOutput('Edited'),
     async execute(rawArgs, exec): Promise<GeneratedValue> {
-      const args = cleanImageToolArgs(rawArgs)
-      const requestConfig = configForToolCall(current(), providerOverrideOf(args.provider), args.channel)
-      const active = resolveProvider(withProviderOverrides(requestConfig, providerOverrideOf(args.provider), args.model, 'edit'))
+      const cleaned = cleanImageToolArgs(rawArgs)
+      const requestConfig = configForToolCall(current(), providerOverrideOf(cleaned.provider), cleaned.channel)
+      const active = resolveProvider(withProviderOverrides(requestConfig, providerOverrideOf(cleaned.provider), cleaned.model, 'edit'))
+      const args = dropForeignOutputFields(cleaned, active.provider)
       assertGifProvider(args, active.provider)
       if (args.background !== undefined) {
         if (args.background !== 'auto' && args.background !== 'opaque' && args.background !== 'transparent') throw new Error('background must be "auto", "opaque" or "transparent"')
@@ -906,7 +944,8 @@ export function apply(ctx: Context, config: Config = {}): void {
         text: `已保存 ${value.imageCount} 张 PNG 到 ${value.directory}。图层顺序和坐标见 ${value.manifest}。`
           + (value.missingCount > 0 ? `另有 ${value.missingCount} 张未能保存，清单的 missing 里记下了原因和 24 小时内有效的下载链接。` : '') }],
     },
-    async execute(args, exec): Promise<LayerResult> {
+    async execute(rawArgs, exec): Promise<LayerResult> {
+      const args = cleanImageToolArgs(rawArgs)
       const workspaceRoot = exec.agent?.session.header.cwd
       if (!workspaceRoot) throw new Error('请先打开工作区以保存拆分后的图层。')
       const config = current()
@@ -937,7 +976,7 @@ export function apply(ctx: Context, config: Config = {}): void {
     parameters: {
       query: { type: 'string', description: 'Keyword matched against titles, prompts, categories, and style/scene tags; Chinese or English. Omit to sample what a library offers.' },
       category: { type: 'string', description: 'Optional exact category filter, for example "风格 · D 日本作者 / 当代插画体系", "排版 · 信息图", or "单色 · 中性色系".' },
-      source: { type: 'string', enum: ['handraw-style', 'awesome-gpt-image-2'], description: 'Optional single library to search; omit to search both.' },
+      source: { type: 'string', enum: ['all', 'handraw-style', 'awesome-gpt-image-2'], description: 'Optional single library to search; omit (or use all) to search both.' },
       limit: { type: 'integer', description: 'Optional maximum number of hits to return, 1-20 (default 8).' },
     },
     output: {
@@ -958,7 +997,9 @@ export function apply(ctx: Context, config: Config = {}): void {
         text: `${String(value.hits.length)} of ${String(value.total)} matching inspiration cases.\n\n${value.hits.map(hit => `[${hit.sourceId} · ${hit.category}] ${hit.title}\n${hit.prompt}`).join('\n\n')}`,
       }],
     },
-    async execute(args): Promise<InspirationSearchValue> {
+    async execute(rawArgs): Promise<InspirationSearchValue> {
+      const args = cleanImageToolArgs(rawArgs)
+      if (args.source === 'all') delete args.source
       const { total, hits } = searchInspirationCases(BUNDLED_INSPIRATION_CATALOG, {
         query: args.query ?? '',
         sourceId: args.source,
