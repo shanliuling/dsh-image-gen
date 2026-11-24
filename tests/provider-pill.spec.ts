@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { studioProfile } from '../src/studio.js'
 import { DEFAULT_MODELS } from '../src/shared.js'
-import { comfyUIWorkflowWrites, pillButtonLabel, pillModelOf, pillModelOptionsOf, pillVisible } from '../src/client/provider-pill.js'
+import { comfyUIWorkflowWrites, pillButtonLabel, pillEntryVisible, pillModelOf, pillModelOptionsOf, pillVisible } from '../src/client/provider-pill.js'
 
 describe('composer provider pill visibility (opt-in)', () => {
   it('stays hidden by default and only appears when explicitly enabled', () => {
@@ -9,6 +9,15 @@ describe('composer provider pill visibility (opt-in)', () => {
     expect(pillVisible({})).toBe(false)
     expect(pillVisible({ showProviderPill: false })).toBe(false)
     expect(pillVisible({ showProviderPill: true })).toBe(true)
+  })
+})
+
+describe('composer provider pill rows (#158)', () => {
+  it('hides rows that cannot generate yet, but never the active one or one still loading', () => {
+    expect(pillEntryVisible('ready', false)).toBe(true)
+    expect(pillEntryVisible('missing', false)).toBe(false)
+    expect(pillEntryVisible('missing', true)).toBe(true)
+    expect(pillEntryVisible('unknown', false)).toBe(true)
   })
 })
 
