@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { expect, it, vi } from 'vitest'
-import { resolveWebAdmission, withWebAdmission } from '../src/web-route.js'
+import { describe, expect, it, vi } from 'vitest'
+import { connectionAdmission, resolveWebAdmission, withWebAdmission } from '../src/web-route.js'
 
 it.each([
   [undefined, 503],
@@ -52,4 +52,32 @@ it.each([false, true])('still honors host rejection when required=%s', async req
   await route.handler({} as IncomingMessage, response as unknown as ServerResponse)
   expect(handler).not.toHaveBeenCalled()
   expect(response.writeHead).toHaveBeenCalledWith(403, expect.anything())
+})
+
+describe('connection admission across DSH versions (#159)', () => {
+  const request = { headers: {} }
+  it('keeps the exact call older hosts always had', () => {
+    const requestRejection = vi.fn(() => 401 as const)
+    const admit = vi.fn()
+    expect(connectionAdmission({ requestRejection, admit })(request)).toBe(401)
+    expect(admit).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [{ peer: {} }, undefined],
+    [{ rejection: 401 }, 401],
+    [{ rejection: 403 }, 403],
+    [{ rejection: 503 }, 503],
+  ] as const)('uses admit() on hosts that removed requestRejection: %j', (admission, expected) => {
+    expect(connectionAdmission({ admit: () => admission })(request)).toBe(expected)
+  })
+
+  it('refuses every request when the host offers neither method', async () => {
+    const handler = vi.fn()
+    const res = { writeHead: vi.fn(), end: vi.fn() }
+    const route = withWebAdmission({ kind: 'exact', path: '/fixture', handler }, () => resolveWebAdmission(connectionAdmission({}), false))
+    await route.handler({} as IncomingMessage, res as unknown as ServerResponse)
+    expect(res.writeHead.mock.calls[0]?.[0]).toBe(503)
+    expect(handler).not.toHaveBeenCalled()
+  })
 })

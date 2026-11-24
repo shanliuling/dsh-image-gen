@@ -46,7 +46,7 @@ import { xaiToolParameters } from './xai-params.js'
 import { compatRequestQuality, gifRequestFields, officialQualityOptions, outputRequestFields, validateGifFrameSize, validateOfficialSize } from './openai-output.js'
 import { gifFrameDurationMs, readGifInfo } from './gif-info.js'
 import { imageToolContext } from './image-tool-context.js'
-import { resolveWebAdmission, withWebAdmission, type WebAdmission } from './web-route.js'
+import { connectionAdmission, resolveWebAdmission, withWebAdmission, type AdmissionConnection, type WebAdmission } from './web-route.js'
 
 export { Config } from './config.js'
 export { IMAGE_ROUTE, DELETE_ROUTE, SAVE_WORKSPACE_ROUTE, imageAttachmentFromMeta } from './image-route.js'
@@ -275,12 +275,37 @@ export function apply(ctx: Context, config: Config = {}): void {
       clearInterval(daily)
     }
   }, 'dsh-image-gen: request image cache upkeep')
-  let webAdmission: WebAdmission | undefined
-  const getWebAdmission = () => resolveWebAdmission(webAdmission, current().requireHostAdmission === true)
+  // A failed admission check still refuses the request (503), but it must not
+  // fail silently: #159 hid a removed host method behind "forbidden" (once per message).
+  const admissionWarnings = new Set<string>()
+  const logged = (check: WebAdmission): WebAdmission => request => {
+    try {
+      return check(request)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (!admissionWarnings.has(message)) {
+        admissionWarnings.add(message)
+        ctx.logger.warn(`dsh-image-gen: web route admission failed, answering 503: ${message}`)
+      }
+      throw error
+    }
+  }
+  // DSH 0.2.2-rc.2 removed connection.requestRejection(); its admit() reads
+  // connection.authentication, which only a context injecting it may touch.
+  // Older hosts have no such service, so that inject never fires there and the
+  // plain connection check below stays in charge exactly as before (#159).
+  let legacyAdmission: WebAdmission | undefined
+  let authenticatedAdmission: WebAdmission | undefined
+  const getWebAdmission = () => resolveWebAdmission(authenticatedAdmission ?? legacyAdmission, current().requireHostAdmission === true)
   ctx.inject(['connection'], (connectionCtx: Context) => {
-    const check: WebAdmission = request => connectionCtx.connection.requestRejection(request)
-    webAdmission = check
-    return () => { if (webAdmission === check) webAdmission = undefined }
+    const check = logged(connectionAdmission(connectionCtx.connection as AdmissionConnection))
+    legacyAdmission = check
+    return () => { if (legacyAdmission === check) legacyAdmission = undefined }
+  })
+  ctx.inject(['connection', 'connection.authentication'], (connectionCtx: Context) => {
+    const check = logged(connectionAdmission(connectionCtx.connection as AdmissionConnection))
+    authenticatedAdmission = check
+    return () => { if (authenticatedAdmission === check) authenticatedAdmission = undefined }
   })
   // Every HTTP surface needs webServer, which only the web-app bundle (web,
   // desktop) provides; the headless, acp and sdk profiles have none. Mount the

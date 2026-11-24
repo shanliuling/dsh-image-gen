@@ -52,6 +52,83 @@ function response(): ServerResponse {
   return res
 }
 
+/**
+ * DSH 0.2.2-rc.2+ (#159): no requestRejection, and admit() reads
+ * connection.authentication, which throws for a context that did not inject it.
+ */
+function newHostHarness(admission: { peer: object } | { rejection: 401 | 403 | 503 }) {
+  const routes: WebRoute[] = []
+  const admit = vi.fn(() => admission)
+  const warn = vi.fn()
+  const base = {
+    tools: { register: vi.fn() },
+    effect: (setup: () => unknown) => setup(),
+    webServer: { register: (route: WebRoute) => { routes.push(route); return () => {} } },
+    credentials: { resolve: vi.fn(async () => ({ value: 'test-key' })) },
+    attachments: {
+      imageLimits: { maxImageBytes: 10 * 1024 * 1024, mediaTypes: ['image/png'] },
+      readImage: vi.fn(), saveImage: vi.fn(),
+    },
+    logger: { warn },
+  }
+  const ctx = {
+    ...base,
+    connection: { admit: () => { throw new Error('cannot get property "connection.authentication" without inject') } },
+    inject: (services: readonly string[], callback: (owner: Context) => void) => {
+      if (services.includes('connection.authentication')) callback({ ...ctx, connection: { admit } } as unknown as Context)
+      else if (services.includes('webServer') || services.includes('connection')) callback(ctx as unknown as Context)
+    },
+  }
+  apply(ctx as unknown as Context, { saveToWorkspace: false })
+  return { routes, admit, warn }
+}
+
+describe('plugin web route admission on DSH 0.2.2-rc.2+ (#159)', () => {
+  it('serves every route once admit() admits the request', async () => {
+    const { routes, admit, warn } = newHostHarness({ peer: {} })
+    const route = routes.find(route => route.path === SETTINGS_HEALTH_ROUTE)!
+    const res = response()
+    await route.handler(request(), res)
+    expect(res.statusCode).toBe(200)
+    expect(admit).toHaveBeenCalledOnce()
+    expect(warn).not.toHaveBeenCalled()
+  })
+
+  it('refuses with 503 and logs once when the host admission check breaks', async () => {
+    const warn = vi.fn()
+    const routes: WebRoute[] = []
+    const ctx = {
+      tools: { register: vi.fn() },
+      effect: (setup: () => unknown) => setup(),
+      webServer: { register: (route: WebRoute) => { routes.push(route); return () => {} } },
+      connection: {},
+      credentials: { resolve: vi.fn(async () => ({ value: 'test-key' })) },
+      inject: (services: readonly string[], callback: (owner: Context) => void) => {
+        if (!services.includes('connection.authentication') && (services.includes('webServer') || services.includes('connection'))) callback(ctx)
+      },
+      attachments: { imageLimits: { maxImageBytes: 1024, mediaTypes: ['image/png'] }, readImage: vi.fn(), saveImage: vi.fn() },
+      logger: { warn },
+    } as unknown as Context
+    apply(ctx, { saveToWorkspace: false })
+    for (const route of routes.slice(0, 3)) {
+      const res = response()
+      await route.handler(request(), res)
+      expect(res.statusCode).toBe(503)
+    }
+    expect(warn).toHaveBeenCalledOnce()
+    expect(String(warn.mock.calls[0]?.[0])).toContain('neither admit() nor requestRejection()')
+  })
+
+  it.each([401, 403, 503] as const)('still refuses every route when admit() rejects with %i', async rejection => {
+    const { routes } = newHostHarness({ rejection })
+    for (const route of routes) {
+      const res = response()
+      await route.handler(request(), res)
+      expect(res.statusCode, route.path).toBe(rejection)
+    }
+  })
+})
+
 describe('plugin web route admission', () => {
   it('keeps legacy host dispatch when no admission service is available', async () => {
     const handler = vi.fn()
