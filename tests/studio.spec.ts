@@ -296,6 +296,18 @@ describe('subscription workbench profiles', () => {
   })
 })
 
+describe('workbench configuration projection', () => {
+  it('exposes a trimmed tldraw license key to the browser workbench', async () => {
+    const config = await describeStudio(studioCtx(), { tldrawLicenseKey: '  tldraw-abc123  ' })
+    expect(config.tldrawLicenseKey).toBe('tldraw-abc123')
+  })
+
+  it('omits the tldraw license key when unset or blank', async () => {
+    expect(await describeStudio(studioCtx(), {})).not.toHaveProperty('tldrawLicenseKey')
+    expect(await describeStudio(studioCtx(), { tldrawLicenseKey: '   ' })).not.toHaveProperty('tldrawLicenseKey')
+  })
+})
+
 describe('subscription workbench generation', () => {
   it('forwards selected subscription ratio and quality through the shared wrapper', async () => {
     for (const [provider, vendor, ratio, quality, size] of [

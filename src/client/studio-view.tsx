@@ -1652,7 +1652,7 @@ export const StudioView: FC<{
             </div>
           )}
           {canvasSurface === 'infinite' ? (
-            <StudioTlCanvas lang={lang} />
+            <StudioTlCanvas lang={lang} licenseKey={config?.tldrawLicenseKey} />
           ) : (
           <div
             className={`dsh-ig-canvas ${isDragging ? 'is-dragging' : ''}`}

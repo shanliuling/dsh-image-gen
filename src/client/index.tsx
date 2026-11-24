@@ -141,6 +141,7 @@ interface ImageSettings {
   saveToWorkspace?: boolean
   workspaceFolder?: string
   showProviderPill?: boolean
+  tldrawLicenseKey?: string
 }
 interface CredentialInfo { configured?: boolean; source?: string; writable?: boolean }
 interface CredentialResult { ok: boolean; value?: Readonly<Record<string, CredentialInfo>> }
@@ -747,8 +748,11 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
   const [saveToWorkspace, setSaveToWorkspace] = useState(() => props.scope.getSnapshot().value?.saveToWorkspace ?? true)
   const [workspaceFolder, setWorkspaceFolder] = useState(() => props.scope.getSnapshot().value?.workspaceFolder ?? 'dsh-image-gen')
   const [showPill, setShowPill] = useState(() => props.scope.getSnapshot().value?.showProviderPill === true)
+  const [tldrawLicenseKey, setTldrawLicenseKey] = useState(() => props.scope.getSnapshot().value?.tldrawLicenseKey ?? '')
   const [uiMessage, setUiMessage] = useState('')
   const [uiMessageIsError, setUiMessageIsError] = useState(false)
+  const [tldrawMessage, setTldrawMessage] = useState('')
+  const [tldrawMessageIsError, setTldrawMessageIsError] = useState(false)
   const [workspaceMessage, setWorkspaceMessage] = useState('')
   const [workspaceMessageIsError, setWorkspaceMessageIsError] = useState(false)
   const [rows, setRows] = useState<ProviderRows>(() => rowsFromSettings(props.scope.getSnapshot().value))
@@ -936,6 +940,7 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
     setSaveToWorkspace(value?.saveToWorkspace ?? true)
     setWorkspaceFolder(value?.workspaceFolder ?? 'dsh-image-gen')
     setShowPill(value?.showProviderPill === true)
+    setTldrawLicenseKey(value?.tldrawLicenseKey ?? '')
     setRows(current => {
       const next = { ...current }
       for (const provider of IMAGE_PROVIDERS) {
@@ -1379,6 +1384,24 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
       setShowPill(snapshot.value?.showProviderPill === true)
       setUiMessage(cause instanceof Error ? cause.message : String(cause))
       setUiMessageIsError(true)
+    })
+  }
+
+  /** tldraw license key persists on Enter or blur; empty removes the override. */
+  const commitTldrawLicenseKey = (): void => {
+    const next = tldrawLicenseKey.trim()
+    if (next === (snapshot.value?.tldrawLicenseKey ?? '')) {
+      setTldrawLicenseKey(next)
+      return
+    }
+    setTldrawMessage(''); setTldrawMessageIsError(false)
+    void saveSetting('tldrawLicenseKey', next).then(() => {
+      setTldrawLicenseKey(next)
+      setTldrawMessage(t('saved'))
+    }).catch((cause: unknown) => {
+      setTldrawLicenseKey(snapshot.value?.tldrawLicenseKey ?? '')
+      setTldrawMessage(cause instanceof Error ? cause.message : String(cause))
+      setTldrawMessageIsError(true)
     })
   }
 
@@ -1905,6 +1928,29 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
               <span className="dsh-ig-hint">{t('showPillHint')}</span>
               {uiMessage.length > 0 ? <p className={`dsh-ig-status${uiMessageIsError ? ' dsh-ig-status-error' : ''}`} role="status">{uiMessage}</p> : null}
             </div>
+          </div>
+          <div className="dsh-ig-section">
+            <span className="dsh-ig-section-title">{t('tldrawSection')}</span>
+            <label className="dsh-ig-field">
+              <span className="dsh-ig-label">{t('tldrawLicenseKey')}</span>
+              <input
+                className="dsh-ig-input"
+                type="text"
+                autoComplete="off"
+                spellCheck={false}
+                value={tldrawLicenseKey}
+                onChange={event => { setTldrawLicenseKey(event.target.value) }}
+                onBlur={() => { commitTldrawLicenseKey() }}
+                onKeyDown={event => { if (event.key === 'Enter') commitTldrawLicenseKey() }}
+                placeholder="tldraw-..."
+                disabled={!settingsWritable}
+              />
+              <span className="dsh-ig-hint">
+                {t('tldrawLicenseHint')}{' '}
+                <a className="dsh-ig-link" href="https://tldraw.dev/get-a-license/trial" target="_blank" rel="noopener noreferrer">{t('getTldrawLicense')}</a>
+              </span>
+              {tldrawMessage.length > 0 ? <p className={`dsh-ig-status${tldrawMessageIsError ? ' dsh-ig-status-error' : ''}`} role="status">{tldrawMessage}</p> : null}
+            </label>
           </div>
         </div>
     </li>

@@ -257,11 +257,13 @@ export async function describeStudio(
     ? profiles.find(profile => profile.provider === activeProvider && profile.channel === resolveOpenAICompatChannel(config).id)?.channel
       ?? profiles.find(profile => profile.provider === activeProvider)?.channel
     : undefined
+  const tldrawLicenseKey = config.tldrawLicenseKey?.trim() ?? ''
   return {
     providers: profiles,
     activeProvider,
     ...(activeChannel === undefined ? {} : { activeChannel }),
     ...(modelDiscoveryPending ? { modelDiscoveryPending } : {}),
+    ...(tldrawLicenseKey.length === 0 ? {} : { tldrawLicenseKey }),
   }
 }
 

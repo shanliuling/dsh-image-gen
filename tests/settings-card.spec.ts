@@ -136,6 +136,27 @@ describe('settings card credential actions', () => {
     expect(form.setSetting).not.toHaveBeenCalled()
   })
 
+  it.each(['zh', 'en'])('saves and reopens the tldraw license key in %s', async lang => {
+    const form = formHarness(lang)
+    const label = lang === 'zh' ? 'tldraw License Key' : 'tldraw license key'
+    expect(form.settingInput(label).props.value).toBe('')
+    form.settingInput(label).props.onChange({ target: { value: '  tldraw-abc123  ' } })
+    form.settingInput(label).props.onBlur()
+    await vi.waitFor(() => expect(form.setSetting).toHaveBeenCalledWith('tldrawLicenseKey', 'tldraw-abc123'))
+    hooks.values = []
+    expect(form.settingInput(label).props.value).toBe('tldraw-abc123')
+    expect(form.cardText()).toContain(lang === 'zh' ? '约 5 秒后停止渲染' : 'stops rendering after about five seconds')
+  })
+
+  it('restores the saved tldraw license key when the host rejects the write', async () => {
+    const form = formHarness('zh', { tldrawLicenseKey: 'tldraw-saved' })
+    form.setSetting.mockRejectedValueOnce(new Error('license-write-rejected'))
+    form.settingInput('tldraw License Key').props.onChange({ target: { value: 'tldraw-other' } })
+    form.settingInput('tldraw License Key').props.onBlur()
+    await vi.waitFor(() => expect(form.cardText()).toContain('license-write-rejected'))
+    expect(form.settingInput('tldraw License Key').props.value).toBe('tldraw-saved')
+  })
+
   it.each(['zh', 'en'])('saves, reopens and clears the separate edit model with the SiliconFlow format in %s', async lang => {
     const form = formHarness(lang, { openaiCompatBaseURL: 'https://relay.example/v1', openaiCompatModel: 'generation-model' })
     const modelLabel = lang === 'zh' ? '图生图模型' : 'Editing model'

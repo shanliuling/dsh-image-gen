@@ -212,6 +212,8 @@ Sketch on an infinite canvas, lay out references, circle what should change, the
 - **Combine references**: drag images from Recent generations or the Gallery onto the canvas, or click Send to canvas on a thumbnail, then select several together as references. Repeated imports of the same history item are deduplicated.
 - Every result stays on the canvas, so you can keep iterating from any version.
 
+> **HTTPS deployment note**: tldraw 5 treats HTTPS on a non-localhost host as production and requires a valid tldraw license key before it will render the infinite canvas. Enter your key in the **Infinite canvas** section of the plugin settings (the configuration field is `tldrawLicenseKey`). Without one, the canvas stops rendering after about five seconds and the console reports `No tldraw license key provided!`; all other image features keep working. You can request a license at [tldraw.dev](https://tldraw.dev/get-a-license/trial) (a 100-day trial is available).
+
 <div align="center">
   <img src="docs/assets/readme/canvas-edit.webp" alt="Circle the sword on the canvas, say one sentence, and the Agent swaps only the sword for an axe" width="100%" />
   <br />
@@ -432,6 +434,15 @@ The configuration field is `googleNative: true`. It defaults to `false`, keeping
 <summary><strong>Why is ComfyUI not available in Studio?</strong></summary>
 
 Studio and multi-model comparison currently support cloud Providers only; ComfyUI is not yet integrated. ComfyUI supports text-to-image, image editing (with several reference images), batch generation, and multiple named workflows through Agent chat.
+
+</details>
+
+<details>
+<summary><strong>Why does the infinite canvas stay blank on an HTTPS domain, with "No tldraw license key provided" in the console?</strong></summary>
+
+The tldraw 5 SDK enforces licensing in production, which includes HTTPS on a non-localhost host. Enter your own tldraw license key in the **Infinite canvas** section of the plugin settings (configuration field `tldrawLicenseKey`) and reopen the canvas. The key is a public string: it ships to the browser and is validated against the deployment domain, so it must match the domain you use to access DSH.
+
+Without a key, the infinite canvas still works on `localhost` or in development; on an HTTPS deployment it stops rendering after about five seconds, while every other image feature keeps working. You can request a 100-day trial at [tldraw.dev](https://tldraw.dev/get-a-license/trial); commercial and hobby licenses are listed on the [tldraw pricing page](https://tldraw.dev/pricing).
 
 </details>
 

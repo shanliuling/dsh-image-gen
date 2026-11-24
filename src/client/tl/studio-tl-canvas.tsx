@@ -235,7 +235,7 @@ export async function landTlItems(editor: Editor, items: readonly TlLandingItem[
 
 const TL_COMPONENTS = { Toolbar: StudioToolbar }
 
-export const StudioTlCanvas: FC<{ lang?: 'zh' | 'en' }> = memo(function StudioTlCanvas({ lang = 'zh' }) {
+export const StudioTlCanvas: FC<{ lang?: 'zh' | 'en'; licenseKey?: string | undefined }> = memo(function StudioTlCanvas({ lang = 'zh', licenseKey }) {
   // Separate camera/selection state for editors sharing the document.
   const sessionId = useId()
   const [syncStatus, setSyncStatus] = useState<CanvasSyncStatus>({ phase: 'idle', count: 0 })
@@ -332,10 +332,12 @@ export const StudioTlCanvas: FC<{ lang?: 'zh' | 'en' }> = memo(function StudioTl
         })
     }}>
       <Tldraw
+        key={licenseKey ?? ''}
         persistenceKey="dsh-image-gen-workbench-v1"
         sessionId={sessionId}
         components={TL_COMPONENTS}
         onMount={onMount}
+        {...(licenseKey === undefined || licenseKey.length === 0 ? {} : { licenseKey })}
       />
       {(landingError || syncStatus.phase !== 'idle') && (
         <div className="dsh-ig-canvas-sync-status" data-phase={landingError ? 'error' : syncStatus.phase} role="status" aria-live="polite">
