@@ -4,17 +4,17 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { describe, expect, it, vi } from 'vitest'
 
 import { apply } from '../src/index.js'
-import { SETTINGS_HEALTH_ROUTE } from '../src/shared.js'
+import { SETTINGS_HEALTH_ROUTE, TEST_CONNECTION_ROUTE } from '../src/shared.js'
 import { withWebAdmission } from '../src/web-route.js'
 
-function harness(rejection: 401 | 403 | undefined) {
+function harness(rejection: 401 | 403 | undefined, modernHost = false) {
   const routes: WebRoute[] = []
   const requestRejection = vi.fn(() => rejection)
   const ctx = {
     tools: { register: vi.fn() },
     effect: (setup: () => unknown) => setup(),
     webServer: { register: (route: WebRoute) => { routes.push(route); return () => {} } },
-    connection: { requestRejection },
+    connection: modernHost ? {} : { requestRejection },
     credentials: { resolve: vi.fn(async () => ({ value: 'test-key' })) },
     inject: (services: readonly string[], callback: (owner: Context) => void) => {
       if (services.includes('webServer') || services.includes('connection')) callback(ctx)
@@ -25,7 +25,7 @@ function harness(rejection: 401 | 403 | undefined) {
     },
     logger: { warn: vi.fn() },
   } as unknown as Context
-  apply(ctx, { saveToWorkspace: false })
+  apply(ctx, { saveToWorkspace: false, requireHostAdmission: modernHost })
   return { routes, requestRejection }
 }
 
@@ -82,5 +82,50 @@ describe('plugin web route admission', () => {
     await route!.handler(request(), res)
     expect(res.statusCode).toBe(200)
     expect(requestRejection).toHaveBeenCalledOnce()
+  })
+
+  it('serves connection tests and model discovery with the Peer admitted by DSH 0.2', async () => {
+    const { routes } = harness(undefined, true)
+    const route = routes.find(route => route.path === TEST_CONNECTION_ROUTE)!
+    const model = 'doubao-seedream-5-5-261028'
+    const upstream = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ data: [{ id: model }] }))
+    try {
+      for (const action of [undefined, 'models']) {
+        const req = Object.assign(request(), {
+          method: 'POST',
+          url: route.path,
+          headers: { host: '127.0.0.1:8765', 'content-type': 'application/json' },
+          async *[Symbol.asyncIterator]() { yield Buffer.from(JSON.stringify({ provider: 'seedream', action })) },
+        })
+        const res = response()
+        const peer = { signal: new AbortController().signal }
+        await Reflect.apply(route.handler, route, [req, res, peer])
+        expect(res.statusCode).toBe(200)
+        expect(res.end).toHaveBeenCalledWith(JSON.stringify(action === 'models' ? { ok: true, models: [model] } : { ok: true }))
+      }
+      expect(upstream).toHaveBeenCalledTimes(2)
+      expect(routes.every(route => 'auth' in route && route.auth === 'required')).toBe(true)
+    } finally {
+      upstream.mockRestore()
+    }
+  })
+
+  it('fails closed if modern dispatch does not supply an admitted Peer', async () => {
+    const { routes } = harness(undefined, true)
+    const route = routes.find(route => route.path === SETTINGS_HEALTH_ROUTE)!
+    const res = response()
+    await route.handler(request(), res)
+    expect(res.statusCode).toBe(503)
+  })
+
+  it('rejects an admitted Peer that has disconnected', async () => {
+    const handler = vi.fn()
+    const route = withWebAdmission({ kind: 'exact', path: '/fixture', handler }, () => undefined)
+    const res = response()
+    const controller = new AbortController()
+    controller.abort()
+    await route.handler(request(), res, { signal: controller.signal })
+    expect(res.statusCode).toBe(401)
+    expect(handler).not.toHaveBeenCalled()
   })
 })
