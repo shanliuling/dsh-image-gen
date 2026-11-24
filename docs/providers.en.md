@@ -25,7 +25,7 @@ Default models, endpoints, aspect ratios / quality tiers, and advanced configura
 
 ## Seedream layer decomposition
 
-In an open workspace, attach one PNG or JPEG or specify its workspace path, then ask Seedream to split it into layers. The tool returns a directory with `base.png`, the individual PNG layers and a `manifest.json` with stacking order and positions. The source needs at least 262,144 pixels. Seedream 5.0 pro, 5.0 flash and 5.5 support layers. With 5.5 you can also specify the maximum number of output images including the background.
+In an open workspace, attach one PNG or JPEG or specify its workspace path, then ask Seedream to split it into layers. The tool returns a directory with `base.png`, the individual PNG layers and a `manifest.json` with stacking order and positions. The source needs at least 262,144 pixels. Seedream 5.0 pro, 5.0 flash and 5.5 support layers. With 5.5 you can also specify the maximum number of output images including the background. If some layers fail to download, the rest are still saved, and each failed layer is listed under `missing` in `manifest.json` with the reason and its download link, valid for 24 hours.
 
 ## Animated GIFs in the workbench
 

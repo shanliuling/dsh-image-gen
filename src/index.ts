@@ -900,9 +900,11 @@ export function apply(ctx: Context, config: Config = {}): void {
         directory: { type: 'string', required: true },
         manifest: { type: 'string', required: true },
         imageCount: { type: 'integer', required: true },
+        missingCount: { type: 'integer', required: true },
       } },
       render: (_args: unknown, value: LayerResult) => [{ type: 'text' as const,
-        text: `已保存 ${value.imageCount} 张 PNG（含底图）到 ${value.directory}。图层顺序和坐标见 ${value.manifest}。` }],
+        text: `已保存 ${value.imageCount} 张 PNG 到 ${value.directory}。图层顺序和坐标见 ${value.manifest}。`
+          + (value.missingCount > 0 ? `另有 ${value.missingCount} 张未能保存，清单的 missing 里记下了原因和 24 小时内有效的下载链接。` : '') }],
     },
     async execute(args, exec): Promise<LayerResult> {
       const workspaceRoot = exec.agent?.session.header.cwd
@@ -912,18 +914,19 @@ export function apply(ctx: Context, config: Config = {}): void {
       if (active.provider !== 'seedream') throw new Error('Seedream configuration unavailable')
       const apiKey = await requireApiKey(ctx, 'seedream', 'decompose_image_layers')
       const maxBytes = ctx.attachments.imageLimits.maxImageBytes
-      return withGenerationTimeout(cloudTimeoutFor(config.cloudTimeoutMs, false), exec.signal, async signal => {
-        const references = await resolveReferenceImages({
-          ...(exec.agent ? { agent: exec.agent } : {}), attachments: ctx.attachments, maxBytes, signal,
-          ...(args.source_attachment_id ? { sourceAttachmentId: args.source_attachment_id } : {}),
-          ...(args.source_path ? { sourcePath: args.source_path } : {}),
-        })
-        if (references.length !== 1 || !references[0]) throw new Error('图层拆分每次只接受一张图片，请指定要拆分的参考图。')
-        return decomposeSeedreamLayers({
-          source: references[0], model: active.model, baseURL: active.baseURL, apiKey,
-          prompt: args.prompt, size: args.size, maxImages: args.max_images,
-          workspaceRoot, folder: config.workspaceFolder, maxBytes, signal,
-        })
+      const references = await resolveReferenceImages({
+        ...(exec.agent ? { agent: exec.agent } : {}), attachments: ctx.attachments, maxBytes, signal: exec.signal,
+        ...(args.source_attachment_id ? { sourceAttachmentId: args.source_attachment_id } : {}),
+        ...(args.source_path ? { sourcePath: args.source_path } : {}),
+      })
+      if (references.length !== 1 || !references[0]) throw new Error('图层拆分每次只接受一张图片，请指定要拆分的参考图。')
+      // One call returns up to 100 images, so it gets the long (GIF) budget; the
+      // downloads that follow are timed per file, never against this budget.
+      return decomposeSeedreamLayers({
+        source: references[0], model: active.model, baseURL: active.baseURL, apiKey,
+        prompt: args.prompt, size: args.size, maxImages: args.max_images, watermark: active.arkOptions.watermark ?? true,
+        requestTimeoutMs: cloudTimeoutFor(config.cloudTimeoutMs, true),
+        workspaceRoot, folder: config.workspaceFolder, maxBytes, signal: exec.signal,
       })
     },
   }))
