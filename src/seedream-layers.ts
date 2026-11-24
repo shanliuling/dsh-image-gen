@@ -125,7 +125,9 @@ export async function decomposeSeedreamLayers(input: LayerInput): Promise<LayerR
         if (detectImageMediaType(data) !== 'image/png') throw new Error(`Seedream layer ${z_index} is not PNG`)
         remaining -= data.length
         const file = z_index === 0 ? 'base.png' : `layer-${z_index}.png`
+        // A failed write may leave a truncated file that would pass for a whole layer.
         await writeFile(join(staging, file), data, { signal, flag: 'wx' })
+          .catch(async (error: unknown) => { await rm(join(staging, file), { force: true }); throw error })
         files.push({ file, z_index, name, description, bounding_box, size })
       } catch (error) {
         // A cancel stops the whole run; any other failure costs only this layer.
