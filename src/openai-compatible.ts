@@ -520,13 +520,23 @@ async function modelScopeDelay(milliseconds: number, signal: AbortSignal): Promi
   })
 }
 
+/**
+ * Models that fill every field keep retrying a GIF or SVG the upstream already
+ * refused (#160); tell them plainly how to get the still image instead.
+ */
+export function outputFormatRejectionHint(status: number, text: string): string {
+  if (status !== 400 && status !== 422) return ''
+  if (!/output_format|\b(?:gif|svg)\b/i.test(text)) return ''
+  return ' This model or relay does not support that output format. For an ordinary still image, call again with output_format omitted (or png) and without frame_count/frame_duration_ms; do not retry gif or svg on this model unless the user changes it.'
+}
+
 async function parseImageResponse(
   response: Response,
   provider: string,
   input: ImageResponseOptions,
 ): Promise<GeneratedCompatibleImage> {
   const text = await readBoundedText(response, Math.ceil(input.maxBytes * 1.4) + ERROR_LIMIT)
-  if (!response.ok) throw new Error(`${provider} image request failed (${response.status}): ${redactSecrets(text, input.apiKey).slice(0, ERROR_LIMIT)}`)
+  if (!response.ok) throw new Error(`${provider} image request failed (${response.status}): ${redactSecrets(text, input.apiKey).slice(0, ERROR_LIMIT)}${outputFormatRejectionHint(response.status, text)}`)
   let payload: unknown
   try { payload = JSON.parse(text) } catch { throw new Error(`${provider} image request returned invalid JSON`) }
   const image = firstImage(payload)

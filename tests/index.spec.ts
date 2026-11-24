@@ -397,6 +397,17 @@ describe('image tool registration', () => {
     expect(paths).toContain(VAULT_REFS_ROUTE)
   })
 
+  it('searches both inspiration libraries when every field is a placeholder (#160)', async () => {
+    const { ctx, tools } = harnessContext()
+    apply(ctx, { provider: 'google', saveToWorkspace: false })
+    const tool = toolByName(tools, 'find_inspiration')
+    const signal = { signal: new AbortController().signal } as never
+    const filled = await tool.execute({ query: '水彩', category: '', source: 'all', limit: 0 }, signal) as { total: number; hits: unknown[] }
+    const plain = await tool.execute({ query: '水彩' }, signal) as { total: number; hits: unknown[] }
+    expect(filled).toEqual(plain)
+    expect(filled.hits.length).toBeGreaterThan(0)
+  })
+
   it('serves reusable inspiration prompts to the agent with bounded hits', async () => {
     const { ctx, tools } = harnessContext()
     apply(ctx, { provider: 'google', saveToWorkspace: false })
@@ -1024,7 +1035,7 @@ describe('GIF output through the conversation tools', () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
     apply(ctx, { provider: 'google', saveToWorkspace: false })
-    for (const args of [{ output_format: 'gif' }, { frame_count: 4 }, { frame_duration_ms: 100 }]) {
+    for (const args of [{ output_format: 'gif' }, { output_format: 'svg', frame_count: 4 }]) {
       await expect(toolByName(tools, 'generate_image').execute({ prompt: 'wave', ...args }, exec())).rejects.toThrow('only supported with provider=openai or openai-compat')
     }
     await expect(toolByName(tools, 'generate_images').execute({ prompts: ['wave'], output_format: 'gif' }, exec())).resolves.toMatchObject({ failures: [{ index: 0, error: expect.stringContaining('provider=openai or openai-compat') }] })
@@ -1160,6 +1171,39 @@ describe('GIF output through the conversation tools', () => {
     expect(value.images).toHaveLength(3)
   })
 
+  // #160: GPT-family models under strict schemas fill every optional field.
+  const filledStillArgs = {
+    aspect_ratio: '1:1', background: 'opaque', frame_count: 0, frame_duration_ms: 0, image_size: '1K',
+    output_format: 'png', quality: 'high', size: '1024x1024', workflow: '',
+  } as const
+
+  it('generates an ordinary still image when every optional field is filled with placeholders (#160)', async () => {
+    const { ctx, tools } = harnessContext()
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jX1kAAAAASUVORK5CYII='
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: [{ b64_json: png }] }), { headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    apply(ctx, { ...compatConfig })
+    await toolByName(tools, 'generate_image').execute({ prompt: 'boat', ...filledStillArgs }, exec())
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<string, unknown>
+    for (const field of ['output_format', 'frame_count', 'frame_duration_ms', 'workflow']) expect(body, field).not.toHaveProperty(field)
+    const batch = await toolByName(tools, 'generate_images').execute({ prompts: ['boat'], ...filledStillArgs }, exec()) as { failures: unknown[] }
+    expect(batch.failures).toEqual([])
+  })
+
+  it('does not reject filled-in OpenAI-only placeholders on other providers (#160)', async () => {
+    const { ctx, tools } = harnessContext()
+    vi.stubGlobal('fetch', vi.fn())
+    apply(ctx, { provider: 'google', saveToWorkspace: false })
+    await expect(toolByName(tools, 'generate_image').execute({ prompt: 'boat', ...filledStillArgs }, exec())).rejects.not.toThrow(/only supported with provider=openai/)
+  })
+
+  it('tells the model to drop output_format when the upstream refuses a GIF (#160)', async () => {
+    const { ctx, tools } = harnessContext()
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: { message: 'GIF output is not available for this model.', param: 'output_format' } }), { status: 400, headers: { 'content-type': 'application/json' } })))
+    apply(ctx, { ...compatConfig })
+    await expect(toolByName(tools, 'generate_image').execute({ prompt: 'boat', output_format: 'gif', frame_count: 2 }, exec())).rejects.toThrow('output_format omitted')
+  })
+
   it('tells the model how to recover when frame fields arrive without a GIF', async () => {
     const { ctx, tools } = harnessContext()
     vi.stubGlobal('fetch', vi.fn())
@@ -1172,7 +1216,7 @@ describe('GIF output through the conversation tools', () => {
     apply(ctx, { ...compatConfig })
     for (const name of ['generate_image', 'generate_images']) {
       const properties = (toolByName(tools, name) as unknown as { parameters: { properties: Record<string, { description: string }> } }).parameters.properties
-      expect(properties.output_format?.description, name).toContain('Omit for an ordinary still image')
+      expect(properties.output_format?.description, name).toContain('Omit (or use png) for an ordinary still')
       expect(properties.frame_count?.description, name).toContain('Omit unless output_format=gif')
     }
   })
@@ -1356,6 +1400,21 @@ describe('GIF output through the conversation tools', () => {
       expect(formOf(fetchMock, 1).getAll('output_format')).toEqual(['gif'])
     })
 
+    it('edits the conversation image as a still when every selector and output field is a placeholder (#160)', async () => {
+      const { ctx, tools } = harnessContext()
+      const fetchMock = vi.fn(async () => pngResponse())
+      vi.stubGlobal('fetch', fetchMock)
+      apply(ctx, compatConfig)
+      sourceImage(ctx)
+      await toolByName(tools, 'edit_image').execute({
+        prompt: 'make the cat wave', source: 'conversation', source_attachment_id: '', source_attachment_ids: [], source_path: '', source_paths: [''],
+        output_format: 'png', frame_count: 0, frame_duration_ms: 0, workflow: '',
+      }, editExec())
+      const form = formOf(fetchMock, 0)
+      expect(form.get('image')).toBeInstanceOf(Blob)
+      for (const field of ['output_format', 'frame_count', 'frame_duration_ms']) expect(form.has(field), field).toBe(false)
+    })
+
     it('leaves a still edit request exactly as before', async () => {
       const { ctx, tools } = harnessContext()
       const fetchMock = vi.fn(async () => pngResponse())
@@ -1376,9 +1435,7 @@ describe('GIF output through the conversation tools', () => {
       vi.stubGlobal('fetch', fetchMock)
       apply(ctx, { provider: 'google', saveToWorkspace: false })
       sourceImage(ctx)
-      for (const args of [{ output_format: 'gif' }, { frame_count: 4 }, { frame_duration_ms: 100 }]) {
-        await expect(toolByName(tools, 'edit_image').execute({ prompt: 'wave', ...args }, editExec())).rejects.toThrow('only supported with provider=openai or openai-compat')
-      }
+      await expect(toolByName(tools, 'edit_image').execute({ prompt: 'wave', output_format: 'gif' }, editExec())).rejects.toThrow('only supported with provider=openai or openai-compat')
       expect(fetchMock).not.toHaveBeenCalled()
     })
 
@@ -1409,7 +1466,7 @@ describe('GIF output through the conversation tools', () => {
       const { ctx, tools } = harnessContext()
       apply(ctx, compatConfig)
       const properties = (toolByName(tools, 'edit_image').parameters as { properties: Record<string, { enum?: string[]; description?: string }> }).properties
-      expect(properties.output_format?.enum).toEqual(['gif'])
+      expect(properties.output_format?.enum).toEqual(['png', 'gif'])
       expect(properties).toHaveProperty('frame_count')
       expect(properties).toHaveProperty('frame_duration_ms')
       expect(properties.output_format?.description).toContain('reference image')
