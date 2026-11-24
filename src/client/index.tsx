@@ -748,7 +748,12 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
   const [saveToWorkspace, setSaveToWorkspace] = useState(() => props.scope.getSnapshot().value?.saveToWorkspace ?? true)
   const [workspaceFolder, setWorkspaceFolder] = useState(() => props.scope.getSnapshot().value?.workspaceFolder ?? 'dsh-image-gen')
   const [showPill, setShowPill] = useState(() => props.scope.getSnapshot().value?.showProviderPill === true)
-  const [tldrawLicenseKey, setTldrawLicenseKey] = useState(() => props.scope.getSnapshot().value?.tldrawLicenseKey ?? '')
+  const initialTldrawLicenseKey = props.scope.getSnapshot().value?.tldrawLicenseKey ?? ''
+  const [tldrawLicenseKey, setTldrawLicenseKey] = useState(initialTldrawLicenseKey)
+  /** Last value the host accepted (or reported); used to tell drafts from persisted values. */
+  const persistedTldrawLicenseKey = useRef(initialTldrawLicenseKey)
+  /** Save currently in flight; blocks Enter+Blur from writing the same value twice. */
+  const pendingTldrawLicenseSave = useRef<string | null>(null)
   const [uiMessage, setUiMessage] = useState('')
   const [uiMessageIsError, setUiMessageIsError] = useState(false)
   const [tldrawMessage, setTldrawMessage] = useState('')
@@ -940,7 +945,12 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
     setSaveToWorkspace(value?.saveToWorkspace ?? true)
     setWorkspaceFolder(value?.workspaceFolder ?? 'dsh-image-gen')
     setShowPill(value?.showProviderPill === true)
-    setTldrawLicenseKey(value?.tldrawLicenseKey ?? '')
+    const hostTldrawLicenseKey = value?.tldrawLicenseKey ?? ''
+    const previousTldrawLicenseKey = persistedTldrawLicenseKey.current
+    persistedTldrawLicenseKey.current = hostTldrawLicenseKey
+    // Adopt host changes only while the draft still mirrors the last persisted
+    // value; an in-progress edit (or a newer save) must survive the snapshot.
+    setTldrawLicenseKey(current => current === previousTldrawLicenseKey ? hostTldrawLicenseKey : current)
     setRows(current => {
       const next = { ...current }
       for (const provider of IMAGE_PROVIDERS) {
@@ -1389,17 +1399,29 @@ export function ImageGenerationSettingsCard(props: SettingsCardProps) {
 
   /** tldraw license key persists on Enter or blur; empty removes the override. */
   const commitTldrawLicenseKey = (): void => {
-    const next = tldrawLicenseKey.trim()
-    if (next === (snapshot.value?.tldrawLicenseKey ?? '')) {
-      setTldrawLicenseKey(next)
+    const submitted = tldrawLicenseKey
+    const next = submitted.trim()
+    if (next === persistedTldrawLicenseKey.current && pendingTldrawLicenseSave.current === null) {
+      setTldrawLicenseKey(current => current === submitted ? next : current)
       return
     }
+    // Enter fires before blur for the same edit; one write per value at a time.
+    if (pendingTldrawLicenseSave.current === next) return
+    pendingTldrawLicenseSave.current = next
     setTldrawMessage(''); setTldrawMessageIsError(false)
     void saveSetting('tldrawLicenseKey', next).then(() => {
-      setTldrawLicenseKey(next)
+      // A newer edit or save superseded this request; leave its draft alone.
+      if (pendingTldrawLicenseSave.current !== next) return
+      pendingTldrawLicenseSave.current = null
+      persistedTldrawLicenseKey.current = next
+      // Only normalize the draft this request was sent for; newer input wins.
+      setTldrawLicenseKey(current => current === submitted ? next : current)
       setTldrawMessage(t('saved'))
     }).catch((cause: unknown) => {
-      setTldrawLicenseKey(snapshot.value?.tldrawLicenseKey ?? '')
+      if (pendingTldrawLicenseSave.current !== next) return
+      pendingTldrawLicenseSave.current = null
+      // Roll back only an untouched draft; edits made after the request survive.
+      setTldrawLicenseKey(current => current === submitted ? persistedTldrawLicenseKey.current : current)
       setTldrawMessage(cause instanceof Error ? cause.message : String(cause))
       setTldrawMessageIsError(true)
     })
