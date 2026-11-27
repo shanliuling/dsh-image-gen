@@ -321,10 +321,9 @@ export function resolveProvider(config: Config):
       if (baseURL === undefined || baseURL.length === 0) {
         throw new Error('OpenAI 兼容 provider requires a base URL; set it in Settings > Plugins > Image generation.')
       }
-      const model = config.openaiCompatModel?.trim()
-      if (model === undefined || model.length === 0) {
-        throw new Error('OpenAI 兼容 provider requires a model name; set it in Settings > Plugins > Image generation.')
-      }
+      // An empty model is allowed: a compatible relay that has a server-side
+      // default image model can be used without naming one here.
+      const model = config.openaiCompatModel?.trim() ?? ''
       return { provider: 'openai-compat', apiKeyEnv: OPENAI_COMPAT_API_KEY_ENV, model, baseURL, imageSize: '1024x1024', editFormat: compatEditFormat(config), editExtra: config.openaiCompatEditExtra ?? {} }
     }
     case 'seedream': {

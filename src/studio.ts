@@ -688,7 +688,10 @@ function cloudStudioProfile(config: Config, provider: CloudImageProvider, config
     return profile(provider, model, configured, cap.ratioOptions, cap.qualityOptions, cap.defaultRatio, cap.defaultQuality)
   }
   if (provider === 'openai-compat') {
-    return compatibleStudioProfile(config, model, configured)
+    // An empty model is valid at request time (the relay falls back to its
+    // server-side default), but the workbench still shows a row with no model
+    // picked as not fully configured because it has no model to offer.
+    return compatibleStudioProfile(config, model, configured && model.length > 0)
   }
   if (provider === 'openai') {
     const table = officialSizeTable(config, model)
