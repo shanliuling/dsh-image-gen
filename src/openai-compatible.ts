@@ -88,7 +88,7 @@ export async function generateOpenAICompatibleImage(input: {
       // ModelScope's contract has no `quality` field; extraBody rides last so
       // users can still add `negative_prompt`/`seed`/`steps` per channel.
       body: {
-        model: input.model,
+        ...(input.model ? { model: input.model } : {}),
         prompt: input.prompt,
         ...(input.size === undefined ? {} : { size: input.size }),
         ...(input.extraBody ?? {}),
@@ -99,7 +99,9 @@ export async function generateOpenAICompatibleImage(input: {
     method: 'POST', redirect: 'error', signal: input.signal,
     headers: { authorization: `Bearer ${input.apiKey}`, 'content-type': 'application/json' },
     body: JSON.stringify({
-      model: input.model,
+      // A compatible relay with a server-side default model works with no
+      // `model` here; omit the field rather than sending an empty string.
+      ...(input.model ? { model: input.model } : {}),
       prompt: input.prompt,
       ...(input.size === undefined ? {} : { size: input.size }),
       ...(input.quality === undefined ? {} : { quality: input.quality }),
@@ -257,7 +259,7 @@ export async function editOpenAICompatibleImage(input: {
     // Some relays take edits as a multipart form whose `reference_images`
     // field is a JSON array of base64 strings instead of file uploads.
     const form = new FormData()
-    form.append('model', input.model)
+    if (input.model) form.append('model', input.model)
     form.append('prompt', input.prompt)
     if (input.size !== undefined && input.size.length > 0) form.append('size', input.size)
     if (input.quality !== undefined) form.append('quality', input.quality)
@@ -285,7 +287,7 @@ export async function editOpenAICompatibleImage(input: {
       form.append(imageField, blob, filename)
     })
     form.append('prompt', input.prompt)
-    form.append('model', input.model)
+    if (input.model) form.append('model', input.model)
     if (input.size !== undefined && input.size.length > 0) form.append('size', input.size)
     if (input.quality !== undefined) form.append('quality', input.quality)
     if (includeResponseFormat && !explicitResponseFormat) form.append('response_format', 'b64_json')

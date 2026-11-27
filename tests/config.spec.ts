@@ -131,9 +131,10 @@ describe('openai-compat provider', () => {
     })
   })
 
-  it('fails loudly when the compat row is not fully configured', () => {
+  it('requires a base URL but allows an empty model (server-side default)', () => {
     expect(() => resolveProvider({ provider: 'openai-compat' })).toThrow('base URL')
-    expect(() => resolveProvider({ provider: 'openai-compat', openaiCompatBaseURL: 'https://relay.example.com/v1' })).toThrow('model name')
+    expect(resolveProvider({ provider: 'openai-compat', openaiCompatBaseURL: 'https://relay.example.com/v1' }))
+      .toMatchObject({ provider: 'openai-compat', model: '' })
   })
 
   it('routes per-call model overrides to the compat field', () => {

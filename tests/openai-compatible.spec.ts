@@ -13,6 +13,14 @@ describe('OpenAI-compatible images', () => {
     expect(fetchMock.mock.calls[0]?.[0]).toBe('https://relay.example/v1/images/generations')
   })
 
+  it('omits the model field when it is empty so a server-side default can be used', async () => {
+    const image = Buffer.from('image bytes').toString('base64')
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: [{ b64_json: image }] }), { headers: { 'content-type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    await generateOpenAICompatibleImage({ provider: 'openai-compat', apiKey: 'key', baseURL: 'https://relay.example/v1', model: '', prompt: 'a cat', maxBytes: 1024, signal })
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({ prompt: 'a cat' })
+  })
+
   it('recognises an SVG document returned as base64 instead of a raster image', async () => {
     const svg = '<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" width="128" height="128"><rect width="128" height="128"/></svg>'
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ data: [{ b64_json: Buffer.from(svg).toString('base64') }] }), { headers: { 'content-type': 'application/json' } }))
